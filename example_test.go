@@ -6,7 +6,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/emersion/go-message"
+	"github.com/saeroun-ai/emlkit"
 )
 
 func ExampleRead() {

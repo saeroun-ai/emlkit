@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/emersion/go-message"
+	"github.com/saeroun-ai/emlkit"
 )
 
 // A PartHeader is a mail part header. It contains convenience functions to get

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/emersion/go-message/mail"
+	"github.com/saeroun-ai/emlkit/mail"
 )
 
 func TestHeader(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/emersion/go-message"
+	"github.com/saeroun-ai/emlkit"
 )
 
 const dateLayout = "Mon, 02 Jan 2006 15:04:05 -0700"

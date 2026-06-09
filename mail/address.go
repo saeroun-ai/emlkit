@@ -5,7 +5,7 @@ import (
 	"net/mail"
 	"strings"
 
-	"github.com/emersion/go-message"
+	"github.com/saeroun-ai/emlkit"
 )
 
 // Address represents a single mail address.

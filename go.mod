@@ -1,5 +1,5 @@
-module github.com/emersion/go-message
+module github.com/saeroun-ai/emlkit
 
-go 1.14
+go 1.26
 
-require golang.org/x/text v0.14.0
+require golang.org/x/text v0.38.0
