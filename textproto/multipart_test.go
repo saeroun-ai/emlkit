@@ -7,6 +7,7 @@ package textproto
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -284,7 +285,7 @@ Oh no, premature EOF!
 		t.Fatalf("didn't get a part")
 	}
 	_, err = io.Copy(ioutil.Discard, part)
-	if err != io.ErrUnexpectedEOF {
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("expected error io.ErrUnexpectedEOF; got %v", err)
 	}
 }
@@ -920,3 +921,58 @@ func benchmarkCreatePart(b *testing.B, reuse bool) {
 
 func BenchmarkCreatePart(b *testing.B)           { benchmarkCreatePart(b, false) }
 func BenchmarkCreatePartWithBuffer(b *testing.B) { benchmarkCreatePart(b, true) }
+
+// When the multipart input ends without a closing "--boundary--" delimiter,
+// trailing body bytes (including a final CRLF) must still be delivered rather
+// than silently truncated (orig: theta-lake 0002e57).
+func TestMissingBoundaryCloseTrailingCRLF(t *testing.T) {
+	body := "--A\r\nContent-Type: text/plain\r\n\r\nhello\r\n"
+	r := NewMultipartReader(strings.NewReader(body), "A")
+	part, err := r.NextPart()
+	if err != nil {
+		t.Fatalf("NextPart: %v", err)
+	}
+	got, err := io.ReadAll(part)
+	if want := []byte("hello\r\n"); !bytes.Equal(got, want) {
+		t.Errorf("body bytes = %q; want %q", got, want)
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("errors.Is(err, io.ErrUnexpectedEOF) = false; err = %v", err)
+	}
+	if !errors.Is(err, ErrMissingBoundaryClose) {
+		t.Errorf("errors.Is(err, ErrMissingBoundaryClose) = false; err = %v", err)
+	}
+}
+
+func TestMissingBoundaryCloseNoTrailingNewline(t *testing.T) {
+	body := "--A\r\nContent-Type: text/plain\r\n\r\nhello"
+	r := NewMultipartReader(strings.NewReader(body), "A")
+	part, err := r.NextPart()
+	if err != nil {
+		t.Fatalf("NextPart: %v", err)
+	}
+	got, err := io.ReadAll(part)
+	if want := []byte("hello"); !bytes.Equal(got, want) {
+		t.Errorf("body bytes = %q; want %q", got, want)
+	}
+	if !errors.Is(err, ErrMissingBoundaryClose) {
+		t.Errorf("errors.Is(err, ErrMissingBoundaryClose) = false; err = %v", err)
+	}
+}
+
+// After a body that ends without a closing boundary, repeated NextPart calls
+// must return io.EOF immediately instead of looping forever.
+func TestNextPart_stickyAfterMissingBoundary(t *testing.T) {
+	body := "--A\r\nContent-Type: text/plain\r\n\r\nhello\r\n"
+	r := NewMultipartReader(strings.NewReader(body), "A")
+	part, err := r.NextPart()
+	if err != nil {
+		t.Fatalf("NextPart: %v", err)
+	}
+	io.Copy(io.Discard, part)
+	for i := 0; i < 3; i++ {
+		if _, err := r.NextPart(); !errors.Is(err, io.EOF) {
+			t.Fatalf("NextPart call %d: errors.Is(err, io.EOF) = false; err = %v", i, err)
+		}
+	}
+}

@@ -17,6 +17,11 @@ import (
 	"io/ioutil"
 )
 
+// ErrMissingBoundaryClose is returned (joined with io.ErrUnexpectedEOF) when
+// the multipart input ends before the closing "--boundary--" delimiter was
+// found. The body bytes accumulated up to EOF are still delivered.
+var ErrMissingBoundaryClose = errors.New("multipart: missing closing boundary")
+
 var emptyParams = make(map[string]string)
 
 // This constant needs to be at least 76 for this package to work correctly.
@@ -162,6 +167,12 @@ func scanUntilBoundary(buf, dashBoundary, nlDashBoundary []byte, total int64, re
 			}
 		}
 		if bytes.HasPrefix(dashBoundary, buf) {
+			if readErr != nil {
+				// EOF reached without ever seeing a boundary; flush the
+				// buffered bytes as body rather than holding them back for a
+				// boundary that will never arrive.
+				return len(buf), errors.Join(readErr, ErrMissingBoundaryClose)
+			}
 			return 0, readErr
 		}
 	}
@@ -178,6 +189,9 @@ func scanUntilBoundary(buf, dashBoundary, nlDashBoundary []byte, total int64, re
 		}
 	}
 	if bytes.HasPrefix(nlDashBoundary, buf) {
+		if readErr != nil {
+			return len(buf), errors.Join(readErr, ErrMissingBoundaryClose)
+		}
 		return 0, readErr
 	}
 
@@ -187,7 +201,13 @@ func scanUntilBoundary(buf, dashBoundary, nlDashBoundary []byte, total int64, re
 	// it too must be part of the body.
 	i := bytes.LastIndexByte(buf, nlDashBoundary[0])
 	if i >= 0 && bytes.HasPrefix(nlDashBoundary, buf[i:]) {
+		if readErr != nil {
+			return len(buf), errors.Join(readErr, ErrMissingBoundaryClose)
+		}
 		return i, nil
+	}
+	if readErr != nil {
+		return len(buf), errors.Join(readErr, ErrMissingBoundaryClose)
 	}
 	return len(buf), readErr
 }
@@ -230,6 +250,7 @@ type MultipartReader struct {
 
 	currentPart *Part
 	partsRead   int
+	done        bool
 
 	nl               []byte // "\r\n" or "\n" (set after seeing first boundary line)
 	nlDashBoundary   []byte // nl + "--boundary"
@@ -239,7 +260,24 @@ type MultipartReader struct {
 
 // NextPart returns the next part in the multipart or an error.
 // When there are no more parts, the error io.EOF is returned.
+//
+// Once NextPart has returned an EOF-class error (one satisfying
+// errors.Is(err, io.EOF) or errors.Is(err, io.ErrUnexpectedEOF)), subsequent
+// calls return io.EOF immediately. This guards callers against infinite loops
+// on a body that ends without its closing boundary, whose underlying reader
+// stays errored.
 func (r *MultipartReader) NextPart() (*Part, error) {
+	if r.done {
+		return nil, io.EOF
+	}
+	p, err := r.nextPart()
+	if err != nil && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+		r.done = true
+	}
+	return p, err
+}
+
+func (r *MultipartReader) nextPart() (*Part, error) {
 	if r.currentPart != nil {
 		r.currentPart.Close()
 	}
@@ -259,7 +297,7 @@ func (r *MultipartReader) NextPart() (*Part, error) {
 			return nil, io.EOF
 		}
 		if err != nil {
-			return nil, fmt.Errorf("multipart: NextPart: %v", err)
+			return nil, fmt.Errorf("multipart: NextPart: %w", err)
 		}
 
 		if r.isBoundaryDelimiterLine(line) {
