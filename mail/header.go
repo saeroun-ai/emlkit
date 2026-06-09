@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -211,6 +212,63 @@ func (p *headerParser) parseMsgID() (string, error) {
 	return left + "@" + right, nil
 }
 
+func (p *headerParser) parseListCommand() (*url.URL, error) {
+	if !p.skipCFWS() {
+		return nil, errors.New("mail: malformed parenthetical comment")
+	}
+
+	// Consume a potential newline + indent.
+	p.consume('\r')
+	p.consume('\n')
+	p.skipSpace()
+
+	// RFC 2369: List-Post may have the special value "NO".
+	if p.consume('N') && p.consume('O') {
+		if !p.skipCFWS() {
+			return nil, errors.New("mail: malformed parenthetical comment")
+		}
+		return nil, nil
+	}
+
+	if !p.consume('<') {
+		return nil, errors.New("mail: missing '<' in list command")
+	}
+
+	// Scan to the closing '>'. The bounds check comes first so a value that is
+	// missing its '>' produces an error rather than an index-out-of-range panic.
+	i := 0
+	for i < len(p.s) && p.s[i] != '>' {
+		i++
+	}
+
+	var lit string
+	lit, p.s = p.s[:i], p.s[i:]
+
+	u, err := url.Parse(lit)
+	if err != nil {
+		return u, errors.New("mail: malformed URL")
+	}
+
+	if !p.consume('>') {
+		return nil, errors.New("mail: missing '>' in list command")
+	}
+
+	if !p.skipCFWS() {
+		return nil, errors.New("mail: malformed parenthetical comment")
+	}
+
+	// A comma separates multiple list command URLs; its absence just means
+	// there are no more.
+	p.consume(',')
+	p.skipSpace()
+
+	// Consume a potential newline.
+	p.consume('\r')
+	p.consume('\n')
+
+	return u, nil
+}
+
 // A Header is a mail header.
 type Header struct {
 	message.Header
@@ -317,6 +375,35 @@ func (h *Header) MsgIDList(key string) ([]string, error) {
 	return l, nil
 }
 
+// ListCommandURLList parses a list of URLs from a list command header field. If
+// the header field is missing, it returns nil.
+//
+// This can be used on List-Help, List-Unsubscribe, List-Subscribe, List-Post,
+// List-Owner, and List-Archive header fields.
+//
+// See https://www.rfc-editor.org/rfc/rfc2369 for more information.
+//
+// If the value of List-Post is the special value "NO", the returned slice
+// contains a single nil element.
+func (h *Header) ListCommandURLList(key string) ([]*url.URL, error) {
+	v := h.Get(key)
+	if v == "" {
+		return nil, nil
+	}
+
+	p := headerParser{v}
+	var l []*url.URL
+	for !p.empty() {
+		u, err := p.parseListCommand()
+		if err != nil {
+			return l, err
+		}
+		l = append(l, u)
+	}
+
+	return l, nil
+}
+
 // GenerateMessageID wraps GenerateMessageIDWithHostname and therefore uses the
 // hostname of the local machine. This is done to not break existing software.
 // Wherever possible better use GenerateMessageIDWithHostname, because the local
@@ -373,6 +460,28 @@ func (h *Header) SetMsgIDList(key string, l []string) {
 	} else {
 		h.Del(key)
 	}
+}
+
+// SetListCommandURLList formats a list of URLs as a list command header field
+// value. If the list is empty, the header field is removed. nil elements (such
+// as the "NO" value returned by ListCommandURLList for List-Post) are not
+// representable as URLs and are skipped.
+//
+// This can be used on List-Help, List-Unsubscribe, List-Subscribe, List-Post,
+// List-Owner, and List-Archive header fields.
+func (h *Header) SetListCommandURLList(key string, urls []*url.URL) {
+	ids := make([]string, 0, len(urls))
+	for _, u := range urls {
+		if u == nil {
+			continue
+		}
+		ids = append(ids, u.String())
+	}
+	if len(ids) == 0 {
+		h.Del(key)
+		return
+	}
+	h.Set(key, "<"+strings.Join(ids, ">, <")+">")
 }
 
 // Copy creates a stand-alone copy of the header.

@@ -224,3 +224,66 @@ func TestHeader_EmptyAddressList(t *testing.T) {
 		}
 	}
 }
+
+func TestHeader_ListCommandURLList(t *testing.T) {
+	var h mail.Header
+	h.Set("List-Unsubscribe", "<https://example.com/unsub>, <mailto:unsub@example.com>")
+
+	urls, err := h.ListCommandURLList("List-Unsubscribe")
+	if err != nil {
+		t.Fatal("ListCommandURLList:", err)
+	}
+	if len(urls) != 2 {
+		t.Fatalf("expected 2 URLs, got %d (%v)", len(urls), urls)
+	}
+	if got := urls[0].String(); got != "https://example.com/unsub" {
+		t.Errorf("urls[0] = %q", got)
+	}
+	if got := urls[1].String(); got != "mailto:unsub@example.com" {
+		t.Errorf("urls[1] = %q", got)
+	}
+
+	// round-trip
+	var h2 mail.Header
+	h2.SetListCommandURLList("List-Unsubscribe", urls)
+	urls2, err := h2.ListCommandURLList("List-Unsubscribe")
+	if err != nil {
+		t.Fatal("round-trip ListCommandURLList:", err)
+	}
+	if len(urls2) != 2 || urls2[0].String() != urls[0].String() || urls2[1].String() != urls[1].String() {
+		t.Errorf("round-trip mismatch: %v", urls2)
+	}
+}
+
+func TestHeader_ListCommand_NO_and_malformed(t *testing.T) {
+	// List-Post의 특수값 "NO"는 [nil]로 파싱된다.
+	var h mail.Header
+	h.Set("List-Post", "NO")
+	urls, err := h.ListCommandURLList("List-Post")
+	if err != nil {
+		t.Fatal("ListCommandURLList(NO):", err)
+	}
+	if len(urls) != 1 || urls[0] != nil {
+		t.Errorf("List-Post NO: expected [nil], got %v", urls)
+	}
+	// [nil]을 다시 Set해도 panic하지 않아야 한다 (nil 가드).
+	var h2 mail.Header
+	h2.SetListCommandURLList("List-Post", urls)
+
+	// 결함 ⓑ: '>'가 없는 malformed 입력은 panic하지 않고 에러를 반환해야 한다.
+	var hm mail.Header
+	hm.Set("List-Help", "<https://example.com/help")
+	if _, err := hm.ListCommandURLList("List-Help"); err == nil {
+		t.Error("malformed list command: expected error, got nil")
+	}
+}
+
+func TestHeader_SetListCommandURLList_empty(t *testing.T) {
+	// 결함 ⓐ: 빈 슬라이스/nil이면 헤더를 삭제해야 한다 ("<>"를 쓰면 안 됨).
+	var h mail.Header
+	h.Set("List-Help", "<https://example.com/help>")
+	h.SetListCommandURLList("List-Help", nil)
+	if v := h.Get("List-Help"); v != "" {
+		t.Errorf("expected List-Help removed, got %q", v)
+	}
+}
