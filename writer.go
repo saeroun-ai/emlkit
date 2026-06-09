@@ -37,9 +37,11 @@ func createWriter(w io.Writer, header *Header) (*Writer, error) {
 		// is expected to be written by the user too. In this case, ww.Close
 		// shouldn't write the final boundary.
 
-		if mediaParams["boundary"] != "" {
-			ww.mw.SetBoundary(mediaParams["boundary"])
-		} else {
+		// boundary가 비어 있거나, RFC 2046을 위반해 SetBoundary가 실패하면
+		// MultipartWriter는 랜덤 boundary로 본문 구분선을 쓴다. 그 경우 실제로
+		// 사용되는 boundary로 헤더를 동기화하지 않으면 헤더의 boundary와 본문
+		// 구분선이 어긋나 메시지 구조 전체가 깨진다.
+		if boundary := mediaParams["boundary"]; boundary == "" || ww.mw.SetBoundary(boundary) != nil {
 			mediaParams["boundary"] = ww.mw.Boundary()
 			header.SetContentType(mediaType, mediaParams)
 		}

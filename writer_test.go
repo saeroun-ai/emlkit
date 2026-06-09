@@ -149,3 +149,48 @@ index 7a6a423c3ea3..e8a672479245 100644
 			original, buf.String())
 	}
 }
+
+func TestWriter_malformedBoundaryIsSynced(t *testing.T) {
+	// 70바이트를 초과하는 boundary는 RFC 2046 위반이라 SetBoundary가 실패한다.
+	// 그 경우 헤더의 boundary와 실제 본문 구분선이 어긋나 메시지 구조가 깨지면
+	// 안 된다 (orig: emersion/go-message ProtonMail BRIDGE-106).
+	badBoundary := strings.Repeat("a", 80)
+
+	var h Header
+	h.Set("Content-Type", `multipart/mixed; boundary="`+badBoundary+`"`)
+
+	var b bytes.Buffer
+	w, err := CreateWriter(&b, h)
+	if err != nil {
+		t.Fatal("CreateWriter:", err)
+	}
+
+	var ph Header
+	ph.Set("Content-Type", "text/plain")
+	pw, err := w.CreatePart(ph)
+	if err != nil {
+		t.Fatal("CreatePart:", err)
+	}
+	io.WriteString(pw, "hello")
+	if err := w.Close(); err != nil {
+		t.Fatal("Close:", err)
+	}
+
+	// 다시 읽었을 때 헤더의 boundary로 파트를 정상적으로 읽을 수 있어야 한다.
+	e, err := Read(&b)
+	if err != nil {
+		t.Fatal("Read:", err)
+	}
+	mr := e.MultipartReader()
+	if mr == nil {
+		t.Fatal("expected a multipart reader")
+	}
+	part, err := mr.NextPart()
+	if err != nil {
+		t.Fatalf("cannot read part (header/body boundary mismatch?): %v", err)
+	}
+	body, _ := io.ReadAll(part.Body)
+	if string(body) != "hello" {
+		t.Errorf("part body = %q, want %q", body, "hello")
+	}
+}
