@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/saeroun-ai/emlkit"
+	"github.com/saeroun-ai/emlkit/utf7"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/htmlindex"
@@ -26,6 +27,7 @@ import (
 var charsets = map[string]encoding.Encoding{
 	"ansi_x3.110-1983": charmap.ISO8859_1, // see RFC 1345 page 62, mostly superset of ISO 8859-1
 	"x-utf_8j":         unicode.UTF8,      // alias for UTF-8, see https://icu4c-demos.unicode.org/icu-bin/convexp?s=ALL
+	"utf-7":            utf7.Encoding,     // modified UTF-7 (RFC 3501 §5.1.3), not handled by ianaindex
 }
 
 func init() {
