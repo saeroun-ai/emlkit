@@ -167,3 +167,35 @@ func writeStringBytePerByte(w io.Writer, s string) error {
 	}
 	return nil
 }
+
+func TestQuotedPrintable_lenient(t *testing.T) {
+	tests := []struct {
+		name, input, want string
+	}{
+		// Malformed inputs that the standard quotedprintable.Reader rejects.
+		{"trailing_equals", "abc=", "abc="},
+		{"control_byte", "a\x00b", "a\x00b"},
+		{"long_line", strings.Repeat("x", 5000), strings.Repeat("x", 5000)},
+		// Conformant QP must decode byte-for-byte unchanged.
+		{"valid_hex", "=3D", "="},
+		{"valid_space", "a=20b", "a b"},
+		{"soft_break", "foo=\r\nbar", "foobar"},
+		{"plain", "hello world", "hello world"},
+		{"trailing_ws_encoded", "end=20", "end "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dec, err := encodingReader("quoted-printable", strings.NewReader(tt.input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := io.ReadAll(dec)
+			if err != nil {
+				t.Fatalf("ReadAll: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

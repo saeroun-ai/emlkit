@@ -1,6 +1,7 @@
 package message
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
 	"errors"
@@ -30,7 +31,7 @@ func encodingReader(enc string, r io.Reader) (io.Reader, error) {
 	var dec io.Reader
 	switch strings.ToLower(enc) {
 	case "quoted-printable":
-		dec = quotedprintable.NewReader(r)
+		dec = quotedprintable.NewReader(&lenientQPReader{br: bufio.NewReader(r)})
 	case "base64":
 		wrapped := &whitespaceReplacingReader{wrapped: r}
 		dec = base64.NewDecoder(base64.StdEncoding, wrapped)
@@ -84,6 +85,95 @@ func (r *whitespaceReplacingReader) Read(p []byte) (int, error) {
 	}
 
 	return n, err
+}
+
+// lenientQPReader normalises a quoted-printable byte stream so the standard
+// quotedprintable.Reader does not reject malformed input seen in real-world
+// mail, while passing conformant QP through byte-for-byte:
+//   - a "=" not followed by two hex digits or CR/LF is escaped to "=3D"
+//   - a raw control byte (other than TAB/CR/LF) is hex-escaped to "=XX"
+//   - an over-long line is split with a soft line break so the decoder's
+//     internal line buffer cannot overflow
+type lenientQPReader struct {
+	br      *bufio.Reader
+	pending []byte // produced bytes not yet returned
+	col     int    // current output line length, for soft-wrapping
+}
+
+// qpSoftWrapLen is below bufio's default 4096 buffer and the 998 QP line limit.
+const qpSoftWrapLen = 990
+
+func (r *lenientQPReader) Read(p []byte) (int, error) {
+	for len(r.pending) == 0 {
+		if err := r.produce(); err != nil {
+			if len(r.pending) == 0 {
+				return 0, err
+			}
+			break
+		}
+	}
+	n := copy(p, r.pending)
+	r.pending = r.pending[n:]
+	return n, nil
+}
+
+// produce reads one input byte and appends its (possibly normalised) output.
+func (r *lenientQPReader) produce() error {
+	b, err := r.br.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case b == '\n':
+		r.col = 0
+		r.pending = append(r.pending, b)
+	case b == '\r':
+		r.pending = append(r.pending, b)
+	case b == '=':
+		next, _ := r.br.Peek(2)
+		switch {
+		case len(next) >= 1 && (next[0] == '\r' || next[0] == '\n'):
+			// Soft line break: keep "=" as-is.
+			r.pending = append(r.pending, b)
+			r.col++
+		case len(next) >= 2 && isHexByte(next[0]) && isHexByte(next[1]):
+			// Valid "=XX": pass the whole escape through unchanged.
+			r.softWrap()
+			r.pending = append(r.pending, b, next[0], next[1])
+			r.br.Discard(2)
+			r.col += 3
+		default:
+			// Malformed "=": emit a literal "=3D".
+			r.emitHex('=')
+		}
+	case b < ' ' && b != '\t':
+		// Raw control byte: hex-escape it so the decoder accepts it.
+		r.emitHex(b)
+	default:
+		r.softWrap()
+		r.pending = append(r.pending, b)
+		r.col++
+	}
+	return nil
+}
+
+func (r *lenientQPReader) emitHex(b byte) {
+	const hex = "0123456789ABCDEF"
+	r.softWrap()
+	r.pending = append(r.pending, '=', hex[b>>4], hex[b&0x0f])
+	r.col += 3
+}
+
+func (r *lenientQPReader) softWrap() {
+	if r.col >= qpSoftWrapLen {
+		r.pending = append(r.pending, '=', '\r', '\n')
+		r.col = 0
+	}
+}
+
+func isHexByte(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'A' && b <= 'F') || (b >= 'a' && b <= 'f')
 }
 
 type lineWrapper struct {
