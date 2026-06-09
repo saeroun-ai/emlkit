@@ -573,3 +573,24 @@ func TestFormatHeaderField_longKeyDoesNotPanic(t *testing.T) {
 		t.Fatalf("WriteHeader failed: %v", err)
 	}
 }
+
+// A malformed header line that uses a semicolon instead of a colon should be
+// accepted, and must still round-trip byte-for-byte (orig: theta-lake e252cf7).
+func TestReadHeader_semicolonSeparator(t *testing.T) {
+	raw := "Content-Disposition; attachment\r\nTo: a@b.com\r\n\r\n"
+	h, err := ReadHeader(bufio.NewReader(strings.NewReader(raw)))
+	if err != nil {
+		t.Fatalf("ReadHeader: %v", err)
+	}
+	if got := h.Get("Content-Disposition"); got != "attachment" {
+		t.Errorf("Content-Disposition = %q, want %q", got, "attachment")
+	}
+
+	var b bytes.Buffer
+	if err := WriteHeader(&b, h); err != nil {
+		t.Fatal(err)
+	}
+	if b.String() != raw {
+		t.Errorf("round-trip mismatch:\n got %q\nwant %q", b.String(), raw)
+	}
+}

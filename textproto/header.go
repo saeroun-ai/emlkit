@@ -547,7 +547,12 @@ func ReadHeader(r *bufio.Reader) (Header, error) {
 		// appear in the wild, violating specs, so we remove them if present.
 		i := bytes.IndexByte(kv, ':')
 		if i < 0 {
-			return newHeader(fs), fmt.Errorf("message: malformed MIME header line: %v", string(kv))
+			// Some malformed messages use a semicolon instead of a colon as
+			// the field separator; accept it as a fallback.
+			i = bytes.IndexByte(kv, ';')
+			if i < 0 {
+				return newHeader(fs), fmt.Errorf("message: malformed MIME header line: %v", string(kv))
+			}
 		}
 
 		keyBytes := trim(kv[:i])
@@ -569,7 +574,7 @@ func ReadHeader(r *bufio.Reader) (Header, error) {
 			continue
 		}
 
-		i++ // skip colon
+		i++ // skip colon or semicolon
 		v := kv[i:]
 
 		value := trimAroundNewlines(v)
