@@ -22,3 +22,7 @@ _testmain.go
 *.exe
 *.test
 *.prof
+
+# Local working artifacts (Claude / superpowers) — not part of the published library
+docs/superpowers/
+docs/upstream-merge/
