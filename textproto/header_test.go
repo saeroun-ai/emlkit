@@ -553,3 +553,16 @@ func TestHeader_Map(t *testing.T) {
 		t.Errorf("Fields(): got \n%#v\n but want \n%#v", m, want)
 	}
 }
+
+func TestFormatHeaderField_longKeyDoesNotPanic(t *testing.T) {
+	// 키 길이가 preferredHeaderLen(76)을 초과하면 foldLine의 maxlen이 음수가 되어
+	// 과거에는 v[:foldBefore] 슬라이스에서 panic했다 (orig: ProtonMail b62c999).
+	var h Header
+	longKey := "X-" + strings.Repeat("A", 80)
+	h.Set(longKey, "multipart/alternative; boundary=long-boundary-value-that-needs-to-be-folded")
+
+	var b bytes.Buffer
+	if err := WriteHeader(&b, h); err != nil {
+		t.Fatalf("WriteHeader failed: %v", err)
+	}
+}

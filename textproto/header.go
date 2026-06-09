@@ -650,11 +650,19 @@ func formatHeaderField(k, v string) string {
 			keylen = len(s)
 		}
 
-		// First try with a soft limit
-		l, next, ok := foldLine(v, preferredHeaderLen-keylen)
-		if !ok {
-			// Folding failed to preserve the original header field value. Try
-			// with a larger, hard limit.
+		var l, next string
+		if keylen < preferredHeaderLen {
+			// First try with a soft limit
+			var ok bool
+			l, next, ok = foldLine(v, preferredHeaderLen-keylen)
+			if !ok {
+				// Folding failed to preserve the original header field value. Try
+				// with a larger, hard limit.
+				l, next, _ = foldLine(v, maxHeaderLen-keylen)
+			}
+		} else {
+			// The key alone already exceeds the soft limit, so a soft fold would
+			// compute a negative width. Fold directly at the hard limit.
 			l, next, _ = foldLine(v, maxHeaderLen-keylen)
 		}
 		v = next
