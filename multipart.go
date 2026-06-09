@@ -19,7 +19,8 @@ type MultipartReader interface {
 }
 
 type multipartReader struct {
-	r *textproto.MultipartReader
+	r                          *textproto.MultipartReader
+	skipTextAttachmentDecoding bool
 }
 
 // NextPart implements MultipartReader.
@@ -28,7 +29,7 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 	if err != nil {
 		return nil, err
 	}
-	return New(Header{p.Header}, p)
+	return newWithOptions(Header{p.Header}, p, r.skipTextAttachmentDecoding)
 }
 
 // Close implements io.Closer.

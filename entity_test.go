@@ -285,6 +285,56 @@ func TestEntity_WriteTo_directConstruct(t *testing.T) {
 	}
 }
 
+// upperReader is a test CharsetReader that uppercases ASCII letters, standing
+// in for a real charset conversion.
+type upperReader struct{ r io.Reader }
+
+func (u *upperReader) Read(p []byte) (int, error) {
+	n, err := u.r.Read(p)
+	for i := 0; i < n; i++ {
+		if p[i] >= 'a' && p[i] <= 'z' {
+			p[i] -= 'a' - 'A'
+		}
+	}
+	return n, err
+}
+
+func TestReadWithOptions_skipTextAttachmentDecoding(t *testing.T) {
+	old := CharsetReader
+	CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
+		return &upperReader{input}, nil
+	}
+	defer func() { CharsetReader = old }()
+
+	const msg = "Content-Type: multipart/mixed; boundary=BB\r\n\r\n" +
+		"--BB\r\n" +
+		"Content-Type: text/plain; charset=x-upper\r\n" +
+		"Content-Disposition: attachment; filename=a.txt\r\n" +
+		"\r\n" +
+		"hello\r\n" +
+		"--BB--\r\n"
+
+	readPart := func(skip bool) string {
+		e, err := ReadWithOptions(strings.NewReader(msg), &ReadOptions{SkipTextAttachmentDecoding: skip})
+		if err != nil {
+			t.Fatal("ReadWithOptions:", err)
+		}
+		part, err := e.MultipartReader().NextPart()
+		if err != nil {
+			t.Fatal("NextPart:", err)
+		}
+		b, _ := io.ReadAll(part.Body)
+		return string(b)
+	}
+
+	if got := readPart(false); got != "HELLO" {
+		t.Errorf("default: expected charset-decoded %q, got %q", "HELLO", got)
+	}
+	if got := readPart(true); got != "hello" {
+		t.Errorf("skip: expected raw (undecoded) %q, got %q", "hello", got)
+	}
+}
+
 func TestEntity_WriteTo_decode(t *testing.T) {
 	e := testMakeEntity()
 

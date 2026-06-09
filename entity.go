@@ -31,6 +31,11 @@ type Entity struct {
 	originalBody io.Reader
 	encoding     string
 	charset      string
+
+	// skipTextAttachmentDecoding is propagated to child parts so that a
+	// multipart tree read with this option keeps text attachments undecoded
+	// all the way down. See ReadOptions.SkipTextAttachmentDecoding.
+	skipTextAttachmentDecoding bool
 }
 
 // New makes a new message with the provided header and body. The entity's
@@ -40,6 +45,18 @@ type Entity struct {
 // error that verifies IsUnknownCharset, but also returns an Entity that can
 // be read.
 func New(header Header, body io.Reader) (*Entity, error) {
+	return newWithOptions(header, body, false)
+}
+
+// isAttachment reports whether the header's Content-Disposition is "attachment".
+func isAttachment(header Header) bool {
+	disp, _, err := header.ContentDisposition()
+	return err == nil && strings.EqualFold(disp, "attachment")
+}
+
+// newWithOptions is like New but, when skipTextAttachmentDecoding is true, skips
+// charset decoding for text/* parts whose Content-Disposition is "attachment".
+func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bool) (*Entity, error) {
 	originalBody := body
 	var encoding, charset string
 
@@ -63,24 +80,29 @@ func New(header Header, body io.Reader) (*Entity, error) {
 
 	// RFC 2046 section 4.1.2: charset only applies to text/*
 	if strings.HasPrefix(mediaType, "text/") {
-		var ok bool
-		if charset, ok = mediaParams["charset"]; ok {
-			if converted, charsetErr := charsetReader(charset, body); charsetErr != nil {
-				err = UnknownCharsetError{charsetErr}
-			} else {
-				body = converted
+		if ch, ok := mediaParams["charset"]; ok {
+			// Record the charset even when decoding is skipped, so WriteTo can
+			// still copy the original body through verbatim (see writeBodyTo).
+			charset = ch
+			if !skipTextAttachmentDecoding || !isAttachment(header) {
+				if converted, charsetErr := charsetReader(charset, body); charsetErr != nil {
+					err = UnknownCharsetError{charsetErr}
+				} else {
+					body = converted
+				}
 			}
 		}
 	}
 
 	return &Entity{
-		Header:       header,
-		Body:         body,
-		mediaType:    mediaType,
-		mediaParams:  mediaParams,
-		originalBody: originalBody,
-		encoding:     encoding,
-		charset:      charset,
+		Header:                     header,
+		Body:                       body,
+		mediaType:                  mediaType,
+		mediaParams:                mediaParams,
+		originalBody:               originalBody,
+		encoding:                   encoding,
+		charset:                    charset,
+		skipTextAttachmentDecoding: skipTextAttachmentDecoding,
 	}, err
 }
 
@@ -128,6 +150,13 @@ type ReadOptions struct {
 	//
 	// Set to -1 for no limit, set to 0 for the default value (1MB).
 	MaxHeaderBytes int64
+
+	// SkipTextAttachmentDecoding, when true, leaves text/* parts whose
+	// Content-Disposition is "attachment" undecoded: their charset is not
+	// converted to UTF-8 and their body is returned as-is. This preserves the
+	// exact bytes of text attachments whose declared charset may be wrong or
+	// invalid. By default (false) every text/* part is decoded to UTF-8.
+	SkipTextAttachmentDecoding bool
 }
 
 // withDefaults returns a sanitised version of the options with defaults/special
@@ -164,7 +193,7 @@ func ReadWithOptions(r io.Reader, opts *ReadOptions) (*Entity, error) {
 
 	lr.N = math.MaxInt64
 
-	return New(Header{h}, br)
+	return newWithOptions(Header{h}, br, opts.SkipTextAttachmentDecoding)
 }
 
 // Read reads a message from r. The message's encoding and charset are
@@ -187,7 +216,10 @@ func (e *Entity) MultipartReader() MultipartReader {
 	if mb, ok := e.Body.(*multipartBody); ok {
 		return mb
 	}
-	return &multipartReader{textproto.NewMultipartReader(e.Body, e.mediaParams["boundary"])}
+	return &multipartReader{
+		r:                          textproto.NewMultipartReader(e.Body, e.mediaParams["boundary"]),
+		skipTextAttachmentDecoding: e.skipTextAttachmentDecoding,
+	}
 }
 
 // writeBodyTo writes this entity's body to w (without the header).
