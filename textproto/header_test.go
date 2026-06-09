@@ -9,6 +9,13 @@ import (
 	"testing"
 )
 
+// The unexported iterator types must keep satisfying the public HeaderFields
+// interface, even though the sealed marker prevents external implementations.
+var (
+	_ HeaderFields = (*headerFields)(nil)
+	_ HeaderFields = (*headerFieldsByKey)(nil)
+)
+
 var from = "Mitsuha Miyamizu <mitsuha.miyamizu@example.com>"
 var to = "Taki Tachibana <taki.tachibana@example.org>"
 var received2 = "from example.com by example.org"
