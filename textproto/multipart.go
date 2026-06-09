@@ -413,21 +413,31 @@ func randomBoundary() string {
 // Writer. After calling CreatePart, any previous part may no longer
 // be written to.
 func (w *MultipartWriter) CreatePart(header Header) (io.Writer, error) {
+	var b bytes.Buffer
+	return w.CreatePartWithBuffer(header, &b)
+}
+
+// CreatePartWithBuffer behaves like CreatePart but uses the caller-supplied
+// buffer to assemble the part's boundary line and header instead of allocating
+// a new one. The buffer's current contents are written out as-is, so callers
+// should pass an empty buffer; reusing one buffer across many parts avoids a
+// per-part allocation. CreatePartWithBuffer drains the buffer before returning,
+// so the same buffer can be passed again for the next part.
+func (w *MultipartWriter) CreatePartWithBuffer(header Header, b *bytes.Buffer) (io.Writer, error) {
 	if w.lastpart != nil {
 		if err := w.lastpart.close(); err != nil {
 			return nil, err
 		}
 	}
-	var b bytes.Buffer
 	if w.lastpart != nil {
-		fmt.Fprintf(&b, "\r\n--%s\r\n", w.boundary)
+		fmt.Fprintf(b, "\r\n--%s\r\n", w.boundary)
 	} else {
-		fmt.Fprintf(&b, "--%s\r\n", w.boundary)
+		fmt.Fprintf(b, "--%s\r\n", w.boundary)
 	}
 
-	WriteHeader(&b, header)
+	WriteHeader(b, header)
 
-	_, err := io.Copy(w.w, &b)
+	_, err := io.Copy(w.w, b)
 	if err != nil {
 		return nil, err
 	}

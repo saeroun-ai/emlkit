@@ -853,3 +853,70 @@ func TestNoBoundary(t *testing.T) {
 		t.Errorf("NextPart error = %v; want %v", got, want)
 	}
 }
+
+func TestMultipartWriter_CreatePartWithBuffer(t *testing.T) {
+	// CreatePartWithBuffer로 생성한 출력은 CreatePart(매번 새 버퍼)와 동일해야 하고,
+	// 같은 버퍼를 여러 파트에 재사용해도 결과가 같아야 한다.
+	build := func(reuse bool) string {
+		var out bytes.Buffer
+		mw := NewMultipartWriter(&out)
+		if err := mw.SetBoundary("BOUNDARY"); err != nil {
+			t.Fatal(err)
+		}
+		var shared bytes.Buffer
+		for i := 0; i < 3; i++ {
+			var h Header
+			h.Set("Content-Type", "text/plain")
+			var (
+				pw  io.Writer
+				err error
+			)
+			if reuse {
+				pw, err = mw.CreatePartWithBuffer(h, &shared)
+			} else {
+				pw, err = mw.CreatePart(h)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			io.WriteString(pw, "part body")
+		}
+		if err := mw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+
+	if reused, fresh := build(true), build(false); reused != fresh {
+		t.Errorf("CreatePartWithBuffer output differs from CreatePart:\nreused=%q\nfresh=%q", reused, fresh)
+	}
+}
+
+func benchmarkCreatePart(b *testing.B, reuse bool) {
+	var h Header
+	h.Set("Content-Type", "text/plain")
+	b.ReportAllocs()
+	for n := 0; n < b.N; n++ {
+		mw := NewMultipartWriter(io.Discard)
+		var shared bytes.Buffer
+		for i := 0; i < 16; i++ {
+			var (
+				pw  io.Writer
+				err error
+			)
+			if reuse {
+				pw, err = mw.CreatePartWithBuffer(h, &shared)
+			} else {
+				pw, err = mw.CreatePart(h)
+			}
+			if err != nil {
+				b.Fatal(err)
+			}
+			io.WriteString(pw, "part body")
+		}
+		mw.Close()
+	}
+}
+
+func BenchmarkCreatePart(b *testing.B)           { benchmarkCreatePart(b, false) }
+func BenchmarkCreatePartWithBuffer(b *testing.B) { benchmarkCreatePart(b, true) }

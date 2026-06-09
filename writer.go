@@ -1,6 +1,7 @@
 package message
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -106,6 +107,15 @@ func (w *Writer) Close() error {
 // entity is not multipart, it fails. The body of the part should be written to
 // the returned io.WriteCloser.
 func (w *Writer) CreatePart(header Header) (*Writer, error) {
+	var b bytes.Buffer
+	return w.CreatePartWithBuffer(header, &b)
+}
+
+// CreatePartWithBuffer behaves like CreatePart but lets the caller supply the
+// buffer used to assemble the part, avoiding a per-part allocation when the
+// same buffer is reused across many parts. See
+// textproto.MultipartWriter.CreatePartWithBuffer for the buffer reuse semantics.
+func (w *Writer) CreatePartWithBuffer(header Header, buffer *bytes.Buffer) (*Writer, error) {
 	if w.mw == nil {
 		return nil, errors.New("cannot create a part in a non-multipart message")
 	}
@@ -126,7 +136,7 @@ func (w *Writer) CreatePart(header Header) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
-	pw, err := w.mw.CreatePart(header.Header)
+	pw, err := w.mw.CreatePartWithBuffer(header.Header, buffer)
 	if err != nil {
 		return nil, err
 	}
