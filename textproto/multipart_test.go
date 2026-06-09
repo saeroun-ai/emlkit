@@ -976,3 +976,27 @@ func TestNextPart_stickyAfterMissingBoundary(t *testing.T) {
 		}
 	}
 }
+
+// Two boundary lines in a row (an empty part with no header block) must not
+// break parsing: the empty part gets an empty header and the following parts
+// are still read (orig: sublime-security 64ceae7).
+func TestMultipartReader_consecutiveBoundaries(t *testing.T) {
+	body := "--A\r\n--A\r\nContent-Type: text/plain\r\n\r\nbody2\r\n--A--\r\n"
+	r := NewMultipartReader(strings.NewReader(body), "A")
+
+	p1, err := r.NextPart()
+	if err != nil {
+		t.Fatalf("part 1: %v", err)
+	}
+	if b1, _ := io.ReadAll(p1); len(b1) != 0 {
+		t.Errorf("part 1 body = %q, want empty", b1)
+	}
+
+	p2, err := r.NextPart()
+	if err != nil {
+		t.Fatalf("part 2: %v", err)
+	}
+	if b2, _ := io.ReadAll(p2); string(b2) != "body2" {
+		t.Errorf("part 2 body = %q, want %q", b2, "body2")
+	}
+}

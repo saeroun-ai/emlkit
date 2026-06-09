@@ -89,6 +89,14 @@ func newPart(mr *MultipartReader) (*Part, error) {
 }
 
 func (bp *Part) populateHeaders() error {
+	// Two boundary lines in a row mean an empty part with no header block. If
+	// the next bytes already form a boundary, return an empty header instead
+	// of trying to parse the boundary line as a header.
+	if peek, _ := bp.mr.bufReader.Peek(len(bp.mr.dashBoundary)); bytes.HasPrefix(peek, bp.mr.dashBoundary) {
+		bp.Header = Header{}
+		return nil
+	}
+
 	header, err := ReadHeader(bp.mr.bufReader)
 	if err == nil {
 		bp.Header = header
