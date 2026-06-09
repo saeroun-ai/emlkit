@@ -33,6 +33,16 @@ func initAttachmentHeader(h *AttachmentHeader) {
 	}
 }
 
+func initInlineAttachmentHeader(h *InlineAttachmentHeader) {
+	disp, _, _ := h.ContentDisposition()
+	if disp != "inline" {
+		h.Set("Content-Disposition", "inline")
+	}
+	if !h.Has("Content-Transfer-Encoding") {
+		h.Set("Content-Transfer-Encoding", "base64")
+	}
+}
+
 // A Writer writes a mail message. A mail message contains one or more text
 // parts and zero or more attachments.
 type Writer struct {
@@ -77,6 +87,22 @@ func CreateSingleInlineWriter(w io.Writer, header Header) (io.WriteCloser, error
 	return message.CreateWriter(w, header.Header)
 }
 
+// CreateRelatedWriter writes a mail header to w. The mail will contain a text
+// part (which may itself have several alternative formats) together with inline
+// attachments referenced from it (e.g. images embedded in HTML via Content-Id).
+// Non-inline attachments cannot be added.
+func CreateRelatedWriter(w io.Writer, header Header) (*RelatedWriter, error) {
+	header = header.Copy() // don't modify the caller's view
+	header.Set("Content-Type", "multipart/related")
+
+	mw, err := message.CreateWriter(w, header.Header)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RelatedWriter{mw}, nil
+}
+
 // CreateInline creates a InlineWriter. One or more parts representing the same
 // text in different formats can be written to a InlineWriter.
 func (w *Writer) CreateInline() (*InlineWriter, error) {
@@ -88,6 +114,20 @@ func (w *Writer) CreateInline() (*InlineWriter, error) {
 		return nil, err
 	}
 	return &InlineWriter{mw}, nil
+}
+
+// CreateRelated creates a RelatedWriter. A text part (possibly with several
+// alternative formats) together with inline attachments referenced from it can
+// be written to the returned RelatedWriter.
+func (w *Writer) CreateRelated() (*RelatedWriter, error) {
+	var h message.Header
+	h.Set("Content-Type", "multipart/related")
+
+	mw, err := w.mw.CreatePart(h)
+	if err != nil {
+		return nil, err
+	}
+	return &RelatedWriter{mw}, nil
 }
 
 // CreateSingleInline creates a new single text part with the provided header.
@@ -128,5 +168,47 @@ func (w *InlineWriter) CreatePart(h InlineHeader) (io.WriteCloser, error) {
 
 // Close finishes the InlineWriter.
 func (w *InlineWriter) Close() error {
+	return w.mw.Close()
+}
+
+// RelatedWriter writes the text and inline attachments of a multipart/related
+// mail part.
+type RelatedWriter struct {
+	mw *message.Writer
+}
+
+// CreateInline creates an InlineWriter. One or more parts representing the same
+// text in different formats can be written to the returned InlineWriter.
+func (w *RelatedWriter) CreateInline() (*InlineWriter, error) {
+	var h message.Header
+	h.Set("Content-Type", "multipart/alternative")
+
+	mw, err := w.mw.CreatePart(h)
+	if err != nil {
+		return nil, err
+	}
+	return &InlineWriter{mw}, nil
+}
+
+// CreateSingleInline creates a new single text part with the provided header.
+// The body of the part should be written to the returned io.WriteCloser. Only
+// one single text part should be written, use CreateInline if you want multiple
+// text parts.
+func (w *RelatedWriter) CreateSingleInline(h InlineHeader) (io.WriteCloser, error) {
+	h = InlineHeader{h.Header.Copy()} // don't modify the caller's view
+	initInlineHeader(&h)
+	return w.mw.CreatePart(h.Header)
+}
+
+// CreateInlineAttachment creates a new inline attachment with the provided
+// header. The body of the part should be written to the returned io.WriteCloser.
+func (w *RelatedWriter) CreateInlineAttachment(h InlineAttachmentHeader) (io.WriteCloser, error) {
+	h = InlineAttachmentHeader{h.Header.Copy()} // don't modify the caller's view
+	initInlineAttachmentHeader(&h)
+	return w.mw.CreatePart(h.Header)
+}
+
+// Close finishes the RelatedWriter.
+func (w *RelatedWriter) Close() error {
 	return w.mw.Close()
 }

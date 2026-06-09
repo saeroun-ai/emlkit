@@ -137,3 +137,52 @@ func TestWriter_singleInline(t *testing.T) {
 
 	testReader(t, &b)
 }
+
+func TestWriter_CreateRelated(t *testing.T) {
+	var buf bytes.Buffer
+	var h mail.Header
+	mw, err := mail.CreateWriter(&buf, h)
+	if err != nil {
+		t.Fatal("CreateWriter:", err)
+	}
+
+	rw, err := mw.CreateRelated()
+	if err != nil {
+		t.Fatal("CreateRelated:", err)
+	}
+
+	var ih mail.InlineHeader
+	ih.Set("Content-Type", "text/html")
+	tw, err := rw.CreateSingleInline(ih)
+	if err != nil {
+		t.Fatal("CreateSingleInline:", err)
+	}
+	io.WriteString(tw, "<p>hi <img src=\"cid:img1\"></p>")
+	tw.Close()
+
+	var ah mail.InlineAttachmentHeader
+	ah.Set("Content-Type", "image/png")
+	ah.Set("Content-Id", "<img1>")
+	ah.SetFilename("img.png")
+	aw, err := rw.CreateInlineAttachment(ah)
+	if err != nil {
+		t.Fatal("CreateInlineAttachment:", err)
+	}
+	io.WriteString(aw, "PNGDATA")
+	aw.Close()
+
+	if err := rw.Close(); err != nil {
+		t.Fatal("RelatedWriter.Close:", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal("Writer.Close:", err)
+	}
+
+	out := buf.Bytes()
+	if !bytes.Contains(out, []byte("multipart/related")) {
+		t.Errorf("expected multipart/related in output:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("Content-Disposition: inline")) {
+		t.Errorf("expected inline disposition in output:\n%s", out)
+	}
+}
