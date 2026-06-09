@@ -567,3 +567,19 @@ func TestWalk_multipart(t *testing.T) {
 		t.Errorf("Entity.Walk() =\n%#v\nbut want:\n%#v", got, want)
 	}
 }
+
+func TestCharsetReader_emptyPassesThrough(t *testing.T) {
+	// An empty charset means unspecified (effectively us-ascii); it should pass
+	// through without a CharsetReader rather than warn about an unknown charset.
+	old := CharsetReader
+	CharsetReader = nil
+	defer func() { CharsetReader = old }()
+
+	r, err := charsetReader("", strings.NewReader("hi"))
+	if err != nil {
+		t.Errorf("empty charset should pass through, got error: %v", err)
+	}
+	if b, _ := io.ReadAll(r); string(b) != "hi" {
+		t.Errorf("body = %q, want %q", b, "hi")
+	}
+}
