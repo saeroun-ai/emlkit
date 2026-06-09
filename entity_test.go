@@ -240,6 +240,51 @@ func TestReadWithOptions_nilDefault(t *testing.T) {
 	}
 }
 
+func TestEntity_WriteTo_preservesOriginalBody(t *testing.T) {
+	// base64 본문이 비표준 줄바꿈을 가지면 디코드→재인코딩 시 바이트가 바뀐다.
+	// encoding/charset이 그대로면 원본 바이트를 보존해야 한다 (DKIM body hash 보존).
+	// orig: emersion/go-message#87
+	var h Header
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("Content-Transfer-Encoding", "base64")
+	rawBody := "Y2Mg\r\nc2F2YQ==" // "cc sava"를 비표준으로 줄바꿈한 base64
+	e, err := New(h, strings.NewReader(rawBody))
+	if err != nil {
+		t.Fatal("New:", err)
+	}
+
+	var b bytes.Buffer
+	if err := e.WriteTo(&b); err != nil {
+		t.Fatal("WriteTo:", err)
+	}
+
+	out := b.String()
+	idx := strings.Index(out, "\r\n\r\n")
+	if idx < 0 {
+		t.Fatalf("no header/body separator in output %q", out)
+	}
+	if gotBody := out[idx+4:]; gotBody != rawBody {
+		t.Errorf("body not preserved:\n got %q\nwant %q", gotBody, rawBody)
+	}
+}
+
+func TestEntity_WriteTo_directConstruct(t *testing.T) {
+	// New를 거치지 않고 직접 구성한 Entity는 originalBody가 nil이다. encoding과
+	// charset이 모두 빈 값이어도 원본 보존 경로로 빠져 nil 리더를 복사하다
+	// panic하면 안 된다.
+	var h Header
+	h.Set("Content-Type", "text/plain")
+	e := &Entity{Header: h, Body: strings.NewReader("hello")}
+
+	var b bytes.Buffer
+	if err := e.WriteTo(&b); err != nil {
+		t.Fatal("WriteTo:", err)
+	}
+	if !strings.HasSuffix(b.String(), "hello") {
+		t.Errorf("body not written, got %q", b.String())
+	}
+}
+
 func TestEntity_WriteTo_decode(t *testing.T) {
 	e := testMakeEntity()
 

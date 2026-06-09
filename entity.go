@@ -21,6 +21,16 @@ type Entity struct {
 
 	mediaType   string
 	mediaParams map[string]string
+
+	// originalBody is the undecoded body as passed to New, together with the
+	// transfer encoding and charset it was encoded with. WriteTo copies the
+	// body through verbatim using these when the output encoding/charset are
+	// unchanged, preserving the exact bytes (e.g. for DKIM body hashes).
+	// originalBody shares the underlying reader with Body, so reading Body
+	// consumes it too: call WriteTo before reading Body to keep this working.
+	originalBody io.Reader
+	encoding     string
+	charset      string
 }
 
 // New makes a new message with the provided header and body. The entity's
@@ -30,6 +40,9 @@ type Entity struct {
 // error that verifies IsUnknownCharset, but also returns an Entity that can
 // be read.
 func New(header Header, body io.Reader) (*Entity, error) {
+	originalBody := body
+	var encoding, charset string
+
 	var err error
 
 	mediaType, mediaParams, _ := header.ContentType()
@@ -40,8 +53,8 @@ func New(header Header, body io.Reader) (*Entity, error) {
 	// e.g. "quoted-printable". So we just ignore it for multipart.
 	// See https://github.com/emersion/go-message/issues/48
 	if !strings.HasPrefix(mediaType, "multipart/") {
-		enc := header.Get("Content-Transfer-Encoding")
-		if decoded, encErr := encodingReader(enc, body); encErr != nil {
+		encoding = header.Get("Content-Transfer-Encoding")
+		if decoded, encErr := encodingReader(encoding, body); encErr != nil {
 			err = UnknownEncodingError{encErr}
 		} else {
 			body = decoded
@@ -50,8 +63,9 @@ func New(header Header, body io.Reader) (*Entity, error) {
 
 	// RFC 2046 section 4.1.2: charset only applies to text/*
 	if strings.HasPrefix(mediaType, "text/") {
-		if ch, ok := mediaParams["charset"]; ok {
-			if converted, charsetErr := charsetReader(ch, body); charsetErr != nil {
+		var ok bool
+		if charset, ok = mediaParams["charset"]; ok {
+			if converted, charsetErr := charsetReader(charset, body); charsetErr != nil {
 				err = UnknownCharsetError{charsetErr}
 			} else {
 				body = converted
@@ -60,10 +74,13 @@ func New(header Header, body io.Reader) (*Entity, error) {
 	}
 
 	return &Entity{
-		Header:      header,
-		Body:        body,
-		mediaType:   mediaType,
-		mediaParams: mediaParams,
+		Header:       header,
+		Body:         body,
+		mediaType:    mediaType,
+		mediaParams:  mediaParams,
+		originalBody: originalBody,
+		encoding:     encoding,
+		charset:      charset,
 	}, err
 }
 
@@ -178,6 +195,12 @@ func (e *Entity) writeBodyTo(w *Writer) error {
 	var err error
 	if mb, ok := e.Body.(*multipartBody); ok {
 		err = mb.writeBodyTo(w)
+	} else if e.originalBody != nil && strings.EqualFold(w.encoding, e.encoding) && strings.EqualFold(w.charset, e.charset) {
+		// The output transfer encoding and charset match the input, so copy the
+		// original (undecoded) body verbatim instead of decoding and
+		// re-encoding it. This preserves the exact bytes (e.g. for DKIM body
+		// hashes) that re-encoding could otherwise alter.
+		_, err = io.Copy(w.rawWriter, e.originalBody)
 	} else {
 		_, err = io.Copy(w, e.Body)
 	}
