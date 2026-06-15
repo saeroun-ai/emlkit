@@ -574,6 +574,21 @@ func TestFormatHeaderField_longKeyDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestFormatHeaderField_veryLongKeyDoesNotPanic(t *testing.T) {
+	// When key + ": " reaches the hard limit (maxHeaderLen, 998), the fold width
+	// maxHeaderLen-keylen goes <= 0. The 76-char soft-limit guard doesn't cover
+	// this, so foldLine would receive a non-positive width and panic on a negative
+	// slice bound. Pathological input, but it must not crash.
+	var h Header
+	longKey := "X-" + strings.Repeat("A", 1000)
+	h.Set(longKey, "a value long enough that it would otherwise need folding across the limit")
+
+	var b bytes.Buffer
+	if err := WriteHeader(&b, h); err != nil {
+		t.Fatalf("WriteHeader failed: %v", err)
+	}
+}
+
 // A malformed header line that uses a semicolon instead of a colon should be
 // accepted, and must still round-trip byte-for-byte (orig: theta-lake e252cf7).
 func TestReadHeader_semicolonSeparator(t *testing.T) {

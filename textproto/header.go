@@ -589,6 +589,13 @@ func ReadHeader(r *bufio.Reader) (Header, error) {
 func foldLine(v string, maxlen int) (line, next string, ok bool) {
 	ok = true
 
+	if maxlen < 1 {
+		// A header key longer than maxHeaderLen drives maxlen non-positive, which
+		// would make foldBefore a negative slice bound below. Clamp so pathological
+		// input folds (ugly but valid) instead of panicking.
+		maxlen = 1
+	}
+
 	// We'll need to fold before maxlen
 	foldBefore := maxlen + 1
 	foldAt := len(v)
