@@ -268,6 +268,29 @@ func TestEntity_WriteTo_preservesOriginalBody(t *testing.T) {
 	}
 }
 
+func TestEntity_WriteTo_respectsReplacedBody(t *testing.T) {
+	// Reading then reassigning the public Body and calling WriteTo must emit the
+	// replacement. The verbatim fast path (copying originalBody) must not silently
+	// ignore a Body the caller swapped in, even when encoding/charset are unchanged.
+	e, err := Read(strings.NewReader("Content-Type: text/plain\r\n\r\noriginal body"))
+	if err != nil {
+		t.Fatal("Read:", err)
+	}
+	e.Body = strings.NewReader("replaced body")
+
+	var b bytes.Buffer
+	if err := e.WriteTo(&b); err != nil {
+		t.Fatal("WriteTo:", err)
+	}
+	out := b.String()
+	if !strings.Contains(out, "replaced body") {
+		t.Errorf("WriteTo dropped the replaced body; got:\n%s", out)
+	}
+	if strings.Contains(out, "original body") {
+		t.Errorf("WriteTo emitted the original body instead of the replacement; got:\n%s", out)
+	}
+}
+
 func TestEntity_WriteTo_directConstruct(t *testing.T) {
 	// New를 거치지 않고 직접 구성한 Entity는 originalBody가 nil이다. encoding과
 	// charset이 모두 빈 값이어도 원본 보존 경로로 빠져 nil 리더를 복사하다

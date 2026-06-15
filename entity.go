@@ -32,6 +32,12 @@ type Entity struct {
 	encoding     string
 	charset      string
 
+	// decodedBody is the body value this Entity was constructed with (what Body
+	// was initially set to). The verbatim fast path in writeBodyTo only applies
+	// while Body still equals it; if the caller reassigned Body, that replacement
+	// is written instead of originalBody.
+	decodedBody io.Reader
+
 	// skipTextAttachmentDecoding is propagated to child parts so that a
 	// multipart tree read with this option keeps text attachments undecoded
 	// all the way down. See ReadOptions.SkipTextAttachmentDecoding.
@@ -100,6 +106,7 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 		mediaType:                  mediaType,
 		mediaParams:                mediaParams,
 		originalBody:               originalBody,
+		decodedBody:                body,
 		encoding:                   encoding,
 		charset:                    charset,
 		skipTextAttachmentDecoding: skipTextAttachmentDecoding,
@@ -222,12 +229,26 @@ func (e *Entity) MultipartReader() MultipartReader {
 	}
 }
 
+// sameReader reports whether a and b are the same reader value. It detects
+// whether the caller reassigned Entity.Body after construction. Comparing
+// interface values panics if their dynamic type is not comparable, so that is
+// recovered and treated as "not the same" — the safe default of not taking the
+// verbatim fast path.
+func sameReader(a, b io.Reader) (same bool) {
+	defer func() {
+		if recover() != nil {
+			same = false
+		}
+	}()
+	return a == b
+}
+
 // writeBodyTo writes this entity's body to w (without the header).
 func (e *Entity) writeBodyTo(w *Writer) error {
 	var err error
 	if mb, ok := e.Body.(*multipartBody); ok {
 		err = mb.writeBodyTo(w)
-	} else if e.originalBody != nil && strings.EqualFold(w.encoding, e.encoding) && strings.EqualFold(w.charset, e.charset) {
+	} else if e.originalBody != nil && sameReader(e.Body, e.decodedBody) && strings.EqualFold(w.encoding, e.encoding) && strings.EqualFold(w.charset, e.charset) {
 		// The output transfer encoding and charset match the input, so copy the
 		// original (undecoded) body verbatim instead of decoding and
 		// re-encoding it. This preserves the exact bytes (e.g. for DKIM body
