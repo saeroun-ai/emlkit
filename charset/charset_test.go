@@ -86,3 +86,82 @@ func TestDisabledCharsetReader(t *testing.T) {
 		t.Errorf("Reader(): expected disabled charset to return an error")
 	}
 }
+
+func TestReader_utf7IsStandardUTF7(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "outlook style shifted ascii",
+			in:   "+ADw-script+AD4-",
+			want: "<script>",
+		},
+		{
+			name: "non ascii",
+			in:   "caf+AOk-",
+			want: "café",
+		},
+		{
+			name: "literal plus",
+			in:   "+- +AOk-",
+			want: "+ é",
+		},
+		{
+			name: "standard base64 slash",
+			in:   "+/v8-",
+			want: "\ufeff",
+		},
+		{
+			name: "standard base64 plus",
+			in:   "++/8-",
+			want: "\ufbff",
+		},
+		{
+			name: "ampersand is direct",
+			in:   "&AOk-",
+			want: "&AOk-",
+		},
+		{
+			name: "comma is not modified base64",
+			in:   "abc &,v8-",
+			want: "abc &,v8-",
+		},
+		{
+			name: "direct terminator",
+			in:   "+AOk!",
+			want: "é!",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r, err := Reader("utf-7", strings.NewReader(test.in))
+			if err != nil {
+				t.Fatalf("Reader(): unexpected error: %v", err)
+			}
+			b, err := ioutil.ReadAll(r)
+			if err != nil {
+				t.Fatalf("ReadAll(): unexpected error: %v", err)
+			}
+			if got := string(b); got != test.want {
+				t.Fatalf("Reader() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestReader_utf7PreservesInvalidShift(t *testing.T) {
+	r, err := Reader("utf-7", strings.NewReader("+A"))
+	if err != nil {
+		t.Fatalf("Reader(): unexpected setup error: %v", err)
+	}
+	b, err := ioutil.ReadAll(r)
+	if err != nil {
+		t.Fatalf("ReadAll(): unexpected error: %v", err)
+	}
+	if got := string(b); got != "+A" {
+		t.Fatalf("Reader() = %q, want %q", got, "+A")
+	}
+}

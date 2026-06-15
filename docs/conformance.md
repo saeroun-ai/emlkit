@@ -17,10 +17,11 @@ lowest layer where the behavior lives.
 | [RFC 2045](https://www.rfc-editor.org/rfc/rfc2045) | MIME Part 1 — Content-Type and Content-Transfer-Encoding (quoted-printable, base64, 7bit, 8bit, binary) | [`encoding.go`](../encoding.go) · `encodingReader`/`encodingWriter` |
 | [RFC 2046](https://www.rfc-editor.org/rfc/rfc2046) | MIME Part 2 — multipart media types and boundaries | [`textproto/multipart.go`](../textproto/multipart.go) · `MultipartReader`/`MultipartWriter` |
 | [RFC 2047](https://www.rfc-editor.org/rfc/rfc2047) | MIME Part 3 — encoded-words in headers | [`charset.go`](../charset.go) · `decodeHeader`/`encodeHeader` |
+| [RFC 2152](https://www.rfc-editor.org/rfc/rfc2152) | Standard UTF-7 MIME charset | [`charset/utf7.go`](../charset/utf7.go), [`charset/charset.go`](../charset/charset.go) |
 | [RFC 2183](https://www.rfc-editor.org/rfc/rfc2183) | Content-Disposition — inline/attachment, filename | [`header.go`](../header.go) · `ContentDisposition`, [`mail/attachment.go`](../mail/attachment.go) · `parseFilename` |
 | [RFC 2231](https://www.rfc-editor.org/rfc/rfc2231) | Parameter value continuations and charset (e.g. `filename*=`) | Go standard library `mime`, via [`header.go`](../header.go) · `parseHeaderWithParams` |
 | [RFC 6532](https://www.rfc-editor.org/rfc/rfc6532) | Internationalized headers — raw UTF-8 in header values | [`mail/header.go`](../mail/header.go) · `isMultibyte`, [`textproto/header.go`](../textproto/header.go) |
-| [RFC 3501](https://www.rfc-editor.org/rfc/rfc3501) §5.1.3 | Modified UTF-7 (IMAP mailbox names) | [`utf7/`](../utf7) · `Encoding`, [`charset/charset.go`](../charset/charset.go) |
+| [RFC 3501](https://www.rfc-editor.org/rfc/rfc3501) §5.1.3 | Modified UTF-7 codec for IMAP mailbox names | [`utf7/`](../utf7) · `Encoding` (used directly, not wired to the MIME `utf-7` charset) |
 
 A few details worth knowing:
 
@@ -28,6 +29,9 @@ A few details worth knowing:
   (quoted-printable) words in any registered charset, via the standard library's
   `mime.WordDecoder`. **Encoding emits `Q` words only** — emlkit never produces
   `B`-encoded words ([`charset.go`](../charset.go) · `encodeHeader`).
+- **RFC 2152 standard UTF-7.** The optional `charset` plugin registers the MIME
+  charset `utf-7` to a standard UTF-7 decoder (`+` shifts, standard base64
+  `+/`). This covers legacy mail that advertises `charset=utf-7`.
 - **RFC 2231.** emlkit does not implement RFC 2231 itself; it delegates entirely
   to Go's `mime.ParseMediaType` / `mime.FormatMediaType`, so its fidelity is
   exactly the standard library's. A parameter value is first 2231-decoded by the
@@ -35,10 +39,11 @@ A few details worth knowing:
 - **RFC 6532.** Header *values* carry raw bytes verbatim (only header *keys* are
   restricted to printable ASCII), so UTF-8 values pass through. The `mail` parser
   additionally treats multi-byte runes as valid atom text.
-- **RFC 3501 modified UTF-7.** Registered under the charset name `utf-7`
-  (case-insensitive), but only when the `charset` plugin is imported (see
-  [Not supported](#not-supported--rejected)). Without the plugin it is an unknown
-  charset.
+- **RFC 3501 modified UTF-7.** The `utf7` package decodes/encodes the IMAP
+  mailbox-name encoding for direct use (e.g. with an IMAP client). It is
+  deliberately separate from the MIME charset `utf-7`: that name means
+  *standard* UTF-7 (RFC 2152), a different encoding (`+`/`/` vs the modified
+  `&`/`,`).
 
 ## Accepted lenient input
 
@@ -97,6 +102,9 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
 
 - **Empty or missing charset** is treated as unspecified (effectively us-ascii)
   and passed through without error. ([`charset.go`](../charset.go) · `charsetReader`)
+- **Malformed UTF-7 shifts** in the optional `charset` plugin are preserved
+  literally instead of making the body unreadable; valid shifted sequences are
+  still decoded as standard UTF-7. ([`charset/utf7.go`](../charset/utf7.go) · `standardUTF7Decoder`)
 - **Malformed encoded-words** degrade to the raw header value; in parameter
   parsing the decode error is swallowed entirely. ([`charset.go`](../charset.go) · `decodeHeader`)
 - **Missing Content-Type** defaults to `text/plain`. ([`header.go`](../header.go) · `ContentType`)

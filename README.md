@@ -92,10 +92,11 @@ standards, byte-exact on round-trip. The full, code-referenced details are in
 |----------|-------|
 | RFC 5322 | Internet Message Format |
 | RFC 2045 / 2046 / 2047 | MIME (bodies, multipart, encoded-words) |
+| RFC 2152 | standard UTF-7 (`charset` plugin) |
 | RFC 2183 | Content-Disposition |
 | RFC 2231 | parameter continuations (via Go `mime`) |
 | RFC 6532 | UTF-8 in headers |
-| RFC 3501 §5.1.3 | modified UTF-7 (opt-in charset plugin) |
+| RFC 3501 §5.1.3 | modified UTF-7 for IMAP (`utf7` package) |
 
 **Tolerates** common real-world breakage — malformed quoted-printable, indented
 base64, bare-LF line endings, empty/missing charset, semicolon header separators,
