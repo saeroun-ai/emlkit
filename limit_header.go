@@ -153,7 +153,12 @@ func headerLimitDiagnostic(kind textproto.HeaderLimitKind, limit int64, cause er
 // The budget the diagnostic reports is the one the refusal carries rather than
 // the one this call was configured with, so what is reported is what was
 // actually enforced.
-func rootHeaderError(err error, session *ParseSession) error {
+//
+// headerOffset is where the block begins in the input: 0, or the length of the
+// mbox envelope line the parse kept apart before it (see mbox.go). The
+// refusal itself, which the diagnostic carries as its cause, is not modified,
+// and its offsets stay relative to where the block began.
+func rootHeaderError(err error, session *ParseSession, headerOffset int64) error {
 	if session == nil {
 		return err
 	}
@@ -171,8 +176,9 @@ func rootHeaderError(err error, session *ParseSession) error {
 		return err
 	}
 
-	// The message's own header block starts at the first byte of the input, so
-	// that is where its context points, and its path is the root's nil path.
+	// The message's own header block starts at the first byte of the input,
+	// or right after an mbox envelope line, so that is where its context
+	// points, and its path is the root's nil path.
 	// The diagnostic points more precisely: at the first byte of the line or
 	// field the budget actually refused, which for the block budget is the block
 	// itself. Where the block would have ended is not a position in the input
@@ -182,7 +188,7 @@ func rootHeaderError(err error, session *ParseSession) error {
 	// The diagnostic is completed before it is recorded, so that the copy the
 	// session keeps and the copy the fatal error carries say the same thing
 	// about where this happened.
-	ctx := rootContext(session, 0)
+	ctx := rootContextAt(session, headerOffset, headerOffset)
 	d := headerLimitDiagnostic(limitErr.Kind(), limitErr.Limit(), err)
 	d.Location = ctx.headerLocationAt(limitErr.UnitOffset() - limitErr.Offset())
 	d = ctx.completeHeader(d)

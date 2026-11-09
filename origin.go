@@ -47,7 +47,15 @@ type entityOrigin struct {
 // path, a header block starting at the first byte of the input, and a body
 // starting at bodyOffset.
 func rootOrigin(bodyOffset int64) entityOrigin {
-	return entityOrigin{known: true, bodyOffset: bodyOffset}
+	return rootOriginAt(0, bodyOffset)
+}
+
+// rootOriginAt returns the origin of the root entity of a parsed message whose
+// header block begins headerOffset bytes into the input, after an mbox
+// envelope line the parse kept apart (see mbox.go), and whose body begins at
+// bodyOffset. Both are absolute positions in the input.
+func rootOriginAt(headerOffset, bodyOffset int64) entityOrigin {
+	return entityOrigin{known: true, headerOffset: headerOffset, bodyOffset: bodyOffset}
 }
 
 // child returns the origin of the index-th part of the entity this origin

@@ -667,6 +667,9 @@ type resolvedConfig struct {
 	profile Profile
 	compat  Compatibility
 	limits  Limits
+
+	// mbox is ParseOptions.RecognizeMboxEnvelope; see mbox.go.
+	mbox bool
 }
 
 // resolveConfig turns caller options into the configuration one parse runs
@@ -698,7 +701,7 @@ func resolveConfig(o ParseOptions) (resolvedConfig, ReadOptions, error) {
 	read := o.ReadOptions
 	read.MaxHeaderBytes = header
 
-	return resolvedConfig{profile: o.Profile, compat: o.Compatibility, limits: limits}, read, nil
+	return resolvedConfig{profile: o.Profile, compat: o.Compatibility, limits: limits, mbox: o.RecognizeMboxEnvelope}, read, nil
 }
 
 // bridgeMaxHeaderBytes reconciles the two spellings of the header byte budget

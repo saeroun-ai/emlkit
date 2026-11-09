@@ -95,6 +95,36 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   mark is read as it always was: the start of a malformed line (`ROB-020`); a
   mark in a value or body is content.
   ([`textproto/bom.go`](../textproto/bom.go), [`bom.go`](../bom.go))
+- **One leading mbox `From_` envelope line, on request** (`ROB-010-004`).
+  Off by default. With `ParseOptions.RecognizeMboxEnvelope`, `Parse` and
+  `ParseContext` recognize one envelope line at input offset 0 and keep it
+  apart from the message: `ParseSession.MboxEnvelope` returns its bytes, line
+  ending included, and its location `[0, n)`, even when the header after it
+  cannot be read. The recognized shape is `From`, one space, a sender token of
+  visible ASCII not beginning with `:`, then a ctime-shaped timestamp —
+  English weekday and month, day 1–31, `HH:MM:SS`, four-digit year, at most one
+  zone (2–5 upper-case letters or `±HHMM`) immediately before or after the
+  year — and an optional `remote from host`, separated by spaces or tabs, with
+  no trailing white space, ended by CRLF, LF or CR (a CR decided by the byte
+  after it or by `io.EOF`). Weekday and day are syntax only, not checked against
+  a calendar. RFC 4155 notes that separator lines in the wild vary; other forms
+  (no timestamp, other date orders, 8-bit senders, a byte order mark before
+  `From`, a line with no line ending) are not recognized and are framed exactly
+  as without the option. The line may have at most 998 bytes before its line
+  ending, or `Limits.MaxLineBytes` if smaller: a recognition bound of this
+  library, not an mbox length rule. The header block begins after the line and
+  is read as the header of an input that began there — a byte order mark at its
+  start included — with diagnostics, refusals and offsets moved by the line's
+  length; bodies and parts keep absolute offsets. The line lies outside the RFC
+  5322 header, so no header budget counts it; `MaxInputBytes` does, and at
+  most 1,000 bytes are kept. At most one `header.mbox_envelope` (Info) is
+  recorded, under every profile, Strict included; none when a stop of the parse
+  came first. The sender and timestamp are only shape-checked by the grammar:
+  they are unauthenticated, not interpreted as an address or a date, and no
+  writer writes the line. Whether a line is recognized, and the root header
+  framing after it, do not depend on read chunking; decoded bodies are outside
+  this item.
+  ([`mbox.go`](../mbox.go))
 - **Folded values** are unfolded and whitespace-collapsed for the parsed value;
   the original raw bytes are preserved separately. ([`textproto/header.go`](../textproto/header.go) · `trimAroundNewlines`)
 - **Empty and header-only input** is framed identically under every `Profile`
@@ -221,9 +251,17 @@ These are deliberate boundaries, each with a reason.
 - **The `charset` plugin is opt-in.** It pulls in `golang.org/x/text` charset
   tables (~1 MiB), so it is a side-effect import you add only if you need it.
   ([`charset/charset.go`](../charset/charset.go))
-- **No mbox / `From ` envelope handling.** emlkit parses a single message, not an
-  mbox archive; there is no special-casing of a leading `From ` line. Swallowing
-  such artifacts would break the verbatim round-trip. ([`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
+- **No mbox archive handling.** emlkit parses a single message, not an mbox
+  archive. Apart from the one opt-in leading envelope line above (`ROB-010-004`),
+  which is kept separately rather than swallowed, there is no special-casing of
+  `From ` lines: no splitting at later `From ` lines, no `>From` unescaping, no
+  `Content-Length` interpretation, no inferred message end, and a `From ` line
+  anywhere else — a second one, one inside the header, one in a part header or
+  a body — is read as it always was. `Read`, `ReadWithOptions`, `New`,
+  `textproto` and the `mail` constructors never recognize an envelope, and no
+  writer writes one; replaying the original input is not provided
+  (`ROB-020-007`, `ROB-110`). This is not a claim of parity with any mbox
+  reader. ([`mbox.go`](../mbox.go), [`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
 - **An `Entity` is consumed once.** The body is a stream; reading it (or calling
   `Walk`) exhausts the entity. There is no random-access / buffered message type.
   ([`entity.go`](../entity.go) · `Walk`)

@@ -1290,7 +1290,7 @@ empty permission-denial arrays.
 | ROB-010-001 | Done | Treat empty input and header-only input deterministically: an empty input, an empty line alone, and complete CRLF fields ended by `io.EOF` or by the empty line are framed identically under every profile and compatibility as a usable entity with exactly those fields and an empty body or the bytes after the empty line, the framing adding no error or diagnostic of its own while the fields' MIME metadata is interpreted as usual; documented and pinned, no parser change. See "ROB-010-001 — empty and header-only input" below. | All profiles and round-trip tests; see below. |
 | ROB-010-002 | Done | Handle CRLF, bare LF, bare CR, mixed endings, and a missing final newline in headers and multipart delimiters, preserving false-candidate body bytes and source errors within the budgets. Parse records original-byte locations; Strict refuses the affected entity or iterator locally. See "ROB-010-002 — line endings" below. | Independent chunk, source-error, budget, cancellation and profile matrices; bounded native fuzzing; full unit/race/386/build checks. |
 | ROB-010-003 | Done | Detect and preserve BOMs without letting them corrupt a field name: a UTF-8 mark at the start of a header block is consumed, kept by the Header and written back; a UTF-16 or UTF-32 mark leaves the block unread and the entity opaque, every byte its body, never transcoded and refused by the writers; `input.bom` under Parse, Strict refuses locally. See "ROB-010-003 — byte order marks" below. | UTF-8/16/32 BOM fixtures; root/part/textproto/legacy/mail/writer, chunk, budget, source-error, cancellation and profile matrices; bounded fuzz oracles. |
-| ROB-010-004 | Planned | Optionally recognize a leading mbox envelope line and preserve it separately. | Valid/invalid/mid-header `From ` fixtures. |
+| ROB-010-004 | Done | Optionally recognize a leading mbox envelope line and preserve it separately: `ParseOptions.RecognizeMboxEnvelope` (off by default) lets `Parse`/`ParseContext` keep one ctime-shaped `From_` line at offset 0 on the session (`ParseSession.MboxEnvelope`), the header read after it at moved positions, `header.mbox_envelope` Info under every profile; nothing else changes. See "ROB-010-004 — mbox envelope lines" below. | Valid/invalid/mid-header `From ` fixtures; grammar, line-ending, bound, look-ahead, root/profile/compatibility/delivery, suffix-equivalence, negative/option-off, BOM, part and root/shared budget, input budget, source-error, cancellation, no-progress, sink, immutability, writer and `mail` matrices; capped fuzz oracle. |
 | ROB-010-005 | Planned | Detect concatenated messages or trailing unassigned bytes in forensic mode. | Two-message and trailing-junk fixtures. |
 | ROB-010-006 | Done | Preserve bytes returned with EOF and partial bytes before injected I/O errors: under `Parse` the input's first error is final and reported where the parse reaches it, a body reports it however its decoders ended, an eager `CharsetReader` failing on it returns it with the entity; every entry point's header scanner keeps a block's first read failure and the fields read whole before it. See "ROB-010-006 — input errors" below. | Custom-reader tests at every cut, chunk and buffer size, sticky and resuming sources; see below. |
 
@@ -1896,6 +1896,193 @@ deadline service. Matrix/fuzz/platform peak memory was approximately
 454.2 MiB / 581.9 MiB / 1.2 GiB, with normal exits. No host OOM, Windows
 validation, cross-engine parity, UTF-16/32 transcoding or general raw replay
 is claimed by these checks.
+
+#### ROB-010-004 — mbox envelope lines (Done)
+
+Status: implemented by Claude for
+[issue #46](https://github.com/saeroun-ai/emlkit/issues/46) from a design
+Codex reviewed, then independently reviewed and verified by Codex. Claude
+ran no Go build, test, fuzz or benchmark; only `gofmt` was run. Primary
+sources: RFC 4155 (`/tmp/emlkit-rfc4155.txt`); MimeKit's pinned
+`ParserOptions`/`MimeParser` sources and Codex's notes
+(`/tmp/emlkit-mbox-reference-review.md`) were read as references only. Their
+broad prefix matching, escaped-line handling, scanning and archive mode are not
+emlkit policy, and no differential execution or parity is claimed.
+
+**Scope.** `ParseOptions.RecognizeMboxEnvelope`, false by default; with it
+false nothing new runs and no byte more is looked at. `Parse` and
+`ParseContext` only, at the root only: `Read`, `ReadWithOptions`, `New`,
+`textproto`, the `mail` constructors, multipart part headers and the bodies of
+embedded messages never recognize one. One line, at input offset 0. This is
+the parsing of one message, not of an mbox archive: no splitting, no `>From`
+unescaping, no `Content-Length`, no inferred message end, and a `From ` or
+`>From ` line anywhere else — a second envelope, one inside the header, one in a
+part header or any body — is framed exactly as before (a malformed header key,
+or content). `header.misplaced_mbox_envelope` stays reserved with no producer.
+
+**Grammar** (`mbox.go`, case-sensitive): `"From" SP sender 1*WSP weekday 1*WSP
+month 1*WSP day 1*WSP HH:MM:SS 1*WSP (year / zone 1*WSP year / year 1*WSP
+zone) [1*WSP "remote" 1*WSP "from" 1*WSP host] EOL`; sender and host are
+1*VCHAR, the sender not beginning with `:`; English three-letter weekday and
+month; day 1–31 as one or two digits; time 00–23, 00–59, 00–60; year four
+digits; zone 2–5 upper-case letters or `±HHMM` with hours 00–23 and minutes
+00–59, at most one, immediately before or after the year; WSP is SP or HTAB;
+no white space before the sender or after the last token; only visible ASCII,
+SP and HTAB before the line ending. Weekday and day are not checked against a
+calendar: this is syntax recognition, with no timestamp semantics. EOL is
+CRLF, LF or CR, the longest; a CR is decided by the byte after it, or by
+`io.EOF` itself, and a CR that any other failure follows is undecided. A line
+that io.EOF ends with no line ending is not an envelope. Prose such as "From
+the 10:30 meeting" is not recognized. RFC 4155 says separator formats vary;
+this grammar recognizes the ctime shape common writers produce (`-` and
+`MAILER-DAEMON` senders, repeated spaces, tabs, numeric zones as in common
+exports, `remote from`) and does not claim to be universal. Unsupported, among
+others: no timestamp, other date orders, two-digit years, fractional seconds,
+two zones, other zone spellings, trailing tokens or padding, 8-bit or control
+bytes, and any byte order mark before `From`.
+
+**Bound.** At most 998 bytes before the line ending (1,000 wire bytes with
+CRLF), or `Limits.MaxLineBytes` if smaller. This is an explicit local
+recognition bound, not an RFC 4155 or mbox length rule. The recognizer is a
+bounded scan, not an incremental grammar parser: it reads one byte past what
+it holds only while the bytes do not decide the line, stops early at a byte
+that cannot begin `From ` or cannot be in the line (controls, 8-bit) and once
+the bound is passed, checks the sender and timestamp grammar only when the
+line ending is found, and reads at most one byte past a CR — at most
+max(5, bound+2) bytes looked at, while the buffered reader below may already
+hold up to 4,096 bytes of the source. A
+candidate over the bound, or any line not recognized, is not consumed and
+goes to the existing header path: its bytes are never removed silently.
+
+**Result.** The line, line ending included, is copied once onto the session.
+`ParseSession.MboxEnvelope` returns an immutable `MboxEnvelope` with
+`Bytes()` (a fresh copy) and `Location()` `[0, n)`. It is nil-safe, takes the
+lock only briefly, may be called from a `DiagnosticSink`, and keeps the line
+whatever then happens to the header. It is stored on neither `Header` nor
+`Entity`, and there is no sender, address or date accessor: those bytes are
+shape-checked by the grammar only, unauthenticated, and never interpreted as an
+address or a date. The root header block begins at `n` and is read as the header
+of an input that began there, a BOM at its start included (`input.bom` at
+`[n, n+len)`; a UTF-16/32 mark there makes the entity opaque, body from `n`).
+Its diagnostics, refusals and `Location`s, its shared-budget and per-block
+budget refusals included, move by `n`. Body and part offsets stay absolute.
+The `textproto.HeaderLimitError` a refusal carries as its cause is the header
+reader's own value, unmodified, with offsets relative to the block. The
+envelope's own line ending is in no `LineEndings` and draws no line-ending
+note.
+
+**Budgets.** The line lies outside the RFC 5322 header block, so it is
+charged to no header field, byte, count or shared header budget. As input it
+counts towards `MaxInputBytes`. `MaxLineBytes` lowers the recognition bound.
+Retention is the one line, at most 1,000 bytes.
+
+**Diagnostics and profiles.** At most one `header.mbox_envelope`, `SeverityInfo`,
+nil path, at `[0, n)`, recorded before every diagnostic of the header, under
+every profile, Strict included, and every compatibility value, with no envelope
+bytes in its message. `MaxDiagnosticCount` may replace or omit it and
+`DiscardDeliveredDiagnostics` may leave it unretained, and a stop published
+before it was recorded leaves it unrecorded (below); the line is kept in each
+case.
+
+**Errors and stops.** Under `Parse` the input's first error is final, so an
+ordinary failure — including a source's own `bufio.ErrBufferFull`, a wrapped
+`io.EOF` and `io.ErrUnexpectedEOF` — before the line is decided leaves no
+envelope, and the header reader returns that identical error as before; the
+source is never read after it. After a decided line, the header and body report
+input errors where they always did. A stop (input budget, no progress,
+cancellation) that keeps a deciding byte from arriving invents no envelope. A
+stop published while bytes already admitted decided a whole envelope (a read
+that delivered them and more, or a cancellation seen by that read) keeps the
+line, records no diagnostic, and ends the parse with that stop and no entity.
+A sink that stops on `header.mbox_envelope` does the same, with the diagnostic
+recorded. Recognition, the kept line and the root header framing after it are
+chunk-invariant for normal input and for a source error at a fixed cut; that is
+not claimed for every input-budget or cancellation timing, since a large read
+can publish a stop before the prefix is processed. Nothing is claimed for
+decoded bodies: a known truncated base64 input already decodes differently by
+chunking with the option off (#34, #29, #12), outside this item.
+
+**Serialization.** No writer writes the line: `Entity.WriteTo`,
+`textproto.WriteHeader` and the writers write the message alone, and the
+header still round-trips byte for byte on the usual terms. Writer header
+ownership is unchanged; #60 is not touched. Raw replay is not provided
+(`ROB-020-007`, `ROB-110`).
+
+**API added.** `ParseOptions.RecognizeMboxEnvelope`, `type MboxEnvelope`
+(`Bytes`, `Location`), `ParseSession.MboxEnvelope`. Internally,
+`rootOriginAt`/`rootContextAt` take the header offset (`rootOrigin`/
+`rootContext` keep their behavior), and `rootHeaderError` takes it as well.
+
+**Tests added (not run by Claude).** `mbox_internal_test.go`: grammar table
+(accepted and refused forms per token); recognizer over three deliveries with
+line endings, bound 998/999, `MaxLineBytes`-style limits and no consumption;
+look-ahead byte counts; zero value and nil session. `framing_mbox_test.go`:
+root cases under every profile, compatibility and delivery, with exact
+envelope bytes, header/body offsets, diagnostics and Strict refusals,
+including BOM after the envelope and `From` lines in the body; the
+suffix-equivalence oracle (the parse equals the option-off parse of what
+follows the line, moved by its length); option off under `Parse`, `Read` and
+`ReadWithOptions`; negatives identical to option off (field-like lines, prose
+with a time, BOM before, 999 bytes, envelopes in a part header, in a
+message/rfc822 body and after a header line); second and mid-header
+envelopes; multipart part and shared-budget offsets; root per-block and
+shared budgets with cause offsets; a `MaxLineBytes` sweep; a `MaxInputBytes`
+sweep across deliveries; `MaxDiagnosticCount` and discard; a sink reading and
+stopping; a source-error matrix at every cut (sticky/resuming, with/after data,
+three chunkings, three failures, and `bufio.ErrBufferFull` in a subprocess
+with a deadline); CR at `io.EOF` versus other failures; cancellation at every
+read through the header; no progress; immutability; concurrent reads; writers.
+`mail/reader_mbox_test.go`: `mail.NewReader` over such a `Parse`.
+`FuzzParse_mboxEnvelope` (root framing only, nothing decoded and no part
+iterated): input capped at 4 KiB; the root's error, diagnostics, raw header
+fields, BOM, line endings, header/body offsets and undecoded original body
+(exactly the input from the body offset, capped at 8 KiB with a visible
+failure) are chunk-invariant; not recognized implies the root equals option
+off; recognized implies a grammatical prefix ending with its one line ending
+and a root equal to the option-off root of what follows it, moved by its
+length. Seeds include the known truncated base64 input with and without an
+envelope. `FuzzMboxEnvelopeLen` (recognizer alone): exact length against an
+independent regular-expression reference for bounds 1–56 and 998, nothing
+consumed, at most max(5, bound+2) bytes read, and exactly the line (plus one
+byte after a bare CR that is not last) for a recognized one. The finite
+traversal helper of the other tests fails visibly at 64 parts, depth 16 or
+64 KiB of one body instead of truncating.
+
+**Independent verification completed.** Option-off observations matched all
+360 baseline records. Four finite public-API matrices passed 12,579 cases and
+74,799 assertions: grammar and preservation; absolute offsets and budgets;
+every-cut I/O failures and cancellation; no-progress, scope and sink behavior.
+All six packages' unit tests and fourteen prior BOM/line-ending QA steps passed
+(`/tmp/emlkit-mbox-initial-verification.json` and `.out`). Review required
+visible helper caps, a root/raw-body fuzz oracle instead of claiming parity
+for known damaged-base64 decoding, an asserted sink-stop position, and precise
+look-ahead/retention/grammar-stage documentation. Those corrections are in the
+final version; no parser defect was found in the independent matrices.
+
+Two bounded 45-second fuzz runs passed: `FuzzParse_mboxEnvelope` 1,287,854
+executions and `FuzzMboxEnvelopeLen` 1,934,454, 3,222,308 total
+(`/tmp/emlkit-mbox-final-fuzz.json` and `.out`). Each uses finite input/work
+caps and two workers. No other engine's behavior or broad decoder parity is
+claimed; the existing chunk-sensitive damaged-base64 case remains #34.
+
+The first final race run exposed the existing shared-header allocation test
+instability, also reproduced on the pre-mbox baseline. It was registered
+before changes and independently fixed under #61 / ROB-130-010. The final
+13-step sequential QA then passed fixed 100-repeat normal/race allocation
+checks, all six packages' full unit/race/386 suites, build, filtered vet,
+format/diff and earlier empty/header-only/exceptional-input QA
+(`/tmp/emlkit-totalheader-mbox-final-qa.json` and `.out`). Mbox file hashes
+remained identical throughout the #61 changes, so the successful fuzz and
+independent matrices still cover the final mbox code. Fresh plain vet retains
+only the established 13 unkeyed-literal and one WriteTo-signature warnings.
+
+Every implementation delegation and Go execution ran one at a time with
+RAM 1536 MiB, swap 0, CPU quota 2, tasks 128 and a deadline. The final service
+finished normally with a reported 1.2 GiB peak. All three mbox Claude result
+files report no permission denials. This completes only ROB-010-004; trailing
+input (#19), general preamble/epilogue preservation (#30), raw replay (#41),
+writer ownership (#60) and mbox archive parsing are not completed here.
+
 
 ### ROB-020 — Raw header framing and preservation
 
@@ -2968,12 +3155,13 @@ regression measurements are needed for the following implementation reviews.
 This changes the test measurement only; it does not reopen the fixed comment
 scanner, complete CI (#14), or complete the performance audit (#18).
 
-**Reviewed validation dependency — `ROB-130-010`.** ROB-010-004 remains in
+**Reviewed validation dependency — `ROB-130-010`.** ROB-010-004 stayed in
 Review while the pre-existing shared-header allocation test's race instability
-is addressed under #61. Codex reproduced it on both the working tree and the
-pre-mbox `2defe99` baseline. Complete this independent test-measurement item,
-then revalidate ROB-010-004 and resume the framing order. This does not alter
-parser budgets or complete CI/performance-audit items #14/#18.
+was addressed under #61. Codex reproduced it on both the working tree and the
+pre-mbox `2defe99` baseline. The independent test-measurement fix and final
+ROB-010-004 verification are now complete; the next framing item is
+ROB-010-005. This did not alter parser budgets or complete CI/performance-audit
+items #14/#18.
 
 **Exception — `ROB-100-006`.** It was taken ahead of `ROB-010` through `ROB-090`
 at the user's request, as an independent compatibility fix

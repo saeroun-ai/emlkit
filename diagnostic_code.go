@@ -90,8 +90,19 @@ const (
 	// ended, with io.EOF, before any line ending; recorded for each such block.
 	CodeHeaderTruncatedLine Code = "header.truncated_line"
 
-	CodeHeaderDuplicateSingleton    Code = "header.duplicate_singleton"
-	CodeHeaderMboxEnvelope          Code = "header.mbox_envelope"
+	CodeHeaderDuplicateSingleton Code = "header.duplicate_singleton"
+
+	// CodeHeaderMboxEnvelope reports the mbox "From_" envelope line a parse
+	// asked to recognize one (ParseOptions.RecognizeMboxEnvelope) found at the
+	// start of its input and kept apart from the message; SeverityInfo under
+	// every profile, at the line's bytes, recorded at most once per parse
+	// (ROB-010-004). Its Message carries none of the line's bytes;
+	// ParseSession.MboxEnvelope returns them.
+	CodeHeaderMboxEnvelope Code = "header.mbox_envelope"
+
+	// CodeHeaderMisplacedMboxEnvelope is reserved. Nothing records it: a
+	// "From " line anywhere but at the start of the input is read as it
+	// always was.
 	CodeHeaderMisplacedMboxEnvelope Code = "header.misplaced_mbox_envelope"
 
 	// CodeHeaderDecoderNoProgress reports that a CharsetReader's reader of an

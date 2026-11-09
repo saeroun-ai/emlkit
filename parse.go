@@ -64,6 +64,22 @@ type ParseOptions struct {
 	// ReadOptions carries the existing read limits and decoding options,
 	// unchanged and with the same defaults as ReadWithOptions.
 	ReadOptions ReadOptions
+
+	// RecognizeMboxEnvelope asks the parse to recognize one mbox "From_"
+	// envelope line — "From ", a sender and a ctime-shaped timestamp, as a
+	// message saved from an mbox file may still begin with — at the very first
+	// byte of the input, and to keep it apart from the message:
+	// ParseSession.MboxEnvelope returns it, the message's header block begins
+	// after it, the session records at most one header.mbox_envelope
+	// diagnostic of SeverityInfo for it under every Profile — none when a stop
+	// of the parse came first — and no writer writes it. Only
+	// one such line, at offset 0 and nowhere else, is recognized; this does not
+	// read mbox archives, and a "From " or ">From " line anywhere else is read
+	// as before. A line that is not recognized, and every input with this
+	// false, which is the default, is framed exactly as it always was. Read,
+	// ReadWithOptions and the header of a part never recognize one. See mbox.go
+	// for the grammar recognized, its bound, and what the line costs.
+	RecognizeMboxEnvelope bool
 }
 
 // Parse reads a message from r and returns the session collecting what the
@@ -103,8 +119,9 @@ type ParseOptions struct {
 //     some producer has been implemented to record, which today is the two
 //     decoding warnings below, the fifteen enforced resource budgets, the
 //     no-progress rule, the repair of a valid media type or disposition
-//     with malformed parameters, and the header line-ending and byte order
-//     mark notes described below,
+//     with malformed parameters, the header line-ending and byte order
+//     mark notes described below, and the mbox envelope line a caller asked
+//     to have recognized,
 //     up to Limits.MaxDiagnosticCount, whose last slot holds one terminal
 //     limit.diagnostic_count diagnostic in place of the rest. A framing
 //     failure that nothing diagnoses yet is carried by err alone and leaves the
@@ -245,6 +262,20 @@ type ParseOptions struct {
 // SeverityUnsupported for UTF-16 or UTF-32, with a usable entity and a nil err
 // — and ProfileStrict refuses that entity on the same terms as a bare CR
 // above.
+//
+// With ParseOptions.RecognizeMboxEnvelope, an input that begins with an mbox
+// "From_" envelope line (ROB-010-004; see mbox.go) has that line kept apart
+// from the message: ParseSession.MboxEnvelope returns its bytes, the message's
+// header block begins after it and is read as above — a byte order mark
+// included — at positions moved by its length, and at most one
+// header.mbox_envelope diagnostic of SeverityInfo is recorded before the
+// header's, under every Profile; a stop of the parse published first leaves it
+// unrecorded. The line is kept even when the header after it cannot be read. It
+// counts towards MaxInputBytes and towards none of the header budgets, and no
+// writer writes it. Only one line, at offset 0, in the grammar mbox.go states,
+// is recognized; any other input, and every input without the option, is
+// framed as before, and no "From " or ">From " line elsewhere is removed or
+// changed.
 //
 // Multipart delimiter lines are framed on the same three line endings, before
 // and after each delimiter, in any mix (see textproto.MultipartReader). A

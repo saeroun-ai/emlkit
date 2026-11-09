@@ -164,6 +164,12 @@ type ParseSession struct {
 	// Guarded by mu.
 	lineNotes lineNote
 
+	// mbox is the mbox envelope line this parse recognized at the start of
+	// its input, its line ending included, or nil. It is set at most once,
+	// before the message's header block is read, and never modified; see
+	// mbox.go. Guarded by mu.
+	mbox []byte
+
 	// cancelCtx and cancelDone are the context of a parse started by
 	// ParseContext and the channel its Done method returned, or nil for a parse
 	// that cannot be cancelled. They are written once, by setContext, before the

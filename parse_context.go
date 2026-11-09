@@ -49,7 +49,14 @@ type parseContext struct {
 // the first byte of an input, whose body begins at bodyOffset, and whose
 // diagnostics belong to session. session may be nil.
 func rootContext(session *ParseSession, bodyOffset int64) parseContext {
-	return parseContext{session: session, origin: rootOrigin(bodyOffset)}
+	return rootContextAt(session, 0, bodyOffset)
+}
+
+// rootContextAt is rootContext for a message whose header block begins
+// headerOffset bytes into the input, after an mbox envelope line the parse
+// kept apart; see rootOriginAt.
+func rootContextAt(session *ParseSession, headerOffset, bodyOffset int64) parseContext {
+	return parseContext{session: session, origin: rootOriginAt(headerOffset, bodyOffset)}
 }
 
 // child returns the context of the index-th part of the entity this context

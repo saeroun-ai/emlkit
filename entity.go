@@ -598,6 +598,17 @@ func readWithOptions(r io.Reader, opts *ReadOptions, session *ParseSession) (*En
 	lr := &limitedReader{R: cr, N: math.MaxInt64}
 	br := bufio.NewReader(lr)
 
+	// A parse asked to recognize an mbox envelope line looks for one at the
+	// first byte of the input, before the header block, and keeps it apart:
+	// the block then begins after it. Every other parse, and one whose input
+	// does not begin with such a line, reads the block from where it stands,
+	// with nothing consumed. A stop met with a line recognized is returned
+	// here, the line kept. See mbox.go.
+	headerOffset, err := session.readMboxEnvelope(br)
+	if err != nil {
+		return nil, err
+	}
+
 	// The message's own header block is held to the same budget as every other
 	// entity's when there is a parse to hold it to one, and to the one it has
 	// always been held to otherwise. The two differ in where the budget sits,
@@ -639,9 +650,9 @@ func readWithOptions(r io.Reader, opts *ReadOptions, session *ParseSession) (*En
 		// The parse's shared header budget ran out on this block; its failure
 		// is the whole parse's. See limit_header_total.go.
 		if ref, ok := session.headerTotalRefusal(err); ok {
-			return nil, session.headerTotalFailure(rootContext(session, 0), ref)
+			return nil, session.headerTotalFailure(rootContextAt(session, headerOffset, headerOffset), ref)
 		}
-		return nil, rootHeaderError(err, session)
+		return nil, rootHeaderError(err, session, headerOffset)
 	}
 
 	lr.N = math.MaxInt64
@@ -652,7 +663,7 @@ func readWithOptions(r io.Reader, opts *ReadOptions, session *ParseSession) (*En
 	// on construction could not move it.
 	bodyOffset := cr.n - int64(br.Buffered())
 
-	return newWithOptions(Header{h}, br, opts.SkipTextAttachmentDecoding, rootContext(session, bodyOffset))
+	return newWithOptions(Header{h}, br, opts.SkipTextAttachmentDecoding, rootContextAt(session, headerOffset, bodyOffset))
 }
 
 // Read reads a message from r. The message's encoding and charset are
