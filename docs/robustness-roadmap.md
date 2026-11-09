@@ -2675,6 +2675,7 @@ spinning; cycles that never end run only in the subprocess probes.
 | ROB-130-007 | Planned | Add long-running randomized soak tests with leak and memory ceilings. | Repeatable seeded job. |
 | ROB-130-008 | Planned | Run `go test`, race tests, fuzz smoke tests, formatting, vet/static analysis, and benchmarks in CI. | Required green checks. |
 | ROB-130-009 | Done | Stabilize comment-parser cumulative-allocation regression checks without weakening their ability to detect allocation growth ([issue #59](https://github.com/saeroun-ai/emlkit/issues/59)). | Bounded repeated checks, finite deliberate-allocation positive controls, original accessor results and scanner no-allocation assertions, full/race/386 verification; no threshold-only relaxation or retry-until-pass. |
+| ROB-130-010 | Planned | Stabilize the shared-header accepted-path allocation regression check under race without hiding per-header allocation growth; see issue #61 and the section below. | Finite baseline/current reproduction, checked parse results, bounded positive allocation controls, repeatability and full unit/race/386/build review. |
 
 `ROB-130-009` changes test measurement only, in `mail/header_comment_test.go`.
 `allocBytesPerOp` replaces the single-call `TotalAlloc` reading with one
@@ -2734,6 +2735,33 @@ race, and the whole job exited successfully. All jobs ran sequentially. Both
 Claude calls had empty permission-denial arrays. This is empirical stability
 under the tested conditions, not proof that process-wide measurement noise or
 one-time-cost dilution cannot occur.
+
+#### ROB-130-010 — shared-header allocation measurement (Planned)
+
+Registered before implementation as [issue #61](https://github.com/saeroun-ai/emlkit/issues/61).
+During ROB-010-004 final QA, the existing
+`TestParse_totalHeaders_acceptedPathAllocations` failed under race: 815
+allocations with the shared budgets, 812 without, against an allowed difference
+of two. A finite 100-run comparison failed 19 times on the mbox working tree
+and 23 times on an isolated pre-mbox `2defe99` archive. The same baseline's full
+race suite failed this test too (814 versus 811). This confirms an existing
+unstable measurement, not a demonstrated mbox parser regression.
+
+The test compares two `testing.AllocsPerRun(20)` measurements of a 50-part
+parse. Its traversal closes parts through `io.Copy(io.Discard, part)`. The
+installed Go implementation uses a `sync.Pool` there, whose race-mode Put may
+randomly discard entries; this is a source-level lead to verify, not a measured
+attribution of all extra allocations. Unlike ROB-130-009 / #59, this concerns
+the shared-header accepted path, not mail comment TotalAlloc measurements.
+
+Keep the regression's purpose: detect added allocation per header block,
+verify the actual parse and traversal results, and validate the measurement
+with a finite positive control. Do not merely increase the threshold, ignore
+a failure or retry until it passes. No product behavior changes are required
+by this item. Use the host-safe runner, finite work/byte caps and one job at a
+time. Evidence: `/tmp/emlkit-mbox-allocation-investigation.json` and `.out`,
+current/baseline repeat and full-race logs; the original failure is retained in
+`/tmp/emlkit-mbox-final-platform-race.out`.
 
 ### ROB-140 — Optional interoperability extensions
 
@@ -2796,6 +2824,13 @@ in [issue #59](https://github.com/saeroun-ai/emlkit/issues/59). Reliable
 regression measurements are needed for the following implementation reviews.
 This changes the test measurement only; it does not reopen the fixed comment
 scanner, complete CI (#14), or complete the performance audit (#18).
+
+**Reviewed validation dependency — `ROB-130-010`.** ROB-010-004 remains in
+Review while the pre-existing shared-header allocation test's race instability
+is addressed under #61. Codex reproduced it on both the working tree and the
+pre-mbox `2defe99` baseline. Complete this independent test-measurement item,
+then revalidate ROB-010-004 and resume the framing order. This does not alter
+parser budgets or complete CI/performance-audit items #14/#18.
 
 **Exception — `ROB-100-006`.** It was taken ahead of `ROB-010` through `ROB-090`
 at the user's request, as an independent compatibility fix
