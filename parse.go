@@ -98,8 +98,9 @@ type ParseOptions struct {
 //   - The session is never nil, including when the header could not be read at
 //     all, so there is always somewhere to look. What it holds, though, is what
 //     some producer has been implemented to record, which today is the two
-//     decoding warnings below, the fifteen enforced resource budgets, and the
-//     repair of a valid media type or disposition with malformed parameters,
+//     decoding warnings below, the fifteen enforced resource budgets, the
+//     no-progress rule, and the repair of a valid media type or disposition
+//     with malformed parameters,
 //     up to Limits.MaxDiagnosticCount, whose last slot holds one terminal
 //     limit.diagnostic_count diagnostic in place of the rest. A framing
 //     failure that nothing diagnoses yet is carried by err alone and leaves the
@@ -139,6 +140,18 @@ type ParseOptions struct {
 // session's FatalError, returned by Parse itself when the message header did not
 // end within the budget, and otherwise by the read that reached it and every
 // later scope. Everything already returned stays valid. See Limits.MaxInputBytes.
+//
+// A reader that returns no bytes and no error is allowed 99 such reads in a
+// row; the 100th ends the parse on the same terms as MaxInputBytes, with one
+// input.no_progress diagnostic at the offset the input stopped at and a
+// FatalError that errors.Is matches to io.ErrNoProgress. A byte resets the
+// count, and an empty request never reaches r. The same rule ends one body
+// whose decoders — a CharsetReader's reader — stall without taking input
+// (body.decoder_no_progress, while its siblings stay reachable), and keeps the
+// raw value of a Content-Type or Content-Disposition parameter whose
+// encoded-word decoder stalls (header.decoder_no_progress). Nothing turns it
+// off, and a reader blocked or looping inside one call is not interrupted.
+// Read and ReadWithOptions do not apply it. See progress.go.
 //
 // A header block that exceeds Limits.MaxHeaderBytes, MaxHeaderFieldBytes,
 // MaxHeaderCount or MaxLineBytes is refused, and refused wherever it is found:

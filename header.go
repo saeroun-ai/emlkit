@@ -22,6 +22,14 @@ func parseHeaderWithParams(s string) (f string, params map[string]string, err er
 // mistakes a reading the cancellation reached for a whole one. A single call of
 // mime.ParseMediaType or of a CharsetReader is not interrupted.
 func parseHeaderWithParamsPoll(s string, poll func() bool) (f string, params map[string]string, cancelled bool, err error) {
+	return parseHeaderWithParamsDecoder(s, poll, nil)
+}
+
+// parseHeaderWithParamsDecoder is parseHeaderWithParamsPoll with the encoded
+// words of parameter values decoded by dec, which guards the CharsetReader's
+// readers for the parse engine (see progress.go); a nil dec decodes as
+// decodeHeader does.
+func parseHeaderWithParamsDecoder(s string, poll func() bool, dec *metadataDecoder) (f string, params map[string]string, cancelled bool, err error) {
 	if poll != nil && poll() {
 		return "", nil, true, nil
 	}
@@ -36,7 +44,7 @@ func parseHeaderWithParamsPoll(s string, poll func() bool) (f string, params map
 		if poll != nil && poll() {
 			return "", nil, true, nil
 		}
-		params[k], _ = decodeHeader(v)
+		params[k] = dec.decode(v)
 	}
 	if poll != nil && poll() {
 		// The last decoding may have been where it was cancelled.

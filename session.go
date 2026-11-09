@@ -145,10 +145,11 @@ type ParseSession struct {
 	// returned, while this one does. See limit_body.go.
 	decodedStop FatalError
 
-	// inputStop is the exact value the input limiter fails every read with
-	// once Limits.MaxInputBytes was exceeded — its own stop, or a stop
-	// published before it that it adopted — and nil before that. A leaf body
-	// recognizes the input's failure by this identity alone; see rawBody.note.
+	// inputStop is the exact value the input fails every read with once
+	// Limits.MaxInputBytes was exceeded or the input stalled (progress.go) —
+	// that stop, or a stop published before it that was adopted — and nil
+	// before that. It is set once. A leaf body recognizes the input's failure
+	// by this identity alone; see rawBody.note.
 	inputStop error
 
 	// headerTotal is the one budget every header block of this parse spends,

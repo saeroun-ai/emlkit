@@ -245,16 +245,21 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 				}
 			}
 			if fatal == nil && local == nil && !skip {
-				converted, charsetErr := charsetReader(charset, body)
+				// The stage's input is counted for the body guard, which must see
+				// a CharsetReader's reader take bytes a transfer decoder already
+				// holds; see bodyGuard.progress.
+				converted, charsetErr := charsetReader(charset, leaf.countCharsetInput(body))
 				// A CharsetReader may read its input while it builds a decoder,
-				// and a cancellation it ran into — or that came while it ran —
-				// makes it fail for a reason that is not the charset's. So a
-				// cancelled parse does not record its failure as an unknown
-				// charset: the entity is returned with the parse's stop instead,
-				// its body the bytes before this stage. A decoder it did build is
-				// kept, since nothing it already read can be given back; every
-				// read of the body reports the stop anyway. See cancel.go.
-				if stop := ctx.session.cancelErr(); stop != nil {
+				// and a stop of the parse it ran into — a cancellation, or the
+				// input stalling or overrunning its budget under it — makes it
+				// fail for a reason that is not the charset's. So a stopped parse
+				// does not record its failure as an unknown charset: the entity
+				// is returned with the parse's stop instead, its body the bytes
+				// before this stage. A decoder it did build is kept, since
+				// nothing it already read can be given back. Nothing was
+				// published before the hook ran, so a stop found here is one it
+				// ran into. See cancel.go and progress.go.
+				if stop := ctx.fatalErr(); stop != nil {
 					fatal = stop
 					if charsetErr == nil {
 						body = converted
@@ -501,7 +506,12 @@ func readWithOptions(r io.Reader, opts *ReadOptions, session *ParseSession) (*En
 	// done the input is never read again, and so that a read the gate cut short
 	// still counts every byte it delivered. A parse that cannot be cancelled
 	// reads r as it is; see cancel.go.
-	cr := &countingReader{r: session.limitInput(session.gateReader(r))}
+	//
+	// Under the gate, directly over r, a parse counts the reads of r that make
+	// no progress, so that the count sees every read whatever buffers, decoders
+	// or copies sit above. Read and ReadWithOptions read r as it is; see
+	// progress.go.
+	cr := &countingReader{r: session.limitInput(session.gateReader(session.watchProgress(r)))}
 	lr := &limitedReader{R: cr, N: math.MaxInt64}
 	br := bufio.NewReader(lr)
 

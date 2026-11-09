@@ -301,7 +301,8 @@ func (e *Entity) EffectiveContentDisposition() (disp string, params map[string]s
 // to, or nil while that parse may continue. It is the identical value Parse,
 // MultipartReader.NextPart and Entity.Walk report for that stop: a FatalError
 // for a DiagnosticSink that asked the parse to stop, or for a budget whose scope
-// is the whole parse, such as Limits.MaxPartCount or Limits.MaxInputBytes.
+// is the whole parse, such as Limits.MaxPartCount or Limits.MaxInputBytes, or
+// for an input that stalled (input.no_progress; see Parse).
 //
 // For a parse started by ParseContext, it also reports the cancellation of the
 // parse's context once that context is done: the cancellation is then published

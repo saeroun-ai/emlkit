@@ -316,7 +316,9 @@ These are deliberate boundaries, each with a reason.
   `limit.input_bytes` diagnostic at offset `N`, with the message's nil path
   because the source cannot know which entity it was feeding, and publishes the
   session's stop; the source is never read again. An `io.EOF` or I/O error with
-  no byte past the budget, and a `(0, nil)` read, are passed through unchanged.
+  no byte past the budget, and a `(0, nil)` read, are passed through unchanged;
+  100 consecutive `(0, nil)` reads are judged below the limiter as
+  `input.no_progress` (`ROB-001-007`, see `progress.go`).
   The budget counts raw bytes as they are read, not as they are interpreted:
   body bytes buffered ahead while the header was read count, and fetching up to
   exactly `N` reads no proof byte; bytes never read from the input — an unread

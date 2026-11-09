@@ -117,6 +117,15 @@ interrupts a blocked `Read`, a `CharsetReader` or a sink, never closes `r` and
 starts no goroutine. Close a source you own, for example from your own
 `context.AfterFunc`, to make a blocked read return.
 
+Under `Parse` and `ParseContext`, a reader that keeps returning `(0, nil)` is
+given 99 such reads in a row; the 100th is a stall. A stalled input ends the
+parse with one `input.no_progress` diagnostic and a `FatalError` matching
+`io.ErrNoProgress`; a `CharsetReader` reader that stalls a body without taking
+input ends that body alone (`body.decoder_no_progress`), and one that stalls
+an encoded-word parameter keeps the raw value (`header.decoder_no_progress`).
+`Read`, `ReadWithOptions` and the `Header` accessors are unchanged, and a
+reader that blocks or loops inside one call is not interrupted.
+
 Errors and diagnostics answer different questions, so read both: an error says
 whether a scope could continue, the session says what was observed. `Parse`
 enforces **fifteen** budgets today — `MaxInputBytes`, `MaxHeaderBytes`,

@@ -72,6 +72,23 @@ const (
 	CodeHeaderDuplicateSingleton      Code = "header.duplicate_singleton"
 	CodeHeaderMboxEnvelope            Code = "header.mbox_envelope"
 	CodeHeaderMisplacedMboxEnvelope   Code = "header.misplaced_mbox_envelope"
+
+	// CodeHeaderDecoderNoProgress reports that a CharsetReader's reader of an
+	// encoded word in a Content-Type or Content-Disposition parameter the
+	// parse engine interpreted returned no bytes and no error on 100
+	// consecutive reads without taking input; that value was kept raw, the
+	// field's other values were decoded, and the field records one such
+	// diagnostic however many of its values stalled.
+	CodeHeaderDecoderNoProgress Code = "header.decoder_no_progress"
+)
+
+// Body decoding codes.
+const (
+	// CodeBodyDecoderNoProgress reports that the decoders of one leaf body
+	// returned no bytes and no error on 100 consecutive reads during which no
+	// stage took input — neither a wire byte of the body nor a byte of the
+	// charset stage's input; that body was ended, and nothing wider.
+	CodeBodyDecoderNoProgress Code = "body.decoder_no_progress"
 )
 
 // MIME media type, disposition and parameter codes.

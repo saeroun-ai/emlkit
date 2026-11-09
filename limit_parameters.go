@@ -495,6 +495,13 @@ func (c parseContext) interpretDisposition(raw string) fieldReading {
 // nothing else: no value, no parameters, nothing owed. The caller turns that
 // into the parse's stop where it holds no lock; the poll itself calls no method
 // of the context, so this may run under an entity's lock. See cancel.go.
+//
+// The encoded words of parameter values are decoded through a metadataDecoder
+// that holds the CharsetReader's readers to the no-progress rule. A value whose
+// reader stalled keeps its raw text while the field's other values decode as
+// usual, and a field with any such value is owed one header.decoder_no_progress
+// diagnostic after everything else it is owed; a cancelled reading owes
+// nothing. See progress.go.
 func (c parseContext) interpretParameterized(field, raw string) fieldReading {
 	limits, ok := c.limits()
 	if !ok {
@@ -503,6 +510,17 @@ func (c parseContext) interpretParameterized(field, raw string) fieldReading {
 		return fieldReading{value: f, params: params, err: err}
 	}
 	poll := c.cancelPoll()
+	dec := &metadataDecoder{poll: poll}
+	r := c.interpretBounded(field, raw, limits, poll, dec)
+	if len(dec.stalled) > 0 && !r.cancelled {
+		r.owed = append(r.owed, c.completeHeader(metadataNoProgressDiagnostic(field)))
+	}
+	return r
+}
+
+// interpretBounded is interpretParameterized for a parse, with its limits, its
+// cancellation poll and the decoder of the field's encoded words.
+func (c parseContext) interpretBounded(field, raw string, limits Limits, poll func() bool, dec *metadataDecoder) fieldReading {
 	if poll != nil && poll() {
 		return fieldReading{cancelled: true}
 	}
@@ -519,7 +537,7 @@ func (c parseContext) interpretParameterized(field, raw string) fieldReading {
 		// Nothing to bound, so nothing is scanned unless the field turns out to
 		// need repair: a scan that can refuse nothing would only walk the field
 		// to reach the same answer.
-		if f, params, cancelled, err = parseHeaderWithParamsPoll(raw, poll); cancelled {
+		if f, params, cancelled, err = parseHeaderWithParamsDecoder(raw, poll, dec); cancelled {
 			return fieldReading{cancelled: true}
 		} else if err == nil {
 			return fieldReading{value: f, params: params}
@@ -533,7 +551,7 @@ func (c parseContext) interpretParameterized(field, raw string) fieldReading {
 	head, occurrences, refusal := scan.head, scan.occurrences, scan.refusal
 	if refusal == nil {
 		if budgeted {
-			if f, params, cancelled, err = parseHeaderWithParamsPoll(raw, poll); cancelled {
+			if f, params, cancelled, err = parseHeaderWithParamsDecoder(raw, poll, dec); cancelled {
 				return fieldReading{cancelled: true}
 			}
 		}
@@ -547,14 +565,14 @@ func (c parseContext) interpretParameterized(field, raw string) fieldReading {
 		// The retained prefix is rebuilt without empty items, so a stray one
 		// before the cut would vanish from it unreported; such a field is read
 		// by the repair instead, which reports it.
-		if f, params, cancelled, err = parseHeaderWithParamsPoll(retainedParameters(raw, head, occurrences), poll); cancelled {
+		if f, params, cancelled, err = parseHeaderWithParamsDecoder(retainedParameters(raw, head, occurrences), poll, dec); cancelled {
 			return fieldReading{cancelled: true}
 		} else if err == nil && scan.strayEmpty == 0 {
 			return fieldReading{value: f, params: params, owed: owed}
 		}
 	}
 
-	repaired, ok := c.repairParameterized(field, raw, scan)
+	repaired, ok := c.repairParameterized(field, raw, scan, dec)
 	if repaired.cancelled {
 		return fieldReading{cancelled: true}
 	}

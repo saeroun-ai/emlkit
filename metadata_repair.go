@@ -157,7 +157,9 @@ func fieldInvalidCode(field string) Code {
 // — malformed and empty items, then conflicts — and owed to the session. Under
 // ProfileStrict the returned value is empty, the parameters nil, and the error
 // an entity-scoped FatalError carrying the first of them.
-func (c parseContext) repairParameterized(field, raw string, scan parameterScan) (fieldReading, bool) {
+//
+// dec decodes the encoded words of the items, as for the whole-field parse.
+func (c parseContext) repairParameterized(field, raw string, scan parameterScan, dec *metadataDecoder) (fieldReading, bool) {
 	occurrences, truncated, empty := scan.occurrences, scan.refusal != nil, scan.strayEmpty
 	base, valid := validBase(field, raw[:scan.head])
 	if !valid {
@@ -197,7 +199,7 @@ func (c parseContext) repairParameterized(field, raw string, scan parameterScan)
 			return fieldReading{cancelled: true}, true
 		}
 		item := raw[occ.start:occ.end]
-		key, val, wellFormed, decoded := parseParameterItem(item)
+		key, val, wellFormed, decoded := parseParameterItem(item, dec)
 		switch {
 		case !wellFormed:
 			malformed++
@@ -338,9 +340,9 @@ func validBase(field, raw string) (string, bool) {
 // lower-case name and decoded text. A well-formed item can produce none: an
 // RFC 2231 continuation segment other than the first is only a piece of a
 // value, and an extended value whose charset has no decoder is dropped by the
-// whole-field parser too.
-func parseParameterItem(item string) (key, value string, wellFormed, decoded bool) {
-	_, params, err := parseHeaderWithParams("a/b;" + item)
+// whole-field parser too. dec decodes the item's encoded words.
+func parseParameterItem(item string, dec *metadataDecoder) (key, value string, wellFormed, decoded bool) {
+	_, params, _, err := parseHeaderWithParamsDecoder("a/b;"+item, nil, dec)
 	if err != nil {
 		return "", "", false, false
 	}

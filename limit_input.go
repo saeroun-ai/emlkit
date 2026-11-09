@@ -29,8 +29,9 @@ import (
 // handed to a parser, a decoder or a caller. If none arrives, what the source
 // said is passed on unchanged, so an io.EOF stays the end of a message of
 // exactly N bytes, an I/O error stays that I/O error, and a read that returned
-// (0, nil) returns (0, nil) rather than being retried here. Deciding what
-// repeated (0, nil) reads mean is ROB-001-007's.
+// (0, nil) returns (0, nil) rather than being retried here. Repeated (0, nil)
+// reads are judged under this limiter, at the source, proof reads included;
+// see progress.go.
 //
 // Reads before the budget is reached are only shortened to what is left of it,
 // so nothing is read past N to learn that N was reached, and the bytes before N
@@ -181,7 +182,9 @@ func (l *inputLimiter) Read(p []byte) (int, error) {
 	// recognize it by identity when a decoder ends with something else; see
 	// rawBody.note.
 	l.session.mu.Lock()
-	l.session.inputStop = l.failed
+	if l.session.inputStop == nil {
+		l.session.inputStop = l.failed
+	}
 	l.session.mu.Unlock()
 	return 0, l.failed
 }

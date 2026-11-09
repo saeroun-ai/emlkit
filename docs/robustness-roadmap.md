@@ -151,7 +151,8 @@ at the start of the roadmap, not claims that every existing path is defective:
   count, decoded expansion, and diagnostics (`ROB-001`).
 - Cancellation and repeated `(0, nil)` reader progress handling are not yet a
   single parser-wide contract (`ROB-001-006`, `ROB-001-007`). `ROB-001-006`
-  adds `ParseContext`; no-progress detection remains `ROB-001-007`.
+  adds `ParseContext`; `ROB-001-007` adds the no-progress rule
+  under `Parse`, below.
 - There is no checked-in native fuzz/differential corpus proving behavior
   against Angus and other references (`ROB-130`).
 
@@ -316,6 +317,7 @@ specific codes, but must not reuse an existing code for another meaning.
 - `header.duplicate_singleton`
 - `header.mbox_envelope`
 - `header.misplaced_mbox_envelope`
+- `header.decoder_no_progress` (added by `ROB-001-007`)
 
 #### MIME metadata and parameters
 
@@ -433,6 +435,10 @@ specific codes, but must not reuse an existing code for another meaning.
 - `signed.structure_invalid`
 - `encrypted.structure_invalid`
 - `feature.unsupported_media_type`
+
+#### Body decoding
+
+- `body.decoder_no_progress` (added by `ROB-001-007`)
 
 ### 5.5 Resource budgets and defaults
 
@@ -649,8 +655,8 @@ counted twice. A budget `N` admits `N` bytes; reaching `N` is neither an
 overflow nor an end of input. Once `N` bytes are admitted the next read asks the
 source for exactly one byte: a byte — whatever error accompanies it — proves the
 overflow and is never handed on; no byte passes the source's `io.EOF`, error or
-`(0, nil)` through unchanged, and nothing is retried there (`ROB-001-007` owns
-no-progress). Reads before `N` are only shortened, so offsets and the bytes
+`(0, nil)` through unchanged, and nothing is retried there; repeated `(0, nil)`
+is judged below it, at the source, by `ROB-001-007`. Reads before `N` are only shortened, so offsets and the bytes
 before `N` do not depend on chunking, and an empty read asks the source for
 nothing. The limiter implements `io.Reader` alone, so `io.WriterTo` and
 `io.ReaderFrom` copies go through it.
@@ -1028,7 +1034,7 @@ Each applicable test asserts:
 | ROB-001-004 | Done | Limit multipart MIME depth and total part count without recursive stack growth; nested-message depth is deferred to ROB-090-002. | Deep multipart and single-/multi-container wide generated messages. |
 | ROB-001-005 | Done | Limit encoded/decoded body bytes and total decoding expansion under `Parse`: per-leaf `MaxEncodedBodyBytes`/`MaxDecodedBodyBytes` (framed containers are raw views outside them) and the shared `MaxTotalDecodedBytes`, exact at `N` with one undelivered proof byte. | Streaming overflow at `N-1/N/N+1` for identity, base64, quoted-printable, charset and custom expanding/masking/eager decoders, across source and destination chunk sizes: the header and the delivered prefix stay valid, and output decoders buffered from encoded-admitted wire bytes is still delivered within the decoded budgets; a per-body overflow ends that body alone and the parent can drain its unread raw tail under `MaxInputBytes` to reach later and shallower siblings unless another limit or a sink stops it; a total overflow ends the parse. Decoders cannot mask the body's failure or this parse's `MaxInputBytes` failure, recognized by provenance without calling `Is`/`As`/`Unwrap` on source errors, with or without body budgets (fixes the issue #3 quoted-printable masking); the guard never asks or replaces a source's own error, cyclic or panicking ones included, though a decoder may still reword an ordinary one as before. "Recoverable raw body" is the reviewed one-shot scope: no raw API or replay is added; the existing conditional verbatim `WriteTo` copy, before `Body` is read and where the writer accepts the header, is held to the encoded and input budgets only; consumed, proof, read-ahead and drained raw bytes are not replayed (#41, not done here). |
 | ROB-001-006 | Done | Add context cancellation and deadline checks to long scans/decoders: `ParseContext`, observed at reads, scope boundaries and metadata-scan work boundaries; see "ROB-001-006 — context cancellation" below. | Cancellation latency and partial-result tests; see below. Codex code review and final bounded QA passed: full tests/race/build, 15,813 cancellation cases, 19 contract checks, blocking/lifecycle/metadata probes, compatibility matrices and 696,287 fuzz executions. Issue #6 awaits remote inclusion of the local commit. |
-| ROB-001-007 | Planned | Detect repeated no-progress reads while allowing legal transient behavior. | Adversarial reader tests. |
+| ROB-001-007 | Done | Detect repeated no-progress reads while allowing legal transient behavior: under `Parse`/`ParseContext`, 100 consecutive `(0, nil)` reads at the input end the parse (`input.no_progress`), at a leaf body's decoders end that body (`body.decoder_no_progress`), and at an encoded-word decoder of an interpreted parameter keep its raw value (`header.decoder_no_progress`); see "ROB-001-007 — no-progress reads" below. | Adversarial reader tests at 0/1/99/100/101 with call caps; see below. |
 | ROB-001-008 | Done | Cap diagnostics under `Parse` with `MaxDiagnosticCount`, and emit one terminal `limit.diagnostic_count` entry in the last slot (`N-1` ordinary, request `N` replaced, later requests omitted without copy, retention or sink call) while parsing continues. | Diagnostic storm through public `Parse`: every malformed part healed and returned under the cap; `0`/default/`-1`/`1`/`N-1`/`N`/`N+1`/`math.MaxInt64`; retain/no-retain with sink none/ok/refusing; later input budget and sink stops after the cap; concurrent records, separate sessions and reentrant inspection. |
 | ROB-001-009 | Done | Enforce `MaxInputBytes` under `Parse` once, at the raw source shared by every header, body, multipart and skip/drain read: `N` bytes are admitted, a proven byte `N+1` (at most one proof byte, never handed on) records one `limit.input_bytes` diagnostic and publishes the session stop; `Read`/`ReadWithOptions` unchanged. | `N-1/N/N+1` root header and body, nested and skipped parts, chunkings, `(n>0, EOF/error)`, delayed EOF, `(0, nil)`, empty reads, default/disabled/`math.MaxInt64`, sink-stop and header-budget precedence. |
 | ROB-001-010 | Done | Enforce session-wide `MaxTotalHeaderBytes` (32 MiB) and `MaxTotalHeaderCount` (100,000) under `Parse`, shared by the root and every scanned child header, while preserving per-entity limits and legacy entry points. | Exact boundaries, wide/deep trees, count exhaustion preflight before allocating the next candidate, no-refund accounting for refused headers, no body/framing/read-ahead charges, session-stop identity, sink/cap precedence, provenance, chunk/error/default/disabled/MaxInt64/386 tests, and independent QA. Independent bounded QA, full tests/race, corrected scoped fuzzing and compatibility review passed; issue #5 awaits remote inclusion of the new local commit. |
@@ -1131,6 +1137,149 @@ allocation test at 5,592 bytes against 4,096 once; a focused rerun, both final
 baseline/current count-three runs, and the final full/race suites passed. Its
 cause is not established; the threshold was not relaxed. The executor did not
 run tests; Codex ran and reviewed the checks above.
+
+#### ROB-001-007 — no-progress reads (Done)
+
+Status: Done locally for the ROB-001-007 portion of
+[issue #7](https://github.com/saeroun-ai/emlkit/issues/7). Codex reviewed the
+changes and independently verified the final result. ROB-010-006 remains
+Planned, and the reviewed commit is not yet included remotely. The package
+comment of `progress.go` defines the contract.
+
+**The rule.** Under `Parse` and `ParseContext` — every profile, every `Limits`
+value, `LimitDisabled` included, with no option to turn it off — 100
+consecutive reads that asked for bytes and got exactly `(0, nil)` are a stall;
+reads 1–99 are passed on unchanged, the reader is called exactly 100 times and
+never again. A legal positive count resets the count, and its bytes are
+delivered with any error that came with them. An empty request is answered
+without calling the reader and counts nothing. An error — `io.EOF`, and a
+reader's own `io.ErrNoProgress` — neither counts nor resets and is passed on as
+that reader's own. The threshold is bufio's. No retry, sleep or goroutine is
+added.
+
+**Where.**
+
+- *Input.* Directly over the caller's reader, below the cancellation gate, the
+  `MaxInputBytes` limiter (so its proof reads are counted), the buffered readers,
+  decoder loops (`base64`, `transform.Reader`) and `WriterTo`/`ReaderFrom`
+  copies. A stall records one `input.no_progress` (`SeverityFatal`, nil path,
+  offset of the next input byte, `Cause` `io.ErrNoProgress`) and publishes the
+  session stop on the `MaxInputBytes` terms: a stop published first wins with
+  nothing recorded, a sink refusing the diagnostic wins, `MaxDiagnosticCount`
+  may drop the diagnostic but not the stop, cancellation seen first wins. The
+  value is the session's `inputStop`, so a leaf body restores it after decoders
+  that reword or mask it (quoted-printable, a hook turning it into `io.EOF`):
+  as the identical value at the root, and under a part as the framing's
+  existing `errors.Join(stop, ErrMissingBoundaryClose)`, which `errors.Is`
+  matches to the stop; `ParseStop`, and `NextPart` and `Walk` after it, report
+  the identical stop.
+  A root header cut by a stall yields no entity. `errors.Is(stop,
+  io.ErrNoProgress)` holds, as it did for the bufio error some of these paths
+  returned before.
+- *Leaf body decoders.* `bodyGuard` counts reads in which the decoders returned
+  `(0, nil)` while neither the body's raw reader handed out a wire byte nor
+  the charset stage took a byte of its own input (counted by a `Read`-only
+  wrapper of that input, because a transfer decoder such as quoted-printable
+  or base64 may already hold that input decoded, so the wire count alone does
+  not move); input taken at either point, or output delivered, resets it, so
+  a decoder that consumes input while emitting nothing is bounded by the body
+  budgets, not by this rule. A stall
+  reports the body's own local failure if it has one, else the input's failure
+  as the body received it, else a local `body.decoder_no_progress`
+  (`SeverityFatal`, leaf path and body offset) through the body's own slot,
+  which a stop published earlier outranks. `ParseStop` stays nil; a parent
+  multipart drains the raw tail and returns the following parts. A body that
+  already failed locally keeps that failure.
+- *Interpreted parameters.* Only the engine's own reading of `Content-Type` and
+  `Content-Disposition` — whole field, a budget's retained prefix, the
+  item-by-item repair, the lazy disposition — decodes encoded words through a
+  per-field `metadataDecoder`. Each `CharsetReader` result is wrapped in a
+  `Read`-only guard (no `WriterTo` shortcut) whose input is a `Read`-only
+  counter of the encoded word it was given; a read that takes input resets the
+  count. A stall is decided per parameter value, by the guard's own flag and
+  never by an error value: the stalled word fails, `mime.WordDecoder` stops at
+  it, and that value keeps its whole raw text, as for an unknown charset. Every
+  other value of the field is decoded independently, so the result never
+  depends on the order parameters are visited in, and a value that stalled is
+  remembered for that one interpretation so the repair or retained-prefix
+  reading does not hand it to the hook again. Any number of stalled values owe
+  the field one `header.decoder_no_progress` (`SeverityInvalidMetadata`,
+  field, header location and path, `Cause` `io.ErrNoProgress`) after its other
+  diagnostics, recorded with no entity lock held as before. The cost is bounded
+  by the existing budgets: the parameter budgets bound the values, the header
+  budgets their length, and each hook reader gets at most 100 reads without
+  progress. The media type, the boundary and the other parameters stay usable; the profile matters only where an
+  independent repair already refuses under `ProfileStrict`. The guard also polls
+  cancellation before and after each hook read; a cancelled reading is
+  discarded, owes nothing and becomes the stop outside the lock, as in
+  `ROB-001-006`. A hook's own failure or its own `io.ErrNoProgress` keeps the
+  existing silent raw-value fallback.
+- *Eager body hooks.* After a body `CharsetReader` returns, a session stop
+  published while it ran — cancellation, the input stalling or overrunning
+  `MaxInputBytes` under it — is returned with the entity instead of recording
+  `charset.unknown`; a decoder it built is kept, and input it consumed is not
+  refunded.
+
+**Not changed or not covered.** `Read`, `ReadWithOptions`, `New`,
+`NewMultipart`, `mail.CreateReader`, the `Header` accessors (`Text`,
+`ContentType`, `ContentDisposition`) and `textproto` behave as before and can
+still spin on an endless `(0, nil)` reader. A reader or hook that blocks, or
+loops inside one call without returning, cannot be preempted, and a hook doing
+hidden internal work behind more than 99 empty returns is stopped by the fixed
+cap. A reader polling with `(0, nil)` meaning "try later" is treated as
+stalled. A count below zero or above `len(p)` breaks `io.Reader`: it is passed
+on, neither counted nor reset, and its existing bufio panic belongs to
+`ROB-120-001`. The general preservation of bytes returned with errors across
+decoders and textproto (including errors textproto's peeks discard) is
+`ROB-010-006`, still Planned; this item only keeps `(n, err)` intact in the
+wrappers it adds.
+
+**Reviewed coverage.** `progress_test.go`, `progress_metadata_test.go`,
+`mail/reader_progress_test.go` and `charset/progress_test.go`: the guard's
+threshold, resets, error and empty-request pass-through; a 0/1/99/100/101
+matrix over root header, plain/base64/quoted-printable bodies and multipart
+framing, part headers and part bodies, chunks 1/7/4096, EOF with or apart from
+the last bytes, three profiles, default and disabled limits, with chunk
+invariance of stalled results; sink refusal, an earlier stop, the diagnostic
+cap, sink-only delivery, cancellation during and after; the input proof
+boundary; quoted-printable rewording at the root and under a part; a hook
+looping on its input; eager hooks; `WriteTo` into a `ReaderFrom`; a
+`NewMultipart` worker over a stalled part; decoder stalls at 0/1/99/100/101,
+250- and 1000-byte consuming decoders, prefix-then-stall, swallowed and masked
+input stops, a swallowed body-budget refusal, siblings through `NextPart`,
+`Walk` and `mail.Reader`; a charset reader taking one byte per empty read of
+input that quoted-printable or base64 already decoded, at chunks 1/7/4096 and
+every profile, and the same reader stopping after exactly 100 empty reads once
+it stops taking input; parameter stalls on the whole field, the retained
+prefix, the repair, the lazy disposition read back by its sink and the charset
+stage, every stalled value raw with one diagnostic per field, a stalled value
+beside a decoding one and beside an encoded boundary (repeated, since
+parameters are visited in map order), the hook reader's `WriteTo` unused,
+foreign errors, cancellation inside the copy, and legacy `Read` unchanged.
+Codex's independent QA found the quoted-printable false stall and the
+order-dependent field-wide suppression; both were corrected and re-verified.
+Every scripted reader has a call cap; no reader is endless and no guard is
+disabled. The source matrix initially required a part body's framing join to
+be identical to the session stop. The oracle was corrected to retain the
+existing join, match its actual stop, and still verify exact stop identity at
+later parse scopes, prefix bytes, and no further source calls.
+
+Final bounded verification passed all 15 steps: full tests and full race tests
+in six packages, build, all packages on 386, filtered vet, and the exact
+baseline plain-vet warning audit (13 unkeyed composite literals and one
+WriteTo-signature warning, unchanged). Independent QA passed 2,320 cases:
+576 transient-zero combinations, 1,152 source-stall combinations, 165 decoder
+and sibling cases, 160 whole/repair/lazy-metadata cases, 256 repeated parameter
+and boundary salvage cases, and 11 stop/error contracts. Prior cancellation
+QA (15,813 cut combinations plus its contracts and blocking/lifecycle probes),
+live-context compatibility checks, input/body/header/diagnostic/healing
+matrices and all 235 hostile-error probes passed. Scoped input fuzzing passed
+1,037,084 executions and metadata-repair fuzzing passed 580,243 executions;
+formatting and whitespace checks passed. All work ran sequentially under
+RAM 1.5 GiB, swap 0, two CPU cores, 128 tasks and deadlines; the final service
+reported 1.3 GiB peak memory. Claude ran no tests; Codex ran the checks, reviewed
+their output and the actual changes. All three delegation results reported
+empty permission-denial arrays.
 
 ### ROB-010 — Input and message framing
 
@@ -1938,6 +2087,16 @@ Items are implemented in this dependency order:
 
 Within a milestone, use ascending item order unless a reviewed dependency note
 is added to this document.
+
+**Reviewed next-item dependency — `ROB-010-006`.** After finishing
+`ROB-001-007`, audit ordinary data-plus-error propagation before the other
+`ROB-010` framing items. The progress investigation found header peeks that
+consume an error and then read again, and decoder paths may rewrite ordinary
+source errors. Establishing the byte/error contract first gives the upcoming
+EOF, header-only and truncated-input recovery work a reliable basis. This is
+the remaining item of #7, handled in its own execution and review; no partial
+header healing, completion-state API or other framing item is completed by
+this ordering decision.
 
 **Exception — `ROB-100-006`.** It was taken ahead of `ROB-010` through `ROB-090`
 at the user's request, as an independent compatibility fix

@@ -59,6 +59,7 @@ header.truncated_line
 header.duplicate_singleton
 header.mbox_envelope
 header.misplaced_mbox_envelope
+header.decoder_no_progress
 mime.content_type_invalid
 mime.content_type_missing_type
 mime.content_type_missing_subtype
@@ -158,6 +159,7 @@ report.invalid
 signed.structure_invalid
 encrypted.structure_invalid
 feature.unsupported_media_type
+body.decoder_no_progress
 `
 
 // declaredCodes parses the registry source and returns every declared Code

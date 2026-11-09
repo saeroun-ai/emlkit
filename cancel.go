@@ -276,8 +276,9 @@ func (c *cancelReader) Read(p []byte) (int, error) {
 	// While the context is live every read, an empty one included, is passed
 	// on exactly as it was asked for, so that a parse whose context is never
 	// cancelled reads exactly as Parse does. The readers below never pass an
-	// empty read on to the input: the input budget answers one itself, and the
-	// buffered readers do not issue one.
+	// empty read on to the input: the input budget and the no-progress reader
+	// (progress.go) answer one themselves, and the buffered readers do not
+	// issue one.
 	n, err := c.r.Read(p)
 	if stop := c.session.cancelStop(); stop != nil {
 		return n, stop

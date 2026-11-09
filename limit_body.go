@@ -46,7 +46,8 @@ import (
 // output byte from the decoders for the decoded budgets. That byte is never
 // handed on — the decoders never see more than N wire bytes and the caller never
 // receives more than N decoded ones — and is not counted. A read that brings no
-// byte passes on what came with it — io.EOF, an error, or (0, nil) — unchanged.
+// byte passes on what came with it — io.EOF, an error, or (0, nil) — unchanged,
+// a (0, nil) only until the no-progress rule of progress.go ends the body.
 //
 // # What a failure means
 //
@@ -91,13 +92,15 @@ import (
 // CharsetReader may turn any error into io.EOF. The guard over the decoders
 // therefore lets them end, delivering, within the decoded budgets, the output
 // they made of what they were given, and then reports what actually ended the body instead of what they
-// ended with: the body's local failure, or else the MaxInputBytes failure of
-// this parse when that is what the body's input returned, and otherwise what
-// the decoders returned. This holds whether or not any body budget is enforced.
+// ended with: the body's local failure, or else the input's failure of this
+// parse — MaxInputBytes, or a stalled input (progress.go) — when that is what
+// the body's input returned, and otherwise what the decoders returned. This
+// holds whether or not any body budget is enforced.
 //
 // The input's failure is recognized by where it came from, never by asking an
-// error about itself: it is the exact value the input limiter of this parse
-// fails with — its own stop, or a stop published earlier that it adopted — as
+// error about itself: it is the exact value the input limiter or the
+// no-progress reader of this parse fails with — its own stop, or a stop
+// published earlier that it adopted — as
 // the body's input returned it, directly for the root and joined first by the
 // multipart framing of each enclosing part. The guard calls no Is, As or
 // Unwrap of an error a caller's source returned and never replaces one, so it
@@ -110,8 +113,10 @@ import (
 //
 // The built-in decoders end once their input fails. A CharsetReader a caller
 // installed is only bounded from outside: what it reads is held to the encoded
-// budget, what it delivers to the decoded ones. Its allocation, its CPU and
-// whether it blocks are not bounded here.
+// budget, what it delivers to the decoded ones, and 100 consecutive reads in
+// which it delivers nothing and takes nothing end the body (progress.go). Its
+// allocation, its CPU, a loop inside one of its calls and whether it blocks are
+// not bounded here.
 //
 // # Raw bytes
 //
@@ -143,9 +148,10 @@ const (
 // fills it and records its diagnostic, and a later one adopts it and records
 // nothing.
 //
-// src is the MaxInputBytes failure of this parse as the body's input returned
-// it, recognized by provenance (see rawBody.note), so that the guard can report
-// it whatever a decoder made of it.
+// src is the input's failure of this parse — a MaxInputBytes overflow or a
+// stalled input (progress.go) — as the body's input returned it, recognized by
+// provenance (see rawBody.note), so that the guard can report it whatever a
+// decoder made of it.
 //
 // It is read and written by the one goroutine reading the body, as the stream
 // is, and holds no lock.
@@ -201,6 +207,21 @@ type leafBody struct {
 	slot  bodySlot
 	raw   rawBody
 	guard bodyGuard
+
+	// charsetIn is what the charset stage reads, counting what it takes; see
+	// bodyGuard.progress.
+	charsetIn countedInput
+}
+
+// countCharsetInput returns r counted as the charset stage's input, or r
+// itself for no leafBody. Only the count is added: every result is passed on
+// unchanged, and the counter is a plain io.Reader.
+func (lb *leafBody) countCharsetInput(r io.Reader) io.Reader {
+	if lb == nil {
+		return r
+	}
+	lb.charsetIn.r = r
+	return &lb.charsetIn
 }
 
 // shared returns the slot of lb, or nil for no leafBody.
@@ -232,11 +253,13 @@ func (c parseContext) guardBody(body io.Reader, lb *leafBody) io.Reader {
 	}
 	l, _ := c.limits()
 	lb.guard = bodyGuard{
-		r:       body,
-		ctx:     c,
-		slot:    &lb.slot,
-		decoded: l.MaxDecodedBodyBytes,
-		total:   l.MaxTotalDecodedBytes != LimitDisabled,
+		r:         body,
+		raw:       &lb.raw,
+		charsetIn: &lb.charsetIn,
+		ctx:       c,
+		slot:      &lb.slot,
+		decoded:   l.MaxDecodedBodyBytes,
+		total:     l.MaxTotalDecodedBytes != LimitDisabled,
 	}
 	return &lb.guard
 }
@@ -255,6 +278,9 @@ type rawBody struct {
 	slot  *bodySlot
 	limit int64 // MaxEncodedBodyBytes: a positive count, or LimitDisabled
 
+	// admitted is how many wire bytes were handed on, never more than limit
+	// while one is enforced. The body guard reads it to tell decoders that
+	// took input from decoders that made no progress.
 	admitted int64
 	failed   error
 	proof    [1]byte
@@ -270,6 +296,10 @@ func (l *rawBody) Read(p []byte) (int, error) {
 	}
 	if l.limit == LimitDisabled {
 		n, err := l.r.Read(p)
+		if n > 0 {
+			// Counted only to tell the guard the decoders took input.
+			l.admitted += int64(min(n, len(p)))
+		}
 		l.note(err)
 		return n, err
 	}
@@ -307,9 +337,9 @@ func (l *rawBody) Read(p []byte) (int, error) {
 // That is decided by provenance, never by asking err about itself: no Is, As
 // or Unwrap of err is called, since err may be any error the caller's source
 // returned, with methods that panic or never return. Nothing is noted unless
-// the input limiter of this parse has failed, and then err must be the exact
-// value it fails with (inputStop), or that value as the multipart framing of
-// this body's ancestors reported it — at most one errors.Join per level of
+// the input of this parse has failed — its limiter or its no-progress reader —
+// and then err must be the exact value it fails with (inputStop), or that
+// value as the multipart framing of this body's ancestors reported it — at most one errors.Join per level of
 // depth, each with the failure first, which is how textproto reports a read
 // error under a part. A join is recognized by its dynamic type before its
 // Unwrap is called, so only the standard library's own method runs, and only
@@ -343,8 +373,9 @@ func (l *rawBody) note(err error) {
 // the multipart framing wraps a failed read under a part.
 var joinErrorType = reflect.TypeOf(errors.Join(io.EOF))
 
-// inputFailure returns the value the input limiter of this parse fails every
-// read with, or nil while it has not failed. A nil session has none.
+// inputFailure returns the value the input of this parse fails every read with
+// — a MaxInputBytes overflow or a stall — or nil while it has not failed. A nil
+// session has none.
 func (s *ParseSession) inputFailure() error {
 	if s == nil {
 		return nil
@@ -370,6 +401,14 @@ type bodyGuard struct {
 	r    io.Reader
 	ctx  parseContext
 	slot *bodySlot
+
+	// raw is the body's wire reader and charsetIn the charset stage's input;
+	// what they count tells decoders that took input from decoders that made
+	// no progress, and empty counts the consecutive reads that did neither.
+	// See progress and noProgress in progress.go.
+	raw       *rawBody
+	charsetIn *countedInput
+	empty     int
 
 	// decoded is MaxDecodedBodyBytes, used the bytes delivered so far.
 	decoded int64
@@ -422,6 +461,7 @@ func (g *bodyGuard) Read(p []byte) (int, error) {
 		window = totalLeft
 	}
 
+	before := g.progress()
 	if window > 0 {
 		q := p[:window]
 		n, err := g.r.Read(q)
@@ -431,9 +471,15 @@ func (g *bodyGuard) Read(p []byte) (int, error) {
 			if g.total {
 				g.ctx.session.chargeDecoded(int64(n))
 			}
+			g.empty = 0
 		}
 		if err != nil {
 			return n, g.end(err)
+		}
+		if n == 0 {
+			if stall := g.noProgress(before); stall != nil {
+				return 0, stall
+			}
 		}
 		return n, nil
 	}
@@ -443,6 +489,11 @@ func (g *bodyGuard) Read(p []byte) (int, error) {
 	if n <= 0 {
 		if err != nil {
 			return 0, g.end(err)
+		}
+		if n == 0 {
+			if stall := g.noProgress(before); stall != nil {
+				return 0, stall
+			}
 		}
 		return 0, nil
 	}
