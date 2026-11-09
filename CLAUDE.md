@@ -23,6 +23,36 @@ gofmt -w .                                                 # format in place
 
 This project has no CI configured — verification is manual. Before committing, run `go build ./...`, `go test ./...`, and `gofmt -l .` (its output must be empty: `test -z $(gofmt -l .)`).
 
+## Host-safe verification
+
+All local Go builds, tests, fuzzing, benchmarks, and parser QA programs must run
+inside a bounded process group. On this Linux host use:
+
+```bash
+rtk proxy python3 scripts/qa-bounded.py --seconds 180 -- go test -timeout 120s ./...
+rtk proxy python3 scripts/qa-bounded.py --seconds 600 -- go test -race -timeout 480s ./...
+rtk proxy python3 scripts/qa-bounded.py --seconds 120 -- go test -run '^$' -fuzz '^TARGET$' -fuzztime 30s -parallel 2 .
+```
+
+The runner requires an available systemd user manager. It fails closed if the
+service or limits cannot be established: 1.5 GiB RAM, no swap, CPU quota of two
+cores, 128 tasks, a runtime deadline, and whole-group termination on OOM.
+`GOMAXPROCS=2`, `GOMEMLIMIT=512MiB`, and `GOFLAGS=-p=2` apply inside the service.
+Run one QA job at a time; do not start parallel bounded services to multiply the
+host load. Do not rerun a memory-killed test without investigating and bounding
+its input first. On another host, establish and verify equivalent enforced
+limits before execution; do not silently fall back to an unbounded run.
+
+Every endless/adversarial test source must have a finite byte/work cap and every
+hang-prone probe a subprocess deadline. A Go test timeout alone does not bound
+memory. Do not run mutation tests that disable guards against an unbounded
+source, and never leave a deliberately disabled guard in the shared working
+tree. Use exit statuses directly; piping tests through `tail`/`grep` must not
+hide failure. No-tests-to-run output is not validation.
+
+This guard was added after an unbounded preflight mutation test caused a kernel
+OOM on 2026-11-09. It supports local QA and is not a claim that CI (#14) is done.
+
 ## Architecture
 
 The library is layered. Each layer adds semantics on top of the one below; pick the lowest layer that does what you need.

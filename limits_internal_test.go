@@ -10,7 +10,7 @@ import (
 
 // The tests here cover the resolver itself, field by field, which the external
 // tests can only reach through Parse. Their point is that no budget is special:
-// one rule is applied to all eighteen of them, and a field that is added to
+// one rule is applied to all twenty of them, and a field that is added to
 // Limits without being declared to the resolver is caught here rather than
 // silently defaulting to zero.
 

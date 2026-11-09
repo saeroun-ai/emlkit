@@ -8,14 +8,19 @@ import (
 
 // HeaderLimits are the budgets one header block is read under.
 //
-// Every field is in the unit its name gives — bytes, or a count — and every one
-// obeys the same rule: a positive value is the budget, and zero or below is no
-// budget at all, which is what ReadHeader reads under. The zero HeaderLimits
-// therefore budgets nothing, so a caller opts into each budget by naming it.
+// Two kinds of field are here. The four Max fields are per-block budgets: each
+// is in the unit its name gives — bytes, or a count — and obeys the same rule,
+// a positive value is the budget and zero or below is no budget at all. They
+// are never cumulative: each header block — a message's own, or one part's —
+// is read under the whole of every one of them, so what one block costs is
+// never charged to the next.
 //
-// The budgets are per block and are never cumulative across blocks. Each header
-// block — a message's own, or one part's — is read under the whole of every
-// budget here, so what one block costs is never charged to the next.
+// Total is the other kind: not a number but a pointer to a HeaderBudget, which
+// every block read with the same pointer spends together, on top of the
+// per-block budgets. nil is no shared budget.
+//
+// The zero HeaderLimits budgets nothing, which is what ReadHeader reads under,
+// so a caller opts into each budget by naming it.
 //
 // This is the wire-format layer's own spelling of the budgets. The message
 // layer resolves a caller's configuration into these fields; see
@@ -49,6 +54,11 @@ type HeaderLimits struct {
 	// line terminator that ends it. A line that the input ends without
 	// terminating is charged the bytes it has.
 	MaxLineBytes int64
+
+	// Total, when non-nil, is a budget several blocks spend together, on top
+	// of the per-block budgets above. It is the one field here that is
+	// cumulative; see HeaderBudget. nil is no shared budget.
+	Total *HeaderBudget
 }
 
 // A HeaderLimitKind names which budget of a header block was exceeded.
@@ -70,6 +80,14 @@ const (
 	// HeaderLimitLineBytes is HeaderLimits.MaxLineBytes: one physical line of
 	// the block.
 	HeaderLimitLineBytes
+
+	// HeaderLimitTotalBytes is the byte budget of HeaderLimits.Total: the wire
+	// bytes of every block that shares it.
+	HeaderLimitTotalBytes
+
+	// HeaderLimitTotalCount is the field budget of HeaderLimits.Total: the
+	// field candidates of every block that shares it.
+	HeaderLimitTotalCount
 )
 
 // String returns a short name for the kind, for humans and tests.
@@ -83,6 +101,10 @@ func (k HeaderLimitKind) String() string {
 		return "header field count"
 	case HeaderLimitLineBytes:
 		return "header line bytes"
+	case HeaderLimitTotalBytes:
+		return "total header bytes"
+	case HeaderLimitTotalCount:
+		return "total header field count"
 	}
 	return fmt.Sprintf("HeaderLimitKind(%d)", int(k))
 }
@@ -90,7 +112,7 @@ func (k HeaderLimitKind) String() string {
 // unit names what the budget of this kind counts, for the error text.
 func (k HeaderLimitKind) unit() string {
 	switch k {
-	case HeaderLimitCount:
+	case HeaderLimitCount, HeaderLimitTotalCount:
 		return "fields"
 	}
 	return "bytes"
@@ -102,7 +124,7 @@ func (k HeaderLimitKind) sentinel() error {
 	switch k {
 	case HeaderLimitFieldBytes:
 		return ErrHeaderFieldTooBig
-	case HeaderLimitCount:
+	case HeaderLimitCount, HeaderLimitTotalCount:
 		return ErrTooManyHeaderFields
 	case HeaderLimitLineBytes:
 		return ErrLineTooBig

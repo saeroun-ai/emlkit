@@ -26,6 +26,8 @@ limit.header_bytes
 limit.header_field_bytes
 limit.header_count
 limit.line_bytes
+limit.total_header_bytes
+limit.total_header_count
 limit.parameter_count
 limit.parameter_segments
 limit.mime_depth
@@ -253,6 +255,8 @@ func TestCodes_values(t *testing.T) {
 	}{
 		{CodeInputEmpty, "input.empty"},
 		{CodeLimitDiagnosticCount, "limit.diagnostic_count"},
+		{CodeLimitTotalHeaderBytes, "limit.total_header_bytes"},
+		{CodeLimitTotalHeaderCount, "limit.total_header_count"},
 		{CodeHeaderMissingBodySeparator, "header.missing_body_separator"},
 		{CodeMIMEParameterSegmentMixedEncoding, "mime.parameter_segment_mixed_encoding"},
 		{CodeMultipartCloseNotFound, "multipart.close_not_found"},

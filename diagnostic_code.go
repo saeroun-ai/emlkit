@@ -35,6 +35,8 @@ const (
 	CodeLimitHeaderFieldBytes  Code = "limit.header_field_bytes"
 	CodeLimitHeaderCount       Code = "limit.header_count"
 	CodeLimitLineBytes         Code = "limit.line_bytes"
+	CodeLimitTotalHeaderBytes  Code = "limit.total_header_bytes"
+	CodeLimitTotalHeaderCount  Code = "limit.total_header_count"
 	CodeLimitParameterCount    Code = "limit.parameter_count"
 	CodeLimitParameterSegments Code = "limit.parameter_segments"
 	CodeLimitMIMEDepth         Code = "limit.mime_depth"

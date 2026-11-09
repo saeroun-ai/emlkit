@@ -95,7 +95,7 @@ type ParseOptions struct {
 //   - The session is never nil, including when the header could not be read at
 //     all, so there is always somewhere to look. What it holds, though, is what
 //     some producer has been implemented to record, which today is the two
-//     decoding warnings below, the thirteen enforced resource budgets, and the
+//     decoding warnings below, the fifteen enforced resource budgets, and the
 //     repair of a valid media type or disposition with malformed parameters,
 //     up to Limits.MaxDiagnosticCount, whose last slot holds one terminal
 //     limit.diagnostic_count diagnostic in place of the rest. A framing
@@ -149,6 +149,11 @@ type ParseOptions struct {
 // several at once reports the budget bounding the smallest scope, in the order
 // line, field, block, count. Nothing is recovered from the refused block itself;
 // everything already returned stays valid, as FatalError describes.
+//
+// Limits.MaxTotalHeaderBytes and MaxTotalHeaderCount bound all of those header
+// blocks together, and exceeding either ends the whole parse with one
+// limit.total_header_bytes or limit.total_header_count diagnostic. See the
+// fields for what is charged and when.
 //
 // Limits.MaxLineBytes reaches past the header blocks to the other lines the
 // parser must read as lines: a multipart body's framing lines, and the

@@ -73,6 +73,16 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 			return nil, stop
 		}
 
+		// The parse's shared header budget ran out on this part's block. That
+		// is the whole parse's failure, so it is published rather than kept as
+		// this iterator's; see limit_header_total.go. It is recognized by
+		// identity before anything below walks err.
+		if ref, ok := r.parent.session.headerTotalRefusal(err); ok {
+			ctx := r.parent.child(r.next, ref.Offset(), ref.Offset())
+			r.fatal = r.parent.session.headerTotalFailure(ctx, ref)
+			return nil, r.fatal
+		}
+
 		// A part header past one of its budgets, or a framing line past the
 		// line budget, is a defect of the message, so it is recorded and
 		// reported as one. Either ends this iterator: the reader is standing
@@ -83,7 +93,7 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 		// rather than the shape of the error: a value shaped like a refusal is
 		// something the message's own bytes can put here, and one of the shapes
 		// it can put here is a typed nil that would be dereferenced below.
-		if limit, refused := textproto.HeaderLimit(err); refused {
+		if limit, refused := textproto.HeaderLimit(err); refused && !isTotalHeaderKind(limit.Kind()) {
 			return nil, r.headerLimitFailure(limit)
 		}
 		if limit, refused := textproto.LineLimit(err); refused {

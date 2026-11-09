@@ -69,6 +69,13 @@ const (
 	// Limits.MaxLineBytes for the exact scope.
 	defaultMaxLineBytes = 64 << 10 // 64 KiB
 
+	// defaultMaxTotalHeaderBytes and defaultMaxTotalHeaderCount bound the header
+	// blocks of a whole parse together, which the per-entity budgets times
+	// MaxPartCount do not usefully bound. Both are far above their per-entity
+	// counterparts, so a single header block meets those first.
+	defaultMaxTotalHeaderBytes = 32 << 20 // 32 MiB
+	defaultMaxTotalHeaderCount = 100000
+
 	// defaultMaxParameterCount bounds the parameters of one header field, such
 	// as one Content-Type.
 	defaultMaxParameterCount = 256
@@ -158,6 +165,8 @@ const (
 //	MaxHeaderFieldBytes    64 KiB
 //	MaxHeaderCount         1024
 //	MaxLineBytes           64 KiB
+//	MaxTotalHeaderBytes    32 MiB
+//	MaxTotalHeaderCount    100 000
 //	MaxParameterCount      256
 //	MaxParameterSegments   256
 //	MaxMIMEDepth           100
@@ -175,14 +184,14 @@ const (
 // DefaultLimits returns those values resolved, so a caller can read one, adjust
 // it, or compare against it without repeating a number from this table.
 //
-// Thirteen budgets are enforced, and only under Parse. MaxDiagnosticCount bounds
+// Fifteen budgets are enforced, and only under Parse. MaxDiagnosticCount bounds
 // the diagnostics a parse records and delivers, and by itself stops no parsing:
 // the request that reaches it is replaced by one terminal limit.diagnostic_count
 // diagnostic in the last slot and every later request is omitted; see the field.
-// The "exactly one" or "one" diagnostic each of the other twelve records below
+// The "exactly one" or "one" diagnostic each of the other fourteen records below
 // is recorded only while that budget has a slot left. The failure it describes
 // happens whether or not it is recorded, with the same FatalError carrying the
-// same Diagnostic. Those twelve fall into five groups by what a failure costs,
+// same Diagnostic. Those fourteen fall into six groups by what a failure costs,
 // and the grouping is part of the contract:
 //
 //   - MaxInputBytes bounds the bytes read from the input for the whole message,
@@ -190,6 +199,8 @@ const (
 //   - MaxHeaderBytes, MaxHeaderFieldBytes, MaxHeaderCount and MaxLineBytes bound
 //     the header block of every entity — the message's own and every part's at
 //     any depth.
+//   - MaxTotalHeaderBytes and MaxTotalHeaderCount bound all of those header
+//     blocks together, and a failure of either ends the whole parse.
 //   - MaxParameterCount and MaxParameterSegments bound the parameterized header
 //     fields the parse engine interprets for itself.
 //   - MaxMIMEDepth and MaxPartCount bound the shape of the MIME tree: how far
@@ -229,8 +240,13 @@ const (
 // entities, and this engine does not parse those bodies as entities at all, so
 // there is no nested-message transition to count until it does. Later releases
 // add enforcement behind these same fields, with the limit.* diagnostics the
-// Code registry reserves, and without changing the shape or meaning of Limits —
-// so a configuration written against this type today keeps its meaning.
+// Code registry reserves. A release may also add a budget, as
+// MaxTotalHeaderBytes and MaxTotalHeaderCount were added. A positional
+// Limits{...} literal then no longer compiles. A keyed literal, the zero Limits
+// and DefaultLimits still compile and leave the new field zero or at its
+// default, which enforces it: a parse that was accepted before may now be
+// refused by the new budget. Set the new field to LimitDisabled to keep the
+// earlier behavior.
 //
 // Limits is a plain comparable value. Copying it copies the whole
 // configuration, and nothing retains the value a caller passes in.
@@ -284,7 +300,8 @@ type Limits struct {
 	// It is per entity and never cumulative. Under Parse it applies to the
 	// message's own header and to the header of every part at any depth, each
 	// under the whole budget, so a message of many parts is not refused for what
-	// its earlier parts already spent.
+	// its earlier parts already spent. MaxTotalHeaderBytes is the cumulative
+	// bound.
 	//
 	// It is the one budget that also has a legacy spelling,
 	// ReadOptions.MaxHeaderBytes. See ParseOptions.Limits for how the two are
@@ -319,6 +336,53 @@ type Limits struct {
 	// never rejected for its length alone. What bounds it is
 	// MaxEncodedBodyBytes and MaxDecodedBodyBytes.
 	MaxLineBytes int64
+
+	// MaxTotalHeaderBytes bounds the header blocks of one whole parse
+	// together: the wire bytes MaxHeaderBytes counts in each block, summed
+	// over the message's own header and every part header the parse reads, at
+	// any depth. Multipart framing, preamble, epilogue, bodies, bytes drained
+	// past a part, and bytes only peeked at or buffered ahead are not header
+	// bytes; a part with no header block, or a container drained without being
+	// iterated, costs nothing. Each byte is charged once.
+	//
+	// It is charged as blocks are read, one read of the parser's 4 KiB header
+	// buffer at a time — a line, or one buffer of a longer line — after
+	// MaxLineBytes, MaxHeaderFieldBytes and MaxHeaderBytes have admitted that
+	// read, so those smaller budgets win a read that exceeds both. A read
+	// that does not fit is refused whole, so what is charged stays below N by
+	// the part of that read that would have fitted; the diagnostic is located
+	// at the first byte past the budget. Nothing is refunded: the bytes a block
+	// already had admitted stay charged when a per-entity budget refuses that
+	// block, and a child refused by MaxPartCount or MaxMIMEDepth was read
+	// whole and is charged whole. A total of exactly N is not an overflow.
+	//
+	// Exceeding it ends the whole parse: the block that crossed it yields no
+	// header, one limit.total_header_bytes diagnostic names that entity, and
+	// the session's FatalError is published, which Parse (for the message's
+	// own header), every NextPart, Entity.Walk, Entity.ParseStop and
+	// mail.Reader then report. Everything already returned stays valid. A stop
+	// published before it, by a DiagnosticSink or another budget, outranks it,
+	// and a sink refusing its diagnostic ends the parse with the sink's stop.
+	//
+	// The per-entity header budgets are unchanged by it, so disabling one of
+	// those leaves this as the bound on header material.
+	MaxTotalHeaderBytes int64
+
+	// MaxTotalHeaderCount bounds the field candidates MaxHeaderCount counts in
+	// each block — an empty-name candidate included, the empty line that ends
+	// a block excluded — summed over every block MaxTotalHeaderBytes covers.
+	//
+	// A field is counted once it has been read whole. Once all N have been
+	// counted, the next candidate is refused at its first byte, before any of
+	// it is read, so an exhausted count bounds a candidate even with every
+	// byte budget disabled; reaching the end of the input, or the empty line
+	// that ends a block, is not a candidate. A block whose first line begins
+	// with white space is malformed and fails with that error as before; that
+	// line is no candidate, and only the byte budgets bound its length. A
+	// failure ends the whole parse, on the same terms as MaxTotalHeaderBytes,
+	// with one limit.total_header_count diagnostic located at the refused
+	// candidate.
+	MaxTotalHeaderCount int64
 
 	// MaxParameterCount bounds the parameters parsed from one header field,
 	// such as one Content-Type or Content-Disposition.
@@ -517,6 +581,8 @@ var limitFields = []limitField{
 	{"MaxHeaderFieldBytes", func(l *Limits) *int64 { return &l.MaxHeaderFieldBytes }, defaultMaxHeaderFieldBytes},
 	{"MaxHeaderCount", func(l *Limits) *int64 { return &l.MaxHeaderCount }, defaultMaxHeaderCount},
 	{"MaxLineBytes", func(l *Limits) *int64 { return &l.MaxLineBytes }, defaultMaxLineBytes},
+	{"MaxTotalHeaderBytes", func(l *Limits) *int64 { return &l.MaxTotalHeaderBytes }, defaultMaxTotalHeaderBytes},
+	{"MaxTotalHeaderCount", func(l *Limits) *int64 { return &l.MaxTotalHeaderCount }, defaultMaxTotalHeaderCount},
 	{"MaxParameterCount", func(l *Limits) *int64 { return &l.MaxParameterCount }, defaultMaxParameterCount},
 	{"MaxParameterSegments", func(l *Limits) *int64 { return &l.MaxParameterSegments }, defaultMaxParameterSegments},
 	{"MaxMIMEDepth", func(l *Limits) *int64 { return &l.MaxMIMEDepth }, defaultMaxMIMEDepth},

@@ -154,7 +154,9 @@ func headerLimitDiagnostic(kind textproto.HeaderLimitKind, limit int64, cause er
 // actually enforced.
 func rootHeaderError(err error, session *ParseSession) error {
 	limitErr, refused := textproto.HeaderLimit(err)
-	if session == nil || !refused {
+	// A shared-budget refusal that is not this session's own, which
+	// readWithOptions has already handled, is something an input handed back.
+	if session == nil || !refused || isTotalHeaderKind(limitErr.Kind()) {
 		return err
 	}
 

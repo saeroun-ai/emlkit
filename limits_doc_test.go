@@ -99,7 +99,7 @@ func TestRoadmapBudgetCodes(t *testing.T) {
 }
 
 // checkDocumentedDefaults reads every row row matches out of path and compares
-// it with the resolved defaults, insisting that all eighteen budgets appear
+// it with the resolved defaults, insisting that all twenty budgets appear
 // exactly once.
 func checkDocumentedDefaults(t *testing.T, path string, row *regexp.Regexp) {
 	t.Helper()

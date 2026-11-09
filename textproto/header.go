@@ -745,6 +745,33 @@ type headerScan struct {
 	// callers of readHeader turn into a HeaderLimitError. Only the first is
 	// kept: a block is refused once.
 	refusal *headerRefusal
+
+	// base is where this block begins in its reader's input, which a refusal
+	// of the shared budget is built with; see HeaderBudget.
+	base int64
+
+	// shared is the refusal of the shared budget that refused this block, which
+	// the callers of readHeader return as it is rather than building another.
+	shared *HeaderLimitError
+}
+
+// refuseShared records the shared budget's refusal e as this block's.
+func (s *headerScan) refuseShared(e *HeaderLimitError) error {
+	if s.refusal == nil {
+		s.shared = e
+	}
+	return s.refuse(e.Kind(), e.Limit(), e.UnitOffset()-s.base)
+}
+
+// limitError returns the error a refused block is reported with: the shared
+// budget's own refusal when that is what refused it, and otherwise a new
+// HeaderLimitError for the block that began at s.base.
+func (s *headerScan) limitError() *HeaderLimitError {
+	if s.shared != nil {
+		return s.shared
+	}
+	ref := s.refusal
+	return newHeaderLimitError(ref.kind, ref.limit, s.base, s.base+ref.offset)
 }
 
 // refuse records the first refusal of this block and returns
@@ -794,6 +821,30 @@ func (s *headerScan) chargeField() error {
 	if s.lim.MaxCount > 0 && s.count > s.lim.MaxCount {
 		return s.refuse(HeaderLimitCount, s.lim.MaxCount, s.fieldStart)
 	}
+	if t := s.lim.Total; t != nil {
+		if e := t.chargeField(s.base, s.fieldStart); e != nil {
+			return s.refuseShared(e)
+		}
+	}
+	return nil
+}
+
+// preflightField refuses the field candidate about to begin, before any of it
+// is read, when the shared budget has no field left for it or has already
+// refused. The caller has established that a candidate exists: a byte is there
+// and it does not begin the empty line that ends the block.
+//
+// It comes before every budget of the candidate itself, none of which has
+// seen a byte of it yet. The per-block field count keeps its own timing and is
+// charged with the shared one once the field has been read; see HeaderBudget.
+func (s *headerScan) preflightField() error {
+	t := s.lim.Total
+	if t == nil {
+		return nil
+	}
+	if e := t.preflightField(s.base, s.consumed); e != nil {
+		return s.refuseShared(e)
+	}
 	return nil
 }
 
@@ -830,6 +881,13 @@ func (s *headerScan) consume(l []byte, err error) error {
 	if s.lim.MaxBytes > 0 {
 		if n > s.lim.MaxBytes-s.consumed {
 			return s.refuse(HeaderLimitBytes, s.lim.MaxBytes, 0)
+		}
+	}
+	// The shared budget last: it bounds the widest scope, and charging it is
+	// the commit, so nothing may refuse these bytes after it has admitted them.
+	if t := s.lim.Total; t != nil {
+		if e := t.chargeBytes(n, s.base, s.consumed); e != nil {
+			return s.refuseShared(e)
 		}
 	}
 
@@ -1002,19 +1060,25 @@ func hasContinuationLine(r *bufio.Reader) bool {
 // these are the first bytes of the line it goes on to read either way, and Peek
 // leaves every one of them for it. The same look-ahead already happens one line
 // further on, in hasContinuationLine.
-func atBlockEnd(r *bufio.Reader) bool {
+//
+// candidate reports the other outcome of the same look: a byte is there and it
+// does not begin that empty line, so a field candidate begins here. An input
+// with no byte left — its end, or a failed read — is neither.
+func atBlockEnd(r *bufio.Reader) (end, candidate bool) {
 	b, err := r.Peek(1)
 	if err != nil || len(b) == 0 {
-		return false
+		return false, false
 	}
 	switch b[0] {
 	case '\n':
-		return true
+		return true, false
 	case '\r':
 		b, err := r.Peek(2)
-		return err == nil && len(b) == 2 && b[1] == '\n'
+		if err == nil && len(b) == 2 && b[1] == '\n' {
+			return true, false
+		}
 	}
-	return false
+	return false, true
 }
 
 func readContinuedLineSlice(r *bufio.Reader, scan *headerScan) ([]byte, error) {
@@ -1022,9 +1086,19 @@ func readContinuedLineSlice(r *bufio.Reader, scan *headerScan) ([]byte, error) {
 	// logical field, so it is read outside any field's budget. Settling that
 	// here — from bytes that are looked at and not consumed — is what keeps a
 	// field budget from being spent on a field that is not there.
-	if atBlockEnd(r) {
+	end, candidate := atBlockEnd(r)
+	if end {
 		scan.beginBlockEnd()
 		return readLineSlice(r, nil, scan)
+	}
+
+	// A candidate that the shared field budget has no room for is refused here,
+	// from the byte that proves it exists, rather than after it has been read
+	// whole: no per-block budget may be in force to bound how long it is.
+	if candidate {
+		if err := scan.preflightField(); err != nil {
+			return nil, err
+		}
 	}
 
 	// A logical field begins here and ends where this call does, so its budget
@@ -1169,6 +1243,15 @@ func ReadHeaderLimit(r *bufio.Reader, maxBytes int64) (Header, error) {
 // it with HeaderLimit, which reports only a refusal this package made, so that
 // an r whose underlying reader fails with one of those sentinels, or hands back
 // a HeaderLimitError value of its own, stays the ordinary read failure it is.
+//
+// limits.Total differs from the per-block budgets in three ways; see
+// HeaderBudget. It is cumulative: the block is charged to it on top of what
+// earlier blocks read with the same budget spent. It is checked after the
+// per-block byte budgets, which win a read that exceeds both, and a spent field
+// count refuses the next field candidate at its first byte, before any of it
+// is read. And its refusal is not built for this call: it is the budget's one
+// refusal, the identical value Refusal returns, whose offsets are in the input
+// of whichever reader made it.
 func ReadHeaderLimits(r *bufio.Reader, limits HeaderLimits) (Header, error) {
 	scan := &headerScan{lim: limits}
 	h, err := readHeader(r, scan)
@@ -1177,8 +1260,7 @@ func ReadHeaderLimits(r *bufio.Reader, limits HeaderLimits) (Header, error) {
 		// offset reported, on the same terms Part.HeaderOffset uses: relative
 		// to the input the reader was given. The refused unit's own offset is
 		// measured from there, and is a position in that same input.
-		ref := scan.refusal
-		return h, newHeaderLimitError(ref.kind, ref.limit, 0, ref.offset)
+		return h, scan.limitError()
 	}
 	return h, err
 }

@@ -474,6 +474,11 @@ func readWithOptions(r io.Reader, opts *ReadOptions, session *ParseSession) (*En
 		if stop := session.fatalErr(); stop != nil {
 			return nil, stop
 		}
+		// The parse's shared header budget ran out on this block; its failure
+		// is the whole parse's. See limit_header_total.go.
+		if ref, ok := session.headerTotalRefusal(err); ok {
+			return nil, session.headerTotalFailure(rootContext(session, 0), ref)
+		}
 		return nil, rootHeaderError(err, session)
 	}
 

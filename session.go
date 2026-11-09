@@ -128,6 +128,8 @@ type ParseSession struct {
 	// with the caller's own. Anything that asks about the session's stop in
 	// between waits here rather than being shown an answer that is about to
 	// change. See ParseSession.chargePart and resolvePart in limit_tree.go.
+	// A shared header budget overflow uses the same transition; see claimStop
+	// in limit_header_total.go.
 	partPending chan struct{}
 
 	// decodedUsed is how many bytes the leaf bodies of this parse have
@@ -147,6 +149,13 @@ type ParseSession struct {
 	// published before it that it adopted — and nil before that. A leaf body
 	// recognizes the input's failure by this identity alone; see rawBody.note.
 	inputStop error
+
+	// headerTotal is the one budget every header block of this parse spends,
+	// Limits.MaxTotalHeaderBytes and MaxTotalHeaderCount, or nil while it has
+	// not been needed or both are disabled. It is created once, under mu, by
+	// headerLimits; see limit_header_total.go.
+	headerTotal     *textproto.HeaderBudget
+	headerTotalInit bool
 }
 
 // newParseSession returns an empty session that records the profile and
@@ -260,7 +269,25 @@ func (s *ParseSession) headerLimits() textproto.HeaderLimits {
 		MaxFieldBytes: l.MaxHeaderFieldBytes,
 		MaxCount:      l.MaxHeaderCount,
 		MaxLineBytes:  l.MaxLineBytes,
+		Total:         s.headerBudget(l),
 	}
+}
+
+// headerBudget returns the budget every header block of this parse shares,
+// creating it on first use, or nil when both of its budgets are disabled. Every
+// call returns the same value, so the message's own header and every part's at
+// any depth spend one budget. LimitDisabled is negative, which is what textproto
+// reads as one budget being off.
+func (s *ParseSession) headerBudget(l Limits) *textproto.HeaderBudget {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.headerTotalInit {
+		s.headerTotalInit = true
+		if l.MaxTotalHeaderBytes != LimitDisabled || l.MaxTotalHeaderCount != LimitDisabled {
+			s.headerTotal = textproto.NewHeaderBudget(l.MaxTotalHeaderBytes, l.MaxTotalHeaderCount)
+		}
+	}
+	return s.headerTotal
 }
 
 // record adds a diagnostic to the session and delivers it to the configured
@@ -442,8 +469,8 @@ func (s *ParseSession) publishStop(f FatalError) FatalError {
 // rather than a defect of the message, and publishStop is where that ordering
 // lives.
 //
-// fatalErr waits, at most once and only while a MaxPartCount overflow is being
-// turned into that published value. Deciding it means delivering a diagnostic to
+// fatalErr waits, at most once and only while a MaxPartCount or shared header
+// budget overflow is being turned into that published value. Deciding it means delivering a diagnostic to
 // the caller's sink, and only the sink's answer says which of the two failures
 // the parse ends with; a scope that asked in the middle of that would otherwise
 // have to be given an answer that was about to change. Waiting is safe under the

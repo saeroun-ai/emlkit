@@ -107,8 +107,9 @@ message.
 
 Errors and diagnostics answer different questions, so read both: an error says
 whether a scope could continue, the session says what was observed. `Parse`
-enforces **thirteen** budgets today — `MaxInputBytes`, `MaxHeaderBytes`,
-`MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`, `MaxParameterCount`,
+enforces **fifteen** budgets today — `MaxInputBytes`, `MaxHeaderBytes`,
+`MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`, `MaxTotalHeaderBytes`,
+`MaxTotalHeaderCount`, `MaxParameterCount`,
 `MaxParameterSegments`, `MaxMIMEDepth`, `MaxPartCount`, `MaxDiagnosticCount`,
 `MaxEncodedBodyBytes`, `MaxDecodedBodyBytes` and `MaxTotalDecodedBytes`.
 `MaxDiagnosticCount` (default 1000) caps diagnostics, not parsing: the

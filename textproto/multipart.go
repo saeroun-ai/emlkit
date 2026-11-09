@@ -140,7 +140,7 @@ func newPart(mr *MultipartReader) (*Part, error) {
 	// The delimiter line that introduced this part has already been consumed,
 	// so the reader is standing on the first byte of the part's header block.
 	bp := &Part{mr: mr, headerOffset: mr.offset()}
-	scan := &headerScan{lim: mr.limits}
+	scan := &headerScan{lim: mr.limits, base: bp.headerOffset}
 	if err := bp.populateHeaders(scan); err != nil {
 		// Only this reader's own budgets make a HeaderLimitError. The test is
 		// against the sentinel no reader can present, not against the ones it
@@ -151,8 +151,7 @@ func newPart(mr *MultipartReader) (*Part, error) {
 			// failure rather than lost with it. The refused line or field is
 			// placed the same way: its offset within the block plus where the
 			// block itself began.
-			ref := scan.refusal
-			return nil, newHeaderLimitError(ref.kind, ref.limit, bp.headerOffset, bp.headerOffset+ref.offset)
+			return nil, scan.limitError()
 		}
 		return nil, err
 	}
@@ -384,13 +383,18 @@ func (r *MultipartReader) SetMaxHeaderBytes(n int64) {
 // SetHeaderLimits applies limits to every part this reader returns, and to the
 // framing lines it reads between them.
 //
-// The header budgets are per part and are never cumulative, on the terms
-// SetMaxHeaderBytes describes and HeaderLimits states: each part's header block
-// is read under the whole of every budget. A part whose header block exceeds one
-// ends the iteration, with a *HeaderLimitError naming the budget and the
-// position, and every later call returns io.EOF, because a block that overran
-// its budget leaves the input somewhere inside a part this reader cannot
-// resynchronize to. The parts already returned stay valid and readable.
+// The per-block header budgets are per part and are never cumulative, on the
+// terms SetMaxHeaderBytes describes and HeaderLimits states: each part's header
+// block is read under the whole of every one. HeaderLimits.Total is the
+// exception: every part's header block is charged to that one shared budget,
+// together with whatever else reads with it, as ReadHeaderLimits describes. A
+// part whose header block exceeds any budget ends the iteration, with a
+// *HeaderLimitError naming the budget and the position — for Total, the shared
+// budget's one refusal — and every later call returns io.EOF, because a block
+// that overran its budget leaves the input somewhere inside a part this reader
+// cannot resynchronize to. The parts already returned stay valid and readable.
+// A part with no header block at all charges nothing, and neither do the
+// framing lines, the preamble, the epilogue or the parts' bodies.
 //
 // HeaderLimits.MaxLineBytes reaches further than the header blocks. It also
 // bounds the framing lines this reader has to materialize as lines: the

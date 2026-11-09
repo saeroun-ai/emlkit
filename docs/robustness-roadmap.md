@@ -279,6 +279,8 @@ specific codes, but must not reuse an existing code for another meaning.
 - `limit.header_field_bytes`
 - `limit.header_count`
 - `limit.line_bytes`
+- `limit.total_header_bytes`
+- `limit.total_header_count`
 - `limit.parameter_count`
 - `limit.parameter_segments`
 - `limit.mime_depth`
@@ -457,6 +459,8 @@ actually handles.
 | `MaxHeaderFieldBytes` | 64 KiB | bytes of one logical field | `limit.header_field_bytes` |
 | `MaxHeaderCount` | 1 024 | fields per header block | `limit.header_count` |
 | `MaxLineBytes` | 64 KiB | bytes of one physical syntax line | `limit.line_bytes` |
+| `MaxTotalHeaderBytes` | 32 MiB | header-block bytes of the whole parse | `limit.total_header_bytes` |
+| `MaxTotalHeaderCount` | 100 000 | header field candidates of the whole parse | `limit.total_header_count` |
 | `MaxParameterCount` | 256 | parameters per header field | `limit.parameter_count` |
 | `MaxParameterSegments` | 256 | RFC 2231 segments per parameter | `limit.parameter_segments` |
 | `MaxMIMEDepth` | 100 | nested multipart containers | `limit.mime_depth` |
@@ -502,7 +506,8 @@ five more — `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`,
 `MaxParameterCount` and `MaxParameterSegments`. `ROB-001-004` added the two tree
 budgets, `MaxMIMEDepth` and `MaxPartCount`. `ROB-001-009` added
 `MaxInputBytes`. `ROB-001-008` added `MaxDiagnosticCount`. `ROB-001-005` added
-the three body budgets, so **thirteen** budgets are enforced, all of them under
+the three body budgets. `ROB-001-010` added the two shared header totals, so
+**fifteen** budgets are enforced, all of them under
 `Parse` alone.
 
 `MaxEncodedBodyBytes`, `MaxDecodedBodyBytes` and `MaxTotalDecodedBytes`
@@ -780,12 +785,70 @@ identical `FatalError`, and no charset decoder follows it
 error that is or wraps a decoding warning, earlier warnings kept in order, and
 the unstopped paths unchanged).
 
+`MaxTotalHeaderBytes` and `MaxTotalHeaderCount` (`ROB-001-010`,
+[issue #5](https://github.com/saeroun-ai/emlkit/issues/5)) are the cumulative
+bound the per-entity header budgets deliberately are not (the item is in
+Review; issue #5 is not closed by this text). Under `Parse` the
+message's own header block and every part header block the parse reads, at any
+depth (a replaced body's parts included), spend one `textproto.HeaderBudget`
+the session creates; `Read`, `ReadWithOptions` and `New` have none.
+
+- Bytes are what `MaxHeaderBytes` counts per block, summed; field candidates
+  are what `MaxHeaderCount` counts, summed. Multipart framing, preamble,
+  epilogue, bodies, drained bytes, peeks and buffered read-ahead are not
+  charged, nor are a part with no header block or a container drained without
+  being iterated. Each byte is charged once.
+- Bytes are charged per read of the 4 KiB header buffer (a line, or one buffer
+  of a longer line), after the line, field and block budgets admitted that
+  read, so those win a read that exceeds both. A read that does not fit is
+  refused whole and charges nothing: usage stays below `N` by the part of that
+  read that would have fitted, while the diagnostic is located at the first
+  byte past `N`. This depends on the fixed buffer, never on how the source
+  chunks its reads. Nothing is refunded: a block a per-entity budget refuses
+  keeps what it had admitted, and a child refused by `MaxPartCount` or
+  `MaxMIMEDepth` was read whole and is charged whole.
+- A field is counted once read whole. Once `N` fields are counted, the next
+  candidate is refused at its first byte before any of it is read, ahead of
+  every budget of that candidate, so an exhausted count bounds a candidate with
+  every byte budget disabled. The empty line ending a block and an input with
+  no byte left are not candidates. A block whose first line begins with white
+  space keeps its existing malformed-header error: that line is not a
+  candidate, and only byte budgets bound its length.
+- Exceeding either ends the whole parse. The crossing block yields no header,
+  one `limit.total_header_bytes` or `limit.total_header_count` diagnostic names
+  its entity, and one `FatalError` is published through the `MaxPartCount`
+  transition, which `Parse` (for the root), every `NextPart`, `Walk`,
+  `ParseStop` and `mail.Reader` report. A smaller per-entity refusal on the same
+  read keeps its own scope: a child's ends that iterator, and an ancestor may
+  still advance unless the session stops. A stop already published — a sink,
+  `MaxInputBytes` during the same read, another budget — wins with nothing
+  recorded; a sink refusing the diagnostic wins; `MaxDiagnosticCount` may drop
+  the diagnostic but not the stop. Content already returned stays valid.
+- A failure is recognized only as the exact value the session's budget refused
+  with (`HeaderBudget.Refusal`), by pointer comparison; no `Is`, `As` or
+  `Unwrap` of a source error is called for it. A total-kind refusal from
+  anywhere else is an ordinary input error. The budget records its first
+  refusal under its lock, from the charge that did not fit, so `Refusal` and
+  the refusal's position name that charge; it then refuses every later charge,
+  from any reader, with that same value. The wider predicate audit stays with
+  `ROB-120-007` (#16): a part header's source error that unwraps to itself
+  still hangs the pre-existing `errors.Is` in `textproto` `NextPart` (also on
+  `b994934`), which this item does not change.
+- Additions: two `Limits` fields, and in `textproto` the `HeaderBudget` type,
+  `NewHeaderBudget`, `HeaderBudget.Refusal`, `HeaderLimits.Total` and two
+  `HeaderLimitKind` values. Positional `Limits{...}` literals no longer
+  compile. Keyed literals, the zero `Limits` and `DefaultLimits` compile
+  unchanged but enforce the new defaults, so a message they accepted before
+  may now be refused; setting the new fields to `LimitDisabled` restores the
+  earlier behavior. Future embedded-message parsing (`ROB-090`) must pass the
+  same budget to embedded headers.
+
 Every other budget is validated, resolved and reported by `ParseSession.Limits`,
 and nothing consults it yet; their `limit.*` codes in the table are reserved, not
 yet emitted. `ROB-001-004` through `ROB-001-008` add the enforcement that the
-current entity model can exercise, and the diagnostics, behind these same fields
-without changing the shape of `Limits`, so a configuration written against this
-table keeps its meaning.
+current entity model can exercise, and the diagnostics, behind these same fields.
+`ROB-001-010` instead added two fields, with the compatibility effects listed
+above.
 
 There is one explicit dependency exception. `MaxMessageDepth` cannot be enforced
 until `ROB-090-001` makes `message/rfc822` and `message/global` into nested
@@ -966,6 +1029,7 @@ Each applicable test asserts:
 | ROB-001-007 | Planned | Detect repeated no-progress reads while allowing legal transient behavior. | Adversarial reader tests. |
 | ROB-001-008 | Done | Cap diagnostics under `Parse` with `MaxDiagnosticCount`, and emit one terminal `limit.diagnostic_count` entry in the last slot (`N-1` ordinary, request `N` replaced, later requests omitted without copy, retention or sink call) while parsing continues. | Diagnostic storm through public `Parse`: every malformed part healed and returned under the cap; `0`/default/`-1`/`1`/`N-1`/`N`/`N+1`/`math.MaxInt64`; retain/no-retain with sink none/ok/refusing; later input budget and sink stops after the cap; concurrent records, separate sessions and reentrant inspection. |
 | ROB-001-009 | Done | Enforce `MaxInputBytes` under `Parse` once, at the raw source shared by every header, body, multipart and skip/drain read: `N` bytes are admitted, a proven byte `N+1` (at most one proof byte, never handed on) records one `limit.input_bytes` diagnostic and publishes the session stop; `Read`/`ReadWithOptions` unchanged. | `N-1/N/N+1` root header and body, nested and skipped parts, chunkings, `(n>0, EOF/error)`, delayed EOF, `(0, nil)`, empty reads, default/disabled/`math.MaxInt64`, sink-stop and header-budget precedence. |
+| ROB-001-010 | Done | Enforce session-wide `MaxTotalHeaderBytes` (32 MiB) and `MaxTotalHeaderCount` (100,000) under `Parse`, shared by the root and every scanned child header, while preserving per-entity limits and legacy entry points. | Exact boundaries, wide/deep trees, count exhaustion preflight before allocating the next candidate, no-refund accounting for refused headers, no body/framing/read-ahead charges, session-stop identity, sink/cap precedence, provenance, chunk/error/default/disabled/MaxInt64/386 tests, and independent QA. Independent bounded QA, full tests/race, corrected scoped fuzzing and compatibility review passed; issue #5 awaits remote inclusion of the new local commit. |
 
 ### ROB-010 — Input and message framing
 
@@ -1699,6 +1763,15 @@ bounds a body nor decoding (`ROB-001-005`, #4), cancels a read (`ROB-001-006`,
 start or complete any of them, the shared profile engine (#17), or raw replay
 (#41).
 
+**Exception — `ROB-001-010`.** Added before implementation for
+[issue #5](https://github.com/saeroun-ai/emlkit/issues/5), after `ROB-001-005`
+was reviewed and committed. It completes cumulative header accounting before
+still-Planned `ROB-001-006`/`ROB-001-007` and `ROB-010` onward. It depends on
+the existing input/session/header infrastructure, not on cancellation,
+no-progress detection, general header recovery, embedded-message parsing or
+raw replay. Those items are not advanced by this work. Future embedded-message
+parsing must reuse the same session budget rather than resetting it.
+
 ## 9. Per-item implementation protocol
 
 Each Claude Code execution receives exactly one ledger ID and must:
@@ -1767,3 +1840,33 @@ Codex reviewed `ROB-001-009` for [issue #3](https://github.com/saeroun-ai/emlkit
 Codex reviewed `ROB-001-008` for [issue #8](https://github.com/saeroun-ai/emlkit/issues/8): the independent public cap matrix passes 196 cases; input-after-cap, terminal sink refusal and Strict local failures retain their own errors and preserve valid siblings. A 10,000-part malformed-parameter storm returns every body while the default cap delivers exactly 1,000 callbacks with no retained diagnostics in sink-only mode. The final full race suite, build, formatting and whitespace checks pass on Go 1.26.10 linux/amd64; the executor also passed the full standard suite, focused 386 checks and all prior input/healing/opaque probes. Review corrected the terminal Action so it does not promise continuation after an independent failure, qualified diagnostic completeness claims, verified FatalError keeps its original diagnostic, and fixed the enforced-budget test map and a test failure-path index. MaxDiagnosticCount reserves its final slot and does not stop parsing; producer-side formatting can still cost work after recording is capped. Both delegation permission-denial arrays were empty. Baseline vet categories remain unchanged.
 
 Codex reviewed ROB-001-005 for issue #4. Independent public QA passed 168 body-budget cases, 1,080 encoded/charset cases over source and destination read sizes, and six generated-stream default boundary checks at 128/128/512 MiB. Local-limit sibling recovery and the local-then-total stop regression pass. Prior input 2,160 + multipart 288 + decoder 200 cases, diagnostic matrix 196 and 10,000-part storm, heal 240, opaque 288 and bounded-mail 36 all pass on the final functional code. Full non-short race passed in all five packages on Go 1.26.10 linux/amd64, as did build, formatting, whitespace and non-baseline vet checks. Codex input fuzzing passed 30 s / 4,253,656 executions with the scoped oracle; executor body fuzzing and 386 checks also passed. Review fixed dropped global-stop precedence for a previously failed body and restored input-limit errors masked by QP (also reproduced on clean c484941). A new arbitrary errors.As call in the guard was rejected after process-isolated source-cycle and As-panic regressions; the final implementation uses the actual input-limiter failure identity and only bounded stdlib-join layers. Both independent hostile-source probes now return the same source error normally. The wider predicate audit remains #16. Only ROB-001-005 is completed; ROB-070-010, ROB-080-008, cancellation/no-progress, and raw replay remain separate. Raw WriteTo stays conditional and one-shot; decoded limits count bytes and may cut UTF-8, container raw views are governed by MaxInputBytes, and per-body refusals permit later siblings within other budgets. All delegation permission-denial arrays were empty. Plain vet retains the documented composites and WriteTo-signature warnings. Final review also corrected source-error wording, prefix retention under interacting budgets and branch-neutral diagnostic actions; the final wording-only update passed focused tests and formatting without repeating unrelated full fuzz/race runs.
+
+Codex reviewed `ROB-001-010` for [issue #5](https://github.com/saeroun-ai/emlkit/issues/5).
+Independent public QA passed 2,352 header tree/boundary/chunk/path/offset cases,
+199 sink/cap/mail/provenance checks, three count-only endless-candidate probes,
+and six lazily generated default boundary checks (32 MiB and 100,000 fields).
+Prior input (2,160 + 288 + 200), body (168 + 1,080), diagnostic (196 and a
+10,000-part storm), heal (240), opaque (288) and bounded-mail (36) probes passed
+on the final functional code. Full non-short tests and race passed in all five
+packages, as did build, focused 386, gofmt/diff checks and vet excluding the two
+existing warning categories. A final full test rerun after the test-generator
+and wording corrections passed. Scoped header fuzzing passed 30 seconds and
+1,033,524 executions. The empty LF multipart seed is retained; its pre-existing
+wrapped-EOF behavior is tracked in #29, and the generator now creates nonempty
+containers without weakening budget outcome assertions. Review fixed atomic
+first-refusal publication and exact offsets across concurrent shared readers.
+The pre-existing cyclic child-source error hang was independently reproduced on
+clean `b994934` and is tracked in #16, not claimed fixed here.
+
+An earlier unbounded preflight mutation caused a host OOM (textproto.test,
+about 39 GiB RSS); that run is failed evidence. The interrupted implementation
+left no final JSON, and its mutation was restored before validation. New
+adversarial sources are capped at 64 KiB and concurrent loops are finite.
+`scripts/qa-bounded.py` and `CLAUDE.md` now require enforced per-job RAM 1.5 GiB,
+zero swap, CPU quota two cores, 128 tasks and deadlines; the cgroup settings,
+nonzero exit propagation and deadline termination were verified. All subsequent
+build/test/fuzz/QA runs used these limits, one QA job at a time. The successful
+fuzz run's observed memory peak was 236,122,112 bytes. Completed delegation
+JSONs have empty permission-denial arrays; the interrupted run is not a success.
+This operational safeguard does not complete CI (#14). The wider cancellation,
+no-progress, embedded-message, raw-replay and predicate-audit items remain open.

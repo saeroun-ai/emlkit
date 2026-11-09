@@ -1,0 +1,1065 @@
+package message
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/saeroun-ai/emlkit/textproto"
+)
+
+// totalBlock is one header block of a totalFixture in the order the parse
+// reads it, with what it costs and what reading it makes available.
+type totalBlock struct {
+	path       []int
+	offset     int64   // where the block starts in the message
+	header     string  // the block's wire bytes
+	candidates []int64 // offsets, within the block, of its field candidates
+	bodies     []string
+}
+
+// totalFixture is a message described block by block, so that every expected
+// total, offset and recovered body is derived from the fixture itself.
+type totalFixture struct {
+	text   string
+	blocks []totalBlock
+}
+
+// candidatesOf returns where each field candidate of a header block begins:
+// every line that is neither a fold nor the empty line ending the block.
+func candidatesOf(header string) []int64 {
+	var out []int64
+	for off := 0; off < len(header); {
+		end := strings.IndexByte(header[off:], '\n') + off + 1
+		line := strings.TrimRight(header[off:end], "\r\n")
+		if line != "" && line[0] != ' ' && line[0] != '\t' {
+			out = append(out, int64(off))
+		}
+		off = end
+	}
+	return out
+}
+
+// newTotalFixture builds the tree every test below shares: a root container,
+// a leaf with two fields, a part with no header block, a nested container
+// whose second child carries an empty-name candidate, a part with an empty
+// header block, and a folded leaf. eol is the line ending.
+func newTotalFixture(eol string) totalFixture {
+	var b strings.Builder
+	var f totalFixture
+	header := func(path []int, h string, bodies ...string) {
+		h = strings.ReplaceAll(h, "\n", eol)
+		f.blocks = append(f.blocks, totalBlock{path: path, offset: int64(b.Len()), header: h, candidates: candidatesOf(h), bodies: bodies})
+		b.WriteString(h)
+	}
+	w := func(s string) { b.WriteString(strings.ReplaceAll(s, "\n", eol)) }
+
+	header(nil, "Content-Type: multipart/mixed; boundary=OUTER\n\n")
+	w("preamble that is not a header\n--OUTER\n")
+	header([]int{0}, "Content-Type: text/plain\nX-A: 1\n\n", "one", "")
+	w("one\n--OUTER\n")
+	// A part with no header block: two delimiters in a row. It costs nothing
+	// and is returned with the block before it.
+	w("--OUTER\n")
+	header([]int{2}, "Content-Type: multipart/alternative; boundary=INNER\n\n")
+	w("--INNER\n")
+	header([]int{2, 0}, "Content-Type: text/plain\n\n", "deep")
+	w("deep\n--INNER\n")
+	header([]int{2, 1}, ": empty name\nX-B: 2\n\n", "deep2")
+	w("deep2\n--INNER--\ninner epilogue\n--OUTER\n")
+	header([]int{3}, "\n", "four")
+	w("four\n--OUTER\n")
+	header([]int{4}, "X-C: 3\n folded\n\n", "five")
+	w("five\n--OUTER--\nouter epilogue\n")
+	f.text = b.String()
+	return f
+}
+
+// cost is what one block charges to the named total.
+func (b totalBlock) cost(kind string) int64 {
+	if kind == "bytes" {
+		return int64(len(b.header))
+	}
+	return int64(len(b.candidates))
+}
+
+// totalsOnly returns every budget disabled except the named total, so that what
+// a test observes is that budget alone.
+func totalsOnly(kind string, limit int64) Limits {
+	l := allDisabled()
+	if kind == "bytes" {
+		l.MaxTotalHeaderBytes = limit
+	} else {
+		l.MaxTotalHeaderCount = limit
+	}
+	return l
+}
+
+func totalCode(kind string) Code {
+	if kind == "bytes" {
+		return CodeLimitTotalHeaderBytes
+	}
+	return CodeLimitTotalHeaderCount
+}
+
+// expectTotal returns what a parse of f under limit yields: the bodies recovered,
+// and the block refused with where (nil when the whole message fits).
+func (f totalFixture) expectTotal(kind string, limit int64) (bodies []string, refused *totalBlock, at int64) {
+	bodies = []string{}
+	var used int64
+	for i := range f.blocks {
+		blk := &f.blocks[i]
+		if c := blk.cost(kind); used+c > limit {
+			if kind == "bytes" {
+				return bodies, blk, blk.offset + limit - used
+			}
+			return bodies, blk, blk.offset + blk.candidates[limit-used]
+		}
+		used += blk.cost(kind)
+		bodies = append(bodies, blk.bodies...)
+	}
+	return bodies, nil, 0
+}
+
+// boundaries returns every exact total at a block boundary, and one either
+// side of it.
+func (f totalFixture) boundaries(kind string) []int64 {
+	seen := map[int64]bool{}
+	var out []int64
+	var used int64
+	for _, b := range f.blocks {
+		used += b.cost(kind)
+		for _, d := range []int64{-1, 0, 1} {
+			if v := used + d; v >= 1 && !seen[v] {
+				seen[v] = true
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+// checkTotalStop pins the one stop a total failure publishes: a FatalError
+// carrying exactly one recorded diagnostic of the total's code, naming the
+// refused block's entity and the exact position, and the identical value from
+// every scope that reports it.
+func checkTotalStop(t *testing.T, session *ParseSession, err error, kind string, limit int64, blk *totalBlock, at int64) {
+	t.Helper()
+	if !IsFatal(err) {
+		t.Fatalf("err = %v, want a FatalError", err)
+	}
+	if stop := session.fatalErr(); stop == nil || error(stop) != err {
+		t.Errorf("session stop = %v, want the identical %v", stop, err)
+	}
+	var fe FatalError
+	errors.As(err, &fe)
+	d, ok := fe.Diagnostic()
+	if !ok || d.Code != totalCode(kind) {
+		t.Fatalf("fatal diagnostic = %+v, want %s", d, totalCode(kind))
+	}
+	diags := session.Diagnostics()
+	if len(diags) != 1 || diags[0].Code != totalCode(kind) || diags[0].Severity != SeverityLimitExceeded {
+		t.Fatalf("Diagnostics() = %v, want one %s", codesOfDiags(diags), totalCode(kind))
+	}
+	if !reflect.DeepEqual(diags[0].Path, blk.path) && !(len(diags[0].Path) == 0 && len(blk.path) == 0) {
+		t.Errorf("Path = %v, want %v", diags[0].Path, blk.path)
+	}
+	if diags[0].Location.Offset != at {
+		t.Errorf("Offset = %d, want %d", diags[0].Location.Offset, at)
+	}
+	if !strings.Contains(diags[0].Message, fmt.Sprint(limit)) {
+		t.Errorf("Message = %q, want the budget %d", diags[0].Message, limit)
+	}
+	sentinel := textproto.ErrHeaderTooBig
+	if kind == "count" {
+		sentinel = textproto.ErrTooManyHeaderFields
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("errors.Is(err, %v) = false", sentinel)
+	}
+}
+
+// TestParse_totalHeaders_boundaries pins both totals at every block boundary
+// and one either side of it, over every line ending and input chunking: a
+// message within the total is read whole with nothing recorded, and one past
+// it is stopped at exactly the block that crossed it, keeping every body
+// returned before.
+func TestParse_totalHeaders_boundaries(t *testing.T) {
+	for _, eol := range []string{"\r\n", "\n"} {
+		f := newTotalFixture(eol)
+		for _, kind := range []string{"bytes", "count"} {
+			for _, limit := range f.boundaries(kind) {
+				for name, src := range chunkedSources(f.text) {
+					verifyTotalParse(t, fmt.Sprintf("%s %q limit %d %s", kind, eol, limit, name), f, kind, limit, src())
+				}
+			}
+		}
+	}
+}
+
+// verifyTotalParse parses f from src under one total and holds the result to
+// what the fixture predicts.
+func verifyTotalParse(t *testing.T, label string, f totalFixture, kind string, limit int64, src io.Reader) {
+	t.Helper()
+	wantBodies, refused, at := f.expectTotal(kind, limit)
+	session, e, err := Parse(src, &ParseOptions{Limits: totalsOnly(kind, limit)})
+	if refused != nil && refused.path == nil {
+		if e != nil {
+			t.Fatalf("%s: entity returned for a refused message header", label)
+		}
+		checkTotalStop(t, session, err, kind, limit, refused, at)
+		return
+	}
+	if err != nil {
+		t.Fatalf("%s: Parse() = %v", label, err)
+	}
+	got := readTree(e)
+	if !reflect.DeepEqual(got.bodies, wantBodies) && !(len(got.bodies) == 0 && len(wantBodies) == 0) {
+		t.Errorf("%s: bodies = %q, want %q", label, got.bodies, wantBodies)
+	}
+	if refused == nil {
+		if got.err != nil || session.Diagnostics() != nil {
+			t.Errorf("%s: (%v, %v), want a clean parse", label, got.err, codesOfDiags(session.Diagnostics()))
+		}
+		return
+	}
+	checkTotalStop(t, session, got.err, kind, limit, refused, at)
+	if e.ParseStop() != got.err {
+		t.Errorf("%s: ParseStop() = %v, want the identical stop", label, e.ParseStop())
+	}
+	// Walk reports the identical stop too.
+	if werr := e.Walk(func([]int, *Entity, error) error { return nil }); werr != got.err {
+		t.Errorf("%s: Walk() = %v, want the identical stop", label, werr)
+	}
+}
+
+// genTotalFixture builds a valid multipart tree from seed: nested containers,
+// leaves with folded and empty-name fields, empty header blocks, and parts with
+// no header block. Every body is plain and identity-encoded, so the oracle is
+// exact and no decoder's handling of malformed input is involved.
+//
+// Every container holds one to four parts, as RFC 2046 requires at least one.
+// A container with none would be framed by its closing delimiter alone, which
+// tells the multipart reader nothing about the line ending; with LF endings it
+// is then not recognized and iteration ends with a wrapped EOF. That is
+// existing framing behavior, unchanged by the header totals and reproduced on
+// b994934, and outside what this fixture is meant to exercise.
+func genTotalFixture(seed []byte, eol string) totalFixture {
+	i := 0
+	next := func() byte {
+		if i >= len(seed) {
+			return 0
+		}
+		i++
+		return seed[i-1]
+	}
+	var b strings.Builder
+	var f totalFixture
+	addBlock := func(path []int, h string) {
+		f.blocks = append(f.blocks, totalBlock{path: append([]int(nil), path...), offset: int64(b.Len()), header: h, candidates: candidatesOf(h)})
+		b.WriteString(h)
+	}
+	addBody := func(s string) {
+		last := &f.blocks[len(f.blocks)-1]
+		last.bodies = append(last.bodies, s)
+	}
+	leaves, boundaries := 0, 0
+	var container func(path []int, depth int)
+	container = func(path []int, depth int) {
+		boundaries++
+		bd := fmt.Sprintf("B%d", boundaries)
+		addBlock(path, "Content-Type: multipart/mixed; boundary="+bd+eol+eol)
+		needEOL := false
+		for c := range 1 + int(next()%4) {
+			if needEOL {
+				b.WriteString(eol)
+			}
+			b.WriteString("--" + bd + eol)
+			child := append(append([]int(nil), path...), c)
+			needEOL = true
+			switch k := next() % 4; {
+			case k == 3 && depth < 3:
+				container(child, depth+1)
+			case k == 2:
+				// No header block: the next delimiter follows at once.
+				addBody("")
+				needEOL = false
+			case k == 1:
+				addBlock(child, eol)
+				leaves++
+				body := fmt.Sprintf("b%d", leaves)
+				addBody(body)
+				b.WriteString(body)
+			default:
+				var h strings.Builder
+				for range 1 + int(next()%3) {
+					flag := next()
+					if flag%5 == 0 {
+						h.WriteString(": empty name")
+					} else {
+						fmt.Fprintf(&h, "X-F%d: v", flag%7)
+					}
+					if flag%3 == 0 {
+						h.WriteString(eol + " folded")
+					}
+					h.WriteString(eol)
+				}
+				h.WriteString(eol)
+				addBlock(child, h.String())
+				leaves++
+				body := fmt.Sprintf("b%d", leaves)
+				addBody(body)
+				b.WriteString(body)
+			}
+		}
+		if needEOL {
+			b.WriteString(eol)
+		}
+		b.WriteString("--" + bd + "--")
+	}
+	container(nil, 0)
+	b.WriteString(eol + "epilogue" + eol)
+	f.text = b.String()
+	return f
+}
+
+// FuzzParse_totalHeaders holds generated valid trees to the exact outcome the
+// fixture predicts under either total, across line endings and chunkings: the
+// bodies before the crossing block, one diagnostic at the exact place, and the
+// identical stop from every scope.
+func FuzzParse_totalHeaders(f *testing.F) {
+	f.Add([]byte{3, 0, 1, 3, 2, 0, 3, 1, 2, 4, 5}, uint16(50), uint8(0))
+	f.Add([]byte{4, 3, 4, 0, 2, 2, 1, 3, 3, 0, 0}, uint16(7), uint8(3))
+	f.Add([]byte{2, 2, 1}, uint16(1), uint8(6))
+	f.Fuzz(func(t *testing.T, seed []byte, n uint16, mode uint8) {
+		if len(seed) > 512 {
+			return
+		}
+		eol, kind := "\r\n", "bytes"
+		if mode&1 != 0 {
+			eol = "\n"
+		}
+		if mode&2 != 0 {
+			kind = "count"
+		}
+		fx := genTotalFixture(seed, eol)
+		var total int64
+		for _, b := range fx.blocks {
+			total += b.cost(kind)
+		}
+		limit := 1 + int64(n)%(total+2)
+		var src io.Reader = &chunkReader{s: fx.text, n: 1 + int(mode>>2)}
+		if mode>>2 == 63 {
+			src = strings.NewReader(fx.text)
+		}
+		verifyTotalParse(t, fmt.Sprintf("%s limit %d", kind, limit), fx, kind, limit, src)
+	})
+}
+
+// TestParse_totalHeaders_everyIteratorStops pins that a total failure deep in
+// the tree stops the iterators above it too, with the identical value, and
+// that bodies already returned stay readable.
+func TestParse_totalHeaders_everyIteratorStops(t *testing.T) {
+	f := newTotalFixture("\r\n")
+	// Exactly through [2, 0]: [2, 1] is refused.
+	var limit int64
+	for _, b := range f.blocks[:4] {
+		limit += b.cost("bytes")
+	}
+	_, e, err := Parse(strings.NewReader(f.text), &ParseOptions{Limits: totalsOnly("bytes", limit)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer := e.MultipartReader()
+	var kept []*Entity
+	for range 3 {
+		p, err := outer.NextPart()
+		if err != nil {
+			t.Fatal(err)
+		}
+		kept = append(kept, p)
+	}
+	inner := kept[2].MultipartReader()
+	deep, err := inner.NextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := io.ReadAll(deep.Body); err != nil || string(b) != "deep" {
+		t.Errorf("deep body = %q, %v", b, err)
+	}
+	_, stop := inner.NextPart()
+	if !IsFatal(stop) {
+		t.Fatalf("inner NextPart() = %v, want the stop", stop)
+	}
+	for i := range 2 {
+		if _, err := inner.NextPart(); err != stop {
+			t.Errorf("inner again %d = %v", i, err)
+		}
+		if _, err := outer.NextPart(); err != stop {
+			t.Errorf("outer = %v, want the identical stop", err)
+		}
+	}
+	// The entities already returned stay valid.
+	if kept[0].Header.Get("X-A") != "1" || kept[2].Header.Get("Content-Type") == "" {
+		t.Errorf("returned headers changed")
+	}
+}
+
+// TestParse_totalHeaders_refusedChildAccounting pins what refused children
+// leave charged. A block a per-entity budget refuses keeps what the scanner
+// admitted before the refusing read; a child MaxMIMEDepth refuses was read
+// whole and is charged whole. Neither is refunded, and the later sibling fits
+// or fails by exactly that much.
+func TestParse_totalHeaders_refusedChildAccounting(t *testing.T) {
+	const (
+		root   = "Content-Type: multipart/mixed; boundary=B\r\n\r\n"
+		admit  = "X-A: 1\r\n"
+		later  = "X-Z: 9\r\n\r\n"
+		deep   = "Content-Type: multipart/mixed; boundary=C\r\n\r\n"
+		inside = "--C\r\nContent-Type: text/plain\r\n\r\nin\r\n--C--\r\n"
+	)
+	long := "X-Long: " + strings.Repeat("y", 100) + "\r\n"
+
+	t.Run("per-entity refusal", func(t *testing.T) {
+		// The refused child is a container whose own child's header is
+		// refused by MaxHeaderFieldBytes on its second field.
+		text := root + "--B\r\n" + deep + "--C\r\n" + admit + long + "\r\nx\r\n--C--\r\n--B\r\n" + later + "last\r\n--B--\r\n"
+		used := int64(len(root) + len(deep) + len(admit))
+		for _, delta := range []int64{-1, 0} {
+			l := totalsOnly("bytes", used+int64(len(later))+delta)
+			l.MaxHeaderFieldBytes = 50
+			session, e, err := Parse(strings.NewReader(text), &ParseOptions{Limits: l})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mr := e.MultipartReader()
+			c, err := mr.NextPart()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.MultipartReader().NextPart(); !IsFatal(err) || session.fatalErr() != nil {
+				t.Fatalf("refused grandchild = %v, stop %v: want a local failure", err, session.fatalErr())
+			}
+			p, err := mr.NextPart()
+			if delta == 0 {
+				if err != nil {
+					t.Fatalf("later sibling = %v, want it to fit", err)
+				}
+				if b, _ := io.ReadAll(p.Body); string(b) != "last" {
+					t.Errorf("later body = %q", b)
+				}
+				continue
+			}
+			if !IsFatal(err) || session.fatalErr() == nil {
+				t.Errorf("later sibling = %v, want the total stop", err)
+			}
+		}
+	})
+
+	t.Run("depth refusal", func(t *testing.T) {
+		text := root + "--B\r\n" + deep + inside + "--B\r\n" + later + "last\r\n--B--\r\n"
+		used := int64(len(root) + len(deep) + len("Content-Type: text/plain\r\n\r\n"))
+		for _, delta := range []int64{-1, 0} {
+			l := totalsOnly("bytes", used+int64(len(later))+delta)
+			l.MaxMIMEDepth = 1
+			session, e, err := Parse(strings.NewReader(text), &ParseOptions{Limits: l})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mr := e.MultipartReader()
+			c, err := mr.NextPart()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.MultipartReader().NextPart(); !IsFatal(err) || session.fatalErr() != nil {
+				t.Fatalf("too deep child = %v, want a local failure", err)
+			}
+			_, err = mr.NextPart()
+			if (delta == 0) != (err == nil) {
+				t.Errorf("limit%+d: later sibling = %v", delta, err)
+			}
+		}
+	})
+
+	t.Run("part count first sees the total", func(t *testing.T) {
+		// The second child crosses the total and would exceed MaxPartCount
+		// too. It reports the total: its header is read before it is counted.
+		first := "X: 1\r\n\r\n"
+		text := root + "--B\r\n" + first + "a\r\n--B\r\n" + later + "x\r\n--B--\r\n"
+		l := totalsOnly("bytes", int64(len(root)+len(first)))
+		l.MaxPartCount = 1
+		session, e, err := Parse(strings.NewReader(text), &ParseOptions{Limits: l})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mr := e.MultipartReader()
+		if _, err := mr.NextPart(); err != nil {
+			t.Fatal(err)
+		}
+		_, err = mr.NextPart()
+		if codes := codesOfDiags(session.Diagnostics()); !reflect.DeepEqual(codes, []Code{CodeLimitTotalHeaderBytes}) || !IsFatal(err) {
+			t.Errorf("(%v, %v), want the total", codes, err)
+		}
+	})
+}
+
+// TestParse_totalHeaders_notCharged pins what the totals never see: a container
+// drained without being iterated, a body read directly instead of iterated,
+// and multipart framing, preamble and epilogue.
+func TestParse_totalHeaders_notCharged(t *testing.T) {
+	const root = "Content-Type: multipart/mixed; boundary=B\r\n\r\n"
+	const second = "X: 2\r\n\r\n"
+	nested := "Content-Type: multipart/mixed; boundary=C\r\n\r\n" + strings.Repeat("--C\r\nX-N: n\r\n\r\nn\r\n", 50) + "--C--\r\n"
+	text := root + strings.Repeat("preamble\r\n", 50) + "--B\r\n" + nested + "--B\r\n" + second + "two\r\n--B--\r\n" + strings.Repeat("epilogue\r\n", 50)
+	exact := int64(len(root) + len("Content-Type: multipart/mixed; boundary=C\r\n\r\n") + len(second))
+
+	for _, delta := range []int64{-1, 0} {
+		session, e, err := Parse(strings.NewReader(text), &ParseOptions{Limits: totalsOnly("bytes", exact+delta)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mr := e.MultipartReader()
+		if _, err := mr.NextPart(); err != nil {
+			t.Fatal(err)
+		}
+		// The container's parts are never iterated; NextPart drains them.
+		p, err := mr.NextPart()
+		if delta < 0 {
+			if session.fatalErr() == nil || err != error(session.fatalErr()) {
+				t.Errorf("limit-1: %v, want the stop", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("second = %v", err)
+		}
+		if b, _ := io.ReadAll(p.Body); string(b) != "two" {
+			t.Errorf("second body = %q", b)
+		}
+		if _, err := mr.NextPart(); err != io.EOF {
+			t.Errorf("end = %v", err)
+		}
+	}
+
+	// Reading a container's body directly charges none of its parts' headers.
+	_, e, err := Parse(strings.NewReader(text), &ParseOptions{Limits: totalsOnly("bytes", int64(len(root)))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(e.Body); err != nil {
+		t.Errorf("raw body = %v", err)
+	}
+}
+
+// TestParse_totalHeaders_replacedBody pins that the parts of a body the caller
+// replaced are parts of the same parse and spend the same totals.
+func TestParse_totalHeaders_replacedBody(t *testing.T) {
+	const root = "Content-Type: multipart/mixed; boundary=B\r\n\r\n"
+	replacement := "--B\r\nX: 1\r\n\r\none\r\n--B--\r\n"
+	for _, delta := range []int64{-1, 0} {
+		session, e, err := Parse(strings.NewReader(root+"--B--\r\n"), &ParseOptions{Limits: totalsOnly("count", 2+delta)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.Body = strings.NewReader(replacement)
+		_, err = e.MultipartReader().NextPart()
+		if (delta == 0) != (err == nil) {
+			t.Errorf("limit%+d: NextPart() = %v", delta, err)
+		}
+		if delta < 0 {
+			d := session.Diagnostics()
+			if len(d) != 1 || d[0].Code != CodeLimitTotalHeaderCount || d[0].Location != (Location{}) {
+				t.Errorf("Diagnostics() = %+v, want one with no position", d)
+			}
+		}
+	}
+}
+
+// errEndlessHeaderCap is what endlessHeader fails with once it has delivered
+// endlessHeaderCap bytes: a budget that does not stop the candidate fails the
+// test with a bounded read instead of exhausting memory.
+var errEndlessHeaderCap = errors.New("test safety cap: endless header read to its cap")
+
+const endlessHeaderCap = 64 << 10
+
+// endlessHeader delivers prefix and then 'a' until endlessHeaderCap bytes in
+// all, counting what it delivered.
+type endlessHeader struct {
+	prefix string
+	n      int64
+}
+
+func (r *endlessHeader) Read(p []byte) (int, error) {
+	if r.n >= endlessHeaderCap {
+		return 0, errEndlessHeaderCap
+	}
+	p = p[:min(int64(len(p)), endlessHeaderCap-r.n)]
+	n := copy(p, r.prefix)
+	r.prefix = r.prefix[n:]
+	for i := n; i < len(p); i++ {
+		p[i] = 'a'
+	}
+	r.n += int64(len(p))
+	return len(p), nil
+}
+
+// TestParse_totalHeaders_countPreflight pins the count's bound on a candidate
+// with every other budget off, MaxInputBytes included: once the count is
+// spent, the next candidate is refused at its first byte, whatever kind of
+// candidate it is, however long it would be. The leading-whitespace line is no
+// candidate, and keeps the malformed-header error it always had.
+func TestParse_totalHeaders_countPreflight(t *testing.T) {
+	const head = "Content-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\n"
+	for _, prefix := range []string{"X: ", ":", "X-no-colon", "bad key\x01", "\r"} {
+		t.Run(fmt.Sprintf("%q", prefix), func(t *testing.T) {
+			src := &endlessHeader{prefix: prefix}
+			session, e, err := Parse(io.MultiReader(strings.NewReader(head), src), &ParseOptions{Limits: totalsOnly("count", 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mr := e.MultipartReader()
+			p, err := mr.NextPart()
+			if errors.Is(err, errEndlessHeaderCap) {
+				t.Fatalf("the candidate was read to the test's %d-byte safety cap", endlessHeaderCap)
+			}
+			_, again := mr.NextPart()
+			if p != nil || err == nil || err != again || session.fatalErr() == nil {
+				t.Fatalf("NextPart() = (%v, %v) then %v, want the identical stop", p, err, again)
+			}
+			blk := &totalBlock{path: []int{0}}
+			checkTotalStop(t, session, err, "count", 1, blk, int64(len(head)))
+			// At most the root's buffer and the part reader's buffer were filled
+			// ahead; nothing of the candidate is read past them.
+			if src.n > 2*4096 {
+				t.Errorf("read %d bytes of the refused candidate, want at most two buffers", src.n)
+			}
+		})
+	}
+
+	t.Run("leading whitespace residual", func(t *testing.T) {
+		text := head + " leading white space\r\n\r\nbody\r\n--x--\r\n"
+		session, e, err := Parse(strings.NewReader(text), &ParseOptions{Limits: totalsOnly("count", 1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.MultipartReader().NextPart()
+		if err == nil || IsFatal(err) || session.Diagnostics() != nil {
+			t.Errorf("NextPart() = %v, %v: want the malformed-header error, undiagnosed", err, codesOfDiags(session.Diagnostics()))
+		}
+	})
+
+	t.Run("non-candidates are free", func(t *testing.T) {
+		// The root's one field spends the count; a part with an empty header
+		// block, and one with none, still come through.
+		text := head + "\r\none\r\n--x\r\n--x\r\n\r\nthree\r\n--x--\r\n"
+		session, got, err := parseUnder(t, text, totalsOnly("count", 1))
+		if err != nil || got.err != nil {
+			t.Fatalf("(%v, %v)", err, got.err)
+		}
+		if want := []string{"one", "", "three"}; !reflect.DeepEqual(got.bodies, want) {
+			t.Errorf("bodies = %q, want %q", got.bodies, want)
+		}
+		if session.Diagnostics() != nil {
+			t.Errorf("Diagnostics() = %v", codesOfDiags(session.Diagnostics()))
+		}
+	})
+}
+
+// TestParse_totalHeaders_precedence pins how a total failure ranks against
+// everything else that can end a parse at the same place.
+func TestParse_totalHeaders_precedence(t *testing.T) {
+	const root = "Content-Type: multipart/mixed; boundary=B\r\n\r\n"
+	// The child's one line is longer than the root's, so a per-entity line or
+	// field budget between the two refuses the child alone.
+	child := "X-A: " + strings.Repeat("0", 100) + "\r\n\r\n"
+	text := root + "--B\r\n" + child + "one\r\n--B--\r\n"
+
+	t.Run("per-entity budget first", func(t *testing.T) {
+		l := totalsOnly("bytes", int64(len(root))+3)
+		l.MaxLineBytes = 60
+		session, e, err := Parse(strings.NewReader(text), &ParseOptions{Limits: l})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.MultipartReader().NextPart()
+		if codes := codesOfDiags(session.Diagnostics()); !reflect.DeepEqual(codes, []Code{CodeLimitLineBytes}) || session.fatalErr() != nil {
+			t.Errorf("(%v, %v), want only the local line refusal", codes, err)
+		}
+	})
+
+	t.Run("count preflight before per-entity budgets", func(t *testing.T) {
+		l := totalsOnly("count", 1)
+		l.MaxHeaderCount, l.MaxLineBytes, l.MaxHeaderFieldBytes = 1, 60, 62
+		session, e, err := Parse(strings.NewReader(text), &ParseOptions{Limits: l})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.MultipartReader().NextPart()
+		if codes := codesOfDiags(session.Diagnostics()); !reflect.DeepEqual(codes, []Code{CodeLimitTotalHeaderCount}) || !IsFatal(err) {
+			t.Errorf("(%v, %v), want the total count", codes, err)
+		}
+	})
+
+	t.Run("sink refusal wins", func(t *testing.T) {
+		refuse := errors.New("caller stop")
+		session, e, err := Parse(strings.NewReader(text), &ParseOptions{
+			Limits:         totalsOnly("bytes", int64(len(root))),
+			DiagnosticSink: DiagnosticSinkFunc(func(*ParseSession, Diagnostic) error { return refuse }),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.MultipartReader().NextPart()
+		if !errors.Is(err, refuse) || error(session.fatalErr()) != err {
+			t.Errorf("NextPart() = %v, want the sink's stop", err)
+		}
+		var fe FatalError
+		if errors.As(err, &fe) {
+			if _, ok := fe.Diagnostic(); ok {
+				t.Errorf("the sink stop carries a diagnostic")
+			}
+		}
+	})
+
+	t.Run("earlier stop wins and records nothing", func(t *testing.T) {
+		calls := 0
+		refuse := errors.New("caller stop")
+		// A parameter diagnostic on the root stops the parse first.
+		params := "Content-Type: multipart/mixed; boundary=B; a=1; b=2\r\n\r\n"
+		l := totalsOnly("bytes", int64(len(params)))
+		l.MaxParameterCount = 1
+		session, e, err := Parse(strings.NewReader(params+"--B\r\n"+child+"one\r\n--B--\r\n"), &ParseOptions{
+			Limits:         l,
+			DiagnosticSink: DiagnosticSinkFunc(func(*ParseSession, Diagnostic) error { calls++; return refuse }),
+		})
+		if e == nil || !errors.Is(err, refuse) {
+			t.Fatalf("Parse() = %v", err)
+		}
+		if mr := e.MultipartReader(); mr != nil {
+			if _, err := mr.NextPart(); !errors.Is(err, refuse) {
+				t.Errorf("NextPart() = %v, want the earlier stop", err)
+			}
+		}
+		if calls != 1 || session.Len() != 1 {
+			t.Errorf("sink calls %d, retained %d: want only the earlier diagnostic", calls, session.Len())
+		}
+	})
+
+	t.Run("diagnostic cap does not hide it", func(t *testing.T) {
+		params := "Content-Type: multipart/mixed; boundary=B; a=1; b=2\r\n\r\n"
+		l := totalsOnly("bytes", int64(len(params)))
+		l.MaxParameterCount, l.MaxDiagnosticCount = 1, 1
+		session, e, err := Parse(strings.NewReader(params+"--B\r\n"+child+"one\r\n--B--\r\n"), &ParseOptions{Limits: l})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.MultipartReader().NextPart()
+		var fe FatalError
+		if !errors.As(err, &fe) {
+			t.Fatalf("NextPart() = %v, want a FatalError", err)
+		}
+		if d, _ := fe.Diagnostic(); d.Code != CodeLimitTotalHeaderBytes {
+			t.Errorf("stop diagnostic = %s", d.Code)
+		}
+		if codes := codesOfDiags(session.Diagnostics()); !reflect.DeepEqual(codes, []Code{CodeLimitDiagnosticCount}) {
+			t.Errorf("Diagnostics() = %v, want only the terminal", codes)
+		}
+	})
+
+	t.Run("input budget during the same read wins", func(t *testing.T) {
+		// The child block has no terminator inside the input budget, so the
+		// header reader needs the byte the input refuses.
+		in := root + "--B\r\nX-A: " + strings.Repeat("q", 200)
+		l := totalsOnly("bytes", int64(len(root))+10)
+		l.MaxInputBytes = int64(len(in))
+		session, e, err := Parse(strings.NewReader(in+"\r\n\r\nx\r\n--B--\r\n"), &ParseOptions{Limits: l})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.MultipartReader().NextPart()
+		if codes := codesOfDiags(session.Diagnostics()); !reflect.DeepEqual(codes, []Code{CodeLimitInputBytes}) || !IsFatal(err) {
+			t.Fatalf("(%v, %v), want the input stop alone", codes, err)
+		}
+	})
+}
+
+// TestParse_totalHeaders_foreignRefusal pins provenance: an input that fails
+// with a total-kind refusal it did not get from this parse — forged, or
+// genuine from another budget — is an ordinary read failure, not a stop.
+func TestParse_totalHeaders_foreignRefusal(t *testing.T) {
+	other := textproto.NewHeaderBudget(1, 0)
+	_, foreign := textproto.ReadHeaderLimits(bufio.NewReader(strings.NewReader("A: 1\r\n\r\n")), textproto.HeaderLimits{Total: other})
+	if foreign == nil {
+		t.Fatal("no foreign refusal")
+	}
+	for name, fail := range map[string]error{
+		"foreign":        foreign,
+		"wrapped":        fmt.Errorf("x: %w", foreign),
+		"forged":         &textproto.HeaderLimitError{},
+		"cyclic":         &cyclicError{},
+		"panicking As":   &trappedError{},
+		"typed nil kind": (*textproto.HeaderLimitError)(nil),
+	} {
+		const root = "Content-Type: multipart/mixed; boundary=B\r\n\r\n--B\r\nX: 1\r\n"
+		for _, at := range []string{"root", "child"} {
+			if name == "cyclic" && at == "child" {
+				// textproto.MultipartReader.NextPart asks a part header's read
+				// failure errors.Is(err, io.EOF), which never returns for an
+				// error that unwraps to itself. That predates this budget and
+				// belongs to the predicate audit of #16.
+				continue
+			}
+			in := root
+			if at == "root" {
+				in = "X: 1\r\n"
+			}
+			session, e, err := Parse(io.MultiReader(strings.NewReader(in), failingReader{fail}), &ParseOptions{Limits: totalsOnly("bytes", 1000)})
+			if at == "child" {
+				if err != nil {
+					t.Fatalf("%s %s: Parse() = %v", name, at, err)
+				}
+				_, err = e.MultipartReader().NextPart()
+			}
+			// A type assertion, so that nothing asks the hostile error anything.
+			if _, fatal := err.(FatalError); err == nil || fatal || session.fatalErr() != nil || session.Diagnostics() != nil {
+				t.Errorf("%s %s: err %v, stop %v, %v: want an ordinary failure", name, at, err, session.fatalErr(), codesOfDiags(session.Diagnostics()))
+			}
+		}
+	}
+}
+
+type failingReader struct{ err error }
+
+func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
+
+// TestParse_totalHeaders_configuration pins the totals' configuration: zero is
+// the default, LimitDisabled turns one off without the other, values below it
+// are rejected, and math.MaxInt64 is a finite budget.
+func TestParse_totalHeaders_configuration(t *testing.T) {
+	big := "Content-Type: multipart/mixed; boundary=B\r\n\r\n" + strings.Repeat("--B\r\nX: 1\r\nY: 2\r\n\r\nb\r\n", 200) + "--B--\r\n"
+
+	for _, l := range []Limits{
+		{MaxTotalHeaderBytes: LimitDisabled, MaxTotalHeaderCount: LimitDisabled},
+		{MaxTotalHeaderBytes: math.MaxInt64, MaxTotalHeaderCount: math.MaxInt64},
+		{},
+	} {
+		session, got, err := parseUnder(t, big, l)
+		if err != nil || got.err != nil || len(got.bodies) != 200 || session.Diagnostics() != nil {
+			t.Errorf("%+v: (%v, %v, %d bodies)", l, err, got.err, len(got.bodies))
+		}
+	}
+	// Disabling one total leaves the other enforced.
+	l := Limits{MaxTotalHeaderBytes: LimitDisabled, MaxTotalHeaderCount: 100}
+	if _, got, _ := parseUnder(t, big, l); !IsFatal(got.err) {
+		t.Errorf("count with bytes disabled = %v", got.err)
+	}
+	l = Limits{MaxTotalHeaderBytes: 500, MaxTotalHeaderCount: LimitDisabled}
+	if _, got, _ := parseUnder(t, big, l); !IsFatal(got.err) {
+		t.Errorf("bytes with count disabled = %v", got.err)
+	}
+	for _, l := range []Limits{{MaxTotalHeaderBytes: -2}, {MaxTotalHeaderCount: math.MinInt64}} {
+		_, e, err := Parse(strings.NewReader(big), &ParseOptions{Limits: l})
+		if e != nil || !errors.Is(err, ErrInvalidLimits) {
+			t.Errorf("%+v: (%v, %v), want ErrInvalidLimits", l, e, err)
+		}
+	}
+	if s, _, _ := Parse(strings.NewReader(big), nil); s.Limits().MaxTotalHeaderBytes != 32<<20 || s.Limits().MaxTotalHeaderCount != 100000 {
+		t.Errorf("defaults = %d, %d", s.Limits().MaxTotalHeaderBytes, s.Limits().MaxTotalHeaderCount)
+	}
+	// Both disabled: no shared budget exists at all.
+	s, _, _ := Parse(strings.NewReader(big), &ParseOptions{Limits: Limits{MaxTotalHeaderBytes: LimitDisabled, MaxTotalHeaderCount: LimitDisabled}})
+	if s.headerLimits().Total != nil {
+		t.Errorf("a shared budget exists with both totals disabled")
+	}
+}
+
+// TestParse_totalHeaders_legacyUnchanged pins that Read and ReadWithOptions
+// have no totals: a message far past both defaults' counterparts at this
+// scale reads whole under them.
+func TestParse_totalHeaders_legacyUnchanged(t *testing.T) {
+	big := "Content-Type: multipart/mixed; boundary=B\r\n\r\n" + strings.Repeat("--B\r\nX: 1\r\nY: 2\r\n\r\nb\r\n", 200) + "--B--\r\n"
+	for _, read := range []func() (*Entity, error){
+		func() (*Entity, error) { return Read(strings.NewReader(big)) },
+		func() (*Entity, error) {
+			return ReadWithOptions(strings.NewReader(big), &ReadOptions{MaxHeaderBytes: -1})
+		},
+	} {
+		e, err := read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := readTree(e); got.err != nil || len(got.bodies) != 200 {
+			t.Errorf("(%v, %d bodies)", got.err, len(got.bodies))
+		}
+	}
+}
+
+// TestParse_totalHeaders_tolerantRepairUnaffected pins that a message whose
+// headers need tolerant repair, within the totals, parses and is diagnosed
+// exactly as it is with the totals off.
+func TestParse_totalHeaders_tolerantRepairUnaffected(t *testing.T) {
+	text := "Content-Type: multipart/mixed; boundary=B; broken\r\n\r\n" +
+		"--B\r\nContent-Type: text/plain; charset=us-ascii; ;\r\n: empty\r\nX; semicolon\r\n\r\none\r\n--B--\r\n"
+	run := func(l Limits) (treeResult, []Code) {
+		session, got, err := parseUnder(t, text, l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got, codesOfDiags(session.Diagnostics())
+	}
+	off := DefaultLimits()
+	off.MaxTotalHeaderBytes, off.MaxTotalHeaderCount = LimitDisabled, LimitDisabled
+	wantTree, wantCodes := run(off)
+	exact := DefaultLimits()
+	exact.MaxTotalHeaderBytes = int64(strings.Index(text, "one\r\n")) - int64(len("--B\r\n"))
+	exact.MaxTotalHeaderCount = 5
+	for _, l := range []Limits{DefaultLimits(), exact} {
+		gotTree, gotCodes := run(l)
+		if !reflect.DeepEqual(gotTree, wantTree) || !reflect.DeepEqual(gotCodes, wantCodes) {
+			t.Errorf("%+v: (%v, %v), want (%v, %v)", l, gotTree, gotCodes, wantTree, wantCodes)
+		}
+	}
+}
+
+// TestParse_totalHeaders_acceptedPathAllocations pins that a parse within the
+// totals allocates no more per header block than one with them disabled,
+// beyond the shared budget itself.
+func TestParse_totalHeaders_acceptedPathAllocations(t *testing.T) {
+	text := "Content-Type: multipart/mixed; boundary=B\r\n\r\n" + strings.Repeat("--B\r\nX: 1\r\n\r\nb\r\n", 50) + "--B--\r\n"
+	measure := func(l Limits) float64 {
+		return testing.AllocsPerRun(20, func() {
+			_, e, _ := Parse(strings.NewReader(text), &ParseOptions{Limits: l})
+			readTree(e)
+		})
+	}
+	off := DefaultLimits()
+	off.MaxTotalHeaderBytes, off.MaxTotalHeaderCount = LimitDisabled, LimitDisabled
+	with, without := measure(DefaultLimits()), measure(off)
+	// One budget per parse; nothing per block.
+	if with > without+2 {
+		t.Errorf("%v allocations with the totals, %v without", with, without)
+	}
+}
+
+// headerOfSize returns a header block of exactly size wire bytes, its fields
+// within the default per-entity field and line budgets.
+func headerOfSize(size int) string {
+	var b strings.Builder
+	rest := size - 2 // the empty line that ends the block
+	for rest > 0 {
+		n := min(rest, 60000)
+		if rest-n > 0 && rest-n < 8 {
+			n -= 8 // never leave a remainder too short to be a field
+		}
+		b.WriteString("X-P: " + strings.Repeat("p", n-7) + "\r\n")
+		rest -= n
+	}
+	b.WriteString("\r\n")
+	return b.String()
+}
+
+// TestParse_totalHeaders_realDefaultCount pins the default field total: exactly
+// 100 000 candidates across the message read whole, one more refused at that
+// candidate.
+func TestParse_totalHeaders_realDefaultCount(t *testing.T) {
+	const root = "Content-Type: multipart/mixed; boundary=B\r\n\r\n"
+	build := func(last int) (string, int64) {
+		var b strings.Builder
+		b.WriteString(root)
+		var lastField int64
+		for p := range 100 {
+			b.WriteString("--B\r\n")
+			n := 1000
+			if p == 99 {
+				n = last
+			}
+			for range n {
+				lastField = int64(b.Len())
+				b.WriteString("X: y\r\n")
+			}
+			b.WriteString("\r\nb\r\n")
+		}
+		b.WriteString("--B--\r\n")
+		return b.String(), lastField
+	}
+	// The root's one field plus 99 000 plus 999 is exactly the default.
+	text, _ := build(999)
+	session, got, err := parseUnder(t, text, Limits{})
+	if err != nil || got.err != nil || len(got.bodies) != 100 || session.Diagnostics() != nil {
+		t.Fatalf("exact default: (%v, %v, %d bodies)", err, got.err, len(got.bodies))
+	}
+	text, at := build(1000)
+	session, got, err = parseUnder(t, text, Limits{})
+	if err != nil || len(got.bodies) != 99 {
+		t.Fatalf("default+1: (%v, %d bodies)", err, len(got.bodies))
+	}
+	checkTotalStop(t, session, got.err, "count", 100000, &totalBlock{path: []int{99}}, at)
+}
+
+// partStream generates a multipart message lazily, holding one part at a
+// time: the root, then parts whose header blocks total headers bytes in blocks
+// of at most a million, each followed by the body "b".
+type partStream struct {
+	root    string
+	rest    int
+	buf     string
+	started bool
+	closed  bool
+}
+
+func (s *partStream) Read(p []byte) (int, error) {
+	for len(s.buf) == 0 {
+		switch {
+		case !s.started:
+			s.buf, s.started = s.root, true
+		case s.rest > 0:
+			size := min(s.rest, 1_000_000)
+			s.buf = "--B\r\n" + headerOfSize(size) + "b\r\n"
+			s.rest -= size
+		case !s.closed:
+			s.buf, s.closed = "--B--\r\n", true
+		default:
+			return 0, io.EOF
+		}
+	}
+	n := copy(p, s.buf)
+	s.buf = s.buf[n:]
+	return n, nil
+}
+
+// TestParse_totalHeaders_realDefaultBytes pins the default byte total with a
+// lazily generated message of exactly 32 MiB of header blocks, and of one byte
+// more, without materializing either message.
+func TestParse_totalHeaders_realDefaultBytes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("reads 32 MiB of headers")
+	}
+	const root = "Content-Type: multipart/mixed; boundary=B\r\n\r\n"
+	for _, extra := range []int{0, 1} {
+		headers := 32<<20 - len(root) + extra
+		parts := (headers + 999_999) / 1_000_000
+		session, e, err := Parse(&partStream{root: root, rest: headers}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := readTree(e)
+		if extra == 0 {
+			if got.err != nil || len(got.bodies) != parts || session.Diagnostics() != nil {
+				t.Fatalf("exact default: (%v, %d of %d bodies)", got.err, len(got.bodies), parts)
+			}
+			continue
+		}
+		if len(got.bodies) != parts-1 {
+			t.Fatalf("default+1: (%v, %d of %d bodies)", got.err, len(got.bodies), parts)
+		}
+		// The last block's last byte is the first past the budget.
+		lastStart := int64(len(root) + (parts-1)*(len("--B\r\n")+1_000_000+len("b\r\n")) + len("--B\r\n"))
+		lastSize := int64(headers - (parts-1)*1_000_000)
+		checkTotalStop(t, session, got.err, "bytes", 32<<20, &totalBlock{path: []int{parts - 1}}, lastStart+lastSize-1)
+	}
+}

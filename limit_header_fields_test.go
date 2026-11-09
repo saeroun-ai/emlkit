@@ -1437,6 +1437,9 @@ func TestParse_otherBudgetsStayUnenforced(t *testing.T) {
 		"MaxEncodedBodyBytes":  true,
 		"MaxDecodedBodyBytes":  true,
 		"MaxTotalDecodedBytes": true,
+		// ROB-001-010.
+		"MaxTotalHeaderBytes": true,
+		"MaxTotalHeaderCount": true,
 	}
 
 	limits := DefaultLimits()

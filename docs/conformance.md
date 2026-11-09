@@ -180,6 +180,22 @@ These are deliberate boundaries, each with a reason.
   are unbounded, and a refused message header is the ordinary error it always
   was, with nothing recorded.
   ([`limit_header.go`](../limit_header.go), [`textproto/header.go`](../textproto/header.go) · `ReadHeaderLimit`)
+- **All header blocks of a parse are bounded together.** Under `Parse`,
+  `MaxTotalHeaderBytes` (32 MiB) and `MaxTotalHeaderCount` (100 000) bound the
+  wire bytes and field candidates of the message header and every part header
+  the parse reads, summed; framing, preamble, epilogue, bodies, drained parts,
+  peeks and read-ahead are not charged. Bytes are charged per read of the 4 KiB
+  header buffer after the per-entity budgets admitted it, a read that does not
+  fit is refused whole (so usage may stay below the budget while the diagnostic
+  names the first byte past it), and nothing is refunded. Once the count is
+  spent, the next field candidate is refused at its first byte before it is
+  read; a malformed first line beginning with white space is not a candidate.
+  Exceeding either records one `limit.total_header_bytes` or
+  `limit.total_header_count` diagnostic and ends the whole parse with one
+  `FatalError`; content already returned stays valid. `Read` and
+  `ReadWithOptions` have no totals. Keyed `Limits` literals inherit these
+  defaults. ([`limit_header_total.go`](../limit_header_total.go),
+  [`textproto/header_budget.go`](../textproto/header_budget.go))
 - **A header block is bounded four ways, not one.** Alongside `MaxHeaderBytes`,
   `Parse` enforces `MaxHeaderFieldBytes` (64 KiB), `MaxHeaderCount` (1 024) and
   `MaxLineBytes` (64 KiB) on the header block of every entity at any depth. Each
@@ -357,9 +373,9 @@ These are deliberate boundaries, each with a reason.
   verbatim `WriteTo` path stays a conditional one-shot copy.
   ([`limit_body.go`](../limit_body.go))
 - **The remaining budgets in `Limits` are still resolved but not consulted.**
-  Everything outside the thirteen enforced ones — `MaxInputBytes`,
+  Everything outside the fifteen enforced ones — `MaxInputBytes`,
   `MaxHeaderBytes`, `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`,
-  `MaxParameterCount`, `MaxParameterSegments`, `MaxMIMEDepth`, `MaxPartCount`,
+  `MaxTotalHeaderBytes`, `MaxTotalHeaderCount`, `MaxParameterCount`, `MaxParameterSegments`, `MaxMIMEDepth`, `MaxPartCount`,
   `MaxDiagnosticCount`, `MaxEncodedBodyBytes`, `MaxDecodedBodyBytes` and
   `MaxTotalDecodedBytes` — is validated and
   reported by `ParseSession.Limits`, and their `limit.*` codes are reserved but

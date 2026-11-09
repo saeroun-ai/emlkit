@@ -25,6 +25,8 @@ var wantDefaults = map[string]int64{
 	"MaxHeaderFieldBytes":  64 << 10,  // 64 KiB
 	"MaxHeaderCount":       1024,
 	"MaxLineBytes":         64 << 10, // 64 KiB
+	"MaxTotalHeaderBytes":  32 << 20, // 32 MiB
+	"MaxTotalHeaderCount":  100000,
 	"MaxParameterCount":    256,
 	"MaxParameterSegments": 256,
 	"MaxMIMEDepth":         100,
@@ -67,8 +69,8 @@ func limitFieldNames(t *testing.T) []string {
 	if len(names) != len(wantDefaults) {
 		t.Errorf("Limits has %d budgets, %d defaults are documented", len(names), len(wantDefaults))
 	}
-	if len(names) != 18 {
-		t.Errorf("Limits has %d budgets, want the 18 the roadmap reserves", len(names))
+	if len(names) != 20 {
+		t.Errorf("Limits has %d budgets, want the 20 the roadmap reserves", len(names))
 	}
 	return names
 }
