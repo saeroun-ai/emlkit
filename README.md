@@ -99,6 +99,12 @@ for _, d := range session.Diagnostics() {
 }
 ```
 
+`mail.Reader` classifies each part by the metadata the parse interpreted it with
+(`Entity.EffectiveContentType` and `EffectiveContentDisposition`, which are
+bounded, read once and fixed at construction), not by reparsing the raw header.
+It also stops whenever the parse was stopped, including for a single-part
+message.
+
 Errors and diagnostics answer different questions, so read both: an error says
 whether a scope could continue, the session says what was observed. `Parse`
 enforces **eight** budgets today — `MaxHeaderBytes`, `MaxHeaderFieldBytes`,

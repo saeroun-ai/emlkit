@@ -981,6 +981,7 @@ else: no detection, no repair of wrong declarations, no recovery diagnostics.
 | ROB-100-004 | Planned | Resolve `multipart/related` inline resources by normalized Content-ID/Location. | HTML CID cases. |
 | ROB-100-005 | Planned | Represent embedded messages, calendars, zero-byte files, duplicates, and unknown media types. | Typed-view tests. |
 | ROB-100-006 | Done | Make unknown charset/CTE nonfatal in `mail.Reader` while retaining diagnostics. | Existing inconsistency regression tests. |
+| ROB-100-007 | Done | Preserve the parse engine's bounded effective MIME metadata consistently in `mail.Reader`, without reparsing original headers to undo decisions or budgets. | Root/child classification agrees with charset decisions and multipart structure; no duplicate diagnostics; unchanged raw headers and standalone accessors; explicit defensively copied snapshot/mutation contract; stopped root/synthetic wrapper respects session stop. |
 
 `ROB-100-006` ([issue #1](https://github.com/saeroun-ai/emlkit/issues/1)) closed
 the inconsistency the gap snapshot recorded: `mail.CreateReader` returned a nil
@@ -997,6 +998,90 @@ siblings with iteration continuing, unknown charset and both-unknown unchanged,
 stops wrapping either warning, `MaxPartCount` still fatal, header and body I/O
 errors still errors). The predicates themselves are unchanged; `ROB-120-007`
 still owns their behavior on hostile error graphs.
+
+`ROB-100-007` ([issue #15](https://github.com/saeroun-ai/emlkit/issues/15))
+closes a cross-layer inconsistency. Under `Parse` the engine reads
+`Content-Type`, and `Content-Disposition` when it needs it, under the parameter
+budgets, and decides decoders from what it read. `mail.Reader` instead reparsed
+the raw header with the unbudgeted `Header` accessors. So with
+`MaxParameterCount: 1`, `Content-Disposition: attachment; a=1; a=2` was an
+attachment to the engine — its charset skipped under
+`SkipTextAttachmentDecoding`, one `limit.parameter_count` recorded — and inline
+text to `mail.Reader`, where the duplicate parameter is a parse error. The
+contract is:
+
+- **Effective metadata.** `Entity.EffectiveContentType` and
+  `EffectiveContentDisposition` return what the entity was constructed with, as
+  its parse interpreted it: under the budgets for `Parse`, and equal to the
+  `Header` accessors' answer for `New`, `Read` and `ReadWithOptions`, including a
+  field they cannot parse (raw value, no parameters, the error). A struct-literal
+  `Entity` has no snapshot and reads its current header. `mail.Reader` classifies
+  by these; the inline/attachment rule itself is unchanged.
+- **A construction snapshot.** Editing `Entity.Header` after construction does
+  not reinterpret the entity, just as it never re-chose its decoders or its
+  multipart boundary. The edit stays visible through `Header.ContentType`,
+  `Header.ContentDisposition` and `WriteTo`. This also applies to entities from
+  `New` and `Read` given to `mail.NewReader` after an edit, which used to be
+  classified by the edited header; constructing a new entity is how an edit
+  takes effect. Every returned parameter map is a fresh copy, and none aliases
+  the parser's maps.
+- **Read once.** `Content-Disposition` is captured at construction and
+  interpreted at most once, by whichever of the charset stage and
+  `EffectiveContentDisposition` asks first. A field nobody asks about still
+  costs and reports nothing (the existing rule that budgets apply where the
+  engine reads), and a field past a budget is diagnosed once whoever asks and
+  however often — repeated calls, `Entity` value copies, concurrent callers.
+  `mail.Reader` asking under `Parse` without `SkipTextAttachmentDecoding` is
+  such a read, so the budget now applies there and is diagnosed once. A read
+  after a stop keeps the bounded result and records nothing.
+- **Readable from a sink.** The first read interprets the field under a
+  short entity lock. That step is pure and calls no callback. The result is
+  published, the lock released, and only then is the diagnostic delivered. So a
+  `DiagnosticSink` told about the refusal may read the same entity back — or a
+  copy of the `Entity` value — through either effective accessor and call
+  `ParseStop`, and gets the published value instead of deadlocking on its own
+  delivery (the first review found that a `sync.Once` held across the delivery
+  did deadlock). A stop the sink returns afterwards is the parse's sticky stop as
+  usual. A concurrent first reader in another goroutine gets the same value
+  but may get it before the delivery finishes. Not supported: a sink making the
+  *first* over-budget reading of an entity nothing has asked about yet. That is
+  a recording from inside a delivery, which the session supports for no
+  diagnostic and which blocks; a read within budget records nothing and is
+  safe.
+- **Stops.** `Entity.ParseStop` is the read-only view of a whole-parse stop (a
+  sink stop or a parse-scoped budget such as `MaxPartCount`; not an
+  iterator-scoped `MaxMIMEDepth` refusal), identical to the value every scope
+  reports. `mail.Reader.NextPart` checks it before every call. The single-part
+  wrapper `NewReader` builds belongs to no parse, so it used to hand over a root
+  `Parse` had returned with a stop, and to report `io.EOF` after a sink stopped
+  the parse while the root body was being read; both now return the identical
+  stop on every retry, including a stop that wraps a decoding warning. A stop
+  raised while the part is being classified ends traversal the same way. `Parse`'s
+  own error must still be handled first.
+- **Not claimed.** No new healing. Without a budget cutting it, a duplicate or
+  otherwise unparseable parameter list still fails both the engine and
+  `mail.Reader` with the same verdict; recovering such fields is #22 /
+  `ROB-050`. Filename selection (`ROB-050-009`), body-tree selection
+  (`ROB-100-001`–`003`) and error-graph classification (`ROB-120-007`) are
+  untouched.
+- **Evidence.** `mail/reader_metadata_test.go`: the issue reproduction at the
+  root and in a child, with the option on and off; a matrix of
+  duplicate/unterminated/segment tails, inline vs attachment, and media-type-only
+  parts between two readable siblings, with exact body bytes and whether the
+  charset stage ran; sink stops during `Parse`, during iteration, during
+  classification and during the root body read, with sentinel and
+  warning-wrapping stop errors and repeated retries; issue #1 warnings preserved;
+  the mutation contract for `Parse`, `New` and literal entities; one-byte input
+  and half-chunk body reads through a nested tree, with the raw header bytes
+  written back. `effective_test.go`: header edits, returned-map edits against
+  later calls and the multipart boundary, once-only diagnostics, the post-stop
+  read, the scope of `ParseStop`, and legacy/literal equivalence with the
+  standalone accessors. For sink reentry, deadline-guarded tests have a sink read
+  the entity (direct and copied) and then continue or return a sentinel stop.
+  They check the cached values, a single diagnostic, the identical `ParseStop`
+  on retries and from `Walk`, concurrent first readers combined with a reading
+  sink, and `mail.Reader.NextPart` returning that stop on every retry. These
+  tests block, and fail, when the lock is held across the delivery.
 
 ### ROB-110 — Raw storage, replay, and spooling
 
@@ -1124,6 +1209,16 @@ allocation-free pass that returns identical results, and depends on nothing
 those items introduce. It does not advance, start or complete `ROB-040-001`,
 `ROB-040-004`, `ROB-040-007`, `ROB-040-009`, `ROB-130` or any other item.
 
+**Exception — `ROB-100-007`.** It was added to the ledger and taken ahead of
+`ROB-010` through `ROB-090` and of `ROB-100-001` through `ROB-100-005`, at the
+user's request, as an independent fix of an existing cross-layer inconsistency
+([issue #15](https://github.com/saeroun-ai/emlkit/issues/15)). It makes
+`mail.Reader` use the metadata the existing engine already interpreted, and
+respect that engine's existing session stop. It depends on no tree model,
+malformed-MIME recovery (#22), filename policy or error-graph work that is not
+yet built. It does not advance, start or complete `ROB-050`, `ROB-100-001`
+through `ROB-100-005`, `ROB-120-007` or any other item.
+
 ## 9. Per-item implementation protocol
 
 Each Claude Code execution receives exactly one ledger ID and must:
@@ -1180,3 +1275,5 @@ Codex reviewed `ROB-100-006` against issue #1, verified the returned-object and 
 Codex reviewed `ROB-080-011` for issue #1, independently checked the fixed CP949 fixture against Python, inspected both alias entries and the public body/header tests, and confirmed the original reproduction now decodes both labels correctly. The final full race/coverage suite, build, formatting, README example compilation, and remaining vet analyzers pass; ordinary vet retains only the documented baseline warnings. The item is Done.
 
 Codex reviewed `ROB-040-003` for [issue #9](https://github.com/saeroun-ai/emlkit/issues/9), inspected the scanner and both test files, and independently measured 16 cumulative allocated bytes at each 4/8/16/32 KiB comment size. A separate 38,227-case public-API comparison retained the exact pre-change result digest. The full race suite, build, 386-target comment/address tests, formatting and whitespace checks pass; the executor also passed the full standard suite and 30/45-second focused fuzz runs. No new comment-depth rejection was introduced. This closes the resource item, not the separate partial-address and damaged-trailing-comment recovery requirements.
+
+Codex reviewed `ROB-100-007` for [issue #15](https://github.com/saeroun-ai/emlkit/issues/15), independently passed 36 root/child/nested/chunked CP949 classification-and-body scenarios, and found and returned a same-entity diagnostic-callback deadlock for correction. After the cache-publication/delivery split, the independent reentry probe, callback-stop/concurrency regressions and full fresh race suite pass. Build, standard tests, formatting and whitespace checks pass; vet passes with only the pre-existing `composites` and `stdmethods` categories excluded. The construction-snapshot mutation change for `New`/`Read` as well as `Parse` was reviewed as deliberate: edited headers do not silently change the interpretation of an already-created decoder. Normal vet retains the documented baseline warnings.

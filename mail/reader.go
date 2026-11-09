@@ -41,11 +41,23 @@ type Reader struct {
 }
 
 // NewReader creates a new mail reader.
+//
+// For an entity from message.Parse the reader is a scope of that parse. If a
+// DiagnosticSink stopped the parse, or a budget whose scope is the whole parse
+// ended it, NextPart returns the identical message.FatalError Parse and every
+// other scope of it report, and no part — even when e is a single-part message
+// whose only part is e itself, which Parse returned together with that error.
+// Parse's error has to be handled first all the same; this is so that a reader
+// built on a stopped parse cannot quietly continue it.
 func NewReader(e *message.Entity) *Reader {
 	mr := e.MultipartReader()
 	if mr == nil {
 		// Artificially create a multipart entity
-		// With this header, no error will be returned by message.NewMultipart
+		// With this header, no error will be returned by message.NewMultipart.
+		//
+		// This wrapper is built with message.NewMultipart, which belongs to no
+		// parse, so it would hand e over whatever e's own parse had come to.
+		// NextPart asks e's parse before it does anything; see there.
 		var h message.Header
 		h.Set("Content-Type", "multipart/mixed")
 		me, _ := message.NewMultipart(h, []*message.Entity{e})
@@ -107,7 +119,35 @@ func CreateReader(r io.Reader) (*Reader, error) {
 // Part. That includes a message.FatalError, even one wrapping either warning:
 // on an entity from message.Parse it is a resource budget or a DiagnosticSink
 // stop, and later calls report it again rather than continue.
+//
+// A part is an attachment or inline text according to the metadata it was
+// constructed with: message.Entity.EffectiveContentType and
+// EffectiveContentDisposition, which for an entity from message.Parse are read
+// under that parse's parameter budgets, and are the same values its decoders
+// were chosen by. The raw header is not reparsed, so an oversized parameter
+// list is not read past its budget, and a text attachment whose charset was
+// left unconverted under message.ReadOptions.SkipTextAttachmentDecoding is
+// never offered as inline text. Editing Entity.Header after the entity was
+// constructed does not change how it is classified, as it does not change how
+// its body is decoded. The returned Part.Header is the entity's header, raw
+// bytes unchanged, and its own ContentType and ContentDisposition keep parsing
+// it under no budget.
+//
+// Reading the disposition records its budget diagnostic, once per part, if the
+// parse had not read it already. If a DiagnosticSink stops the parse there,
+// NextPart returns that stop and no part, like any other stop.
 func (r *Reader) NextPart() (*Part, error) {
+	// Every call is a scope of the parse r.e came from, so none begins on a
+	// parse that has been stopped. The multipart iterators of that parse ask
+	// for themselves, but the wrapper NewReader builds around a single-part
+	// message does not belong to the parse and would hand the root over
+	// regardless; asking here is what makes a stopped root stay stopped,
+	// whatever err Parse returned it with and however often this is called.
+	// An entity that is not from Parse has no parse to stop, and this is nil.
+	if stop := r.e.ParseStop(); stop != nil {
+		return nil, stop
+	}
+
 	for r.readers.Len() > 0 {
 		e := r.readers.Back()
 		mr := e.Value.(message.MultipartReader)
@@ -127,8 +167,15 @@ func (r *Reader) NextPart() (*Part, error) {
 		} else {
 			// This is a non-multipart part, return a mail part
 			mp := &Part{Body: p.Body}
-			t, _, _ := p.Header.ContentType()
-			disp, _, _ := p.Header.ContentDisposition()
+			t, _, _ := p.EffectiveContentType()
+			disp, _, _ := p.EffectiveContentDisposition()
+			// Reading the disposition may have recorded a diagnostic, and a
+			// sink told about it may have stopped the parse. The stop is the
+			// caller ending the parse, so it outranks the part, and any warning
+			// the part came with, exactly as it does everywhere else.
+			if stop := p.ParseStop(); stop != nil {
+				return nil, stop
+			}
 			if disp == "inline" || (disp != "attachment" && strings.HasPrefix(t, "text/")) {
 				mp.Header = &InlineHeader{p.Header}
 			} else {

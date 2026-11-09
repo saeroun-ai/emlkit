@@ -148,8 +148,13 @@ type ParseOptions struct {
 // records one limit.parameter_count or limit.parameter_segments diagnostic whose
 // Action says what was kept, and the parse continues into the body — so an
 // oversized parameter list does not hide the multipart children a boundary
-// parameter introduces. Header.ContentType and Header.ContentDisposition are
-// unaffected and parse under no budget; see there.
+// parameter introduces. Content-Disposition is read only when something needs
+// it — the charset stage under ReadOptions.SkipTextAttachmentDecoding, or a
+// caller of Entity.EffectiveContentDisposition such as mail.Reader — and at most
+// once per entity, so it is diagnosed at most once. Entity.EffectiveContentType
+// and EffectiveContentDisposition report the bounded result. Header.ContentType
+// and Header.ContentDisposition are unaffected and parse under no budget; see
+// there.
 //
 // Limits.MaxMIMEDepth and Limits.MaxPartCount bound the shape of the tree the
 // message describes: how far Parse descends through nested multipart

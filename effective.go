@@ -1,0 +1,253 @@
+package message
+
+import (
+	"maps"
+	"strings"
+	"sync"
+)
+
+// The effective MIME metadata of an entity (ROB-100-007).
+//
+// Two answers can be given to "what is this entity's Content-Type", and they
+// differ on purpose. Header.ContentType and Header.ContentDisposition parse
+// whatever the header holds at the moment they are called, under no budget,
+// because a Header belongs to whoever holds it and may never have come from a
+// parse. The parse engine instead reads those two fields under the parameter
+// budgets of the parse the entity belongs to, and it reads them when the entity
+// is constructed: what it read is what chose the transfer and charset decoders,
+// whether a text attachment's charset was converted, and whether
+// MultipartReader iterates anything and with which boundary.
+//
+// A layer that classifies an entity — mail.Reader deciding between an inline
+// part and an attachment — has to classify it by that second answer. Reparsing
+// the raw header would undo the budgets, which bound the work of reading an
+// oversized parameter list, and it could disagree with decisions already built
+// into the body: a text attachment whose charset was left unconverted because
+// the bounded disposition said "attachment" would otherwise be offered as
+// inline text. EffectiveContentType and EffectiveContentDisposition are that
+// second answer.
+//
+// # A construction snapshot, not a view of the current header
+//
+// Entity.Header is exported and can be edited after construction, but an edit
+// cannot reach back into a body whose decoders were already chosen from the
+// header as it was, nor into a multipart iterator framed by the boundary it
+// declared. So the effective metadata is not re-evaluated against the edited
+// header: it is what the entity was constructed with, and it stays so for the
+// entity's lifetime. An edit is visible through Header.ContentType and
+// Header.ContentDisposition, and is written by WriteTo, but it does not
+// reinterpret this entity; constructing a new one with New is how an edited
+// header is given effect.
+//
+// The two fields differ only in when they are interpreted. Content-Type is
+// interpreted during construction, because the decoders depend on it.
+// Content-Disposition is captured during construction and interpreted at most
+// once, by whichever of the charset stage and EffectiveContentDisposition asks
+// first; a parse never asked about the field reads nothing and reports nothing,
+// which keeps the engine's existing rule that a budget applies where the engine
+// reads a field. Either way the value interpreted is the field as it was when
+// the entity was constructed.
+//
+// # Diagnostics are recorded once
+//
+// A field past a parameter budget records one diagnostic when it is
+// interpreted, and no later call interprets it again, so asking any number of
+// times — from the charset stage, from mail.Reader, and from the caller —
+// records nothing more. A reading made after a DiagnosticSink stopped the parse
+// still keeps the bounded result, because the budget is what bounds the work,
+// but records nothing; ParseStop reports the stop.
+//
+// # Reading from a DiagnosticSink
+//
+// A sink is called synchronously, and the first reading of a disposition is one
+// of the places that calls it. While it runs, the sink may read the metadata of
+// any entity whose metadata has already been interpreted — including the one it
+// is being told about — through EffectiveContentType and
+// EffectiveContentDisposition, and may call ParseStop. None of them waits on
+// anything the delivery in progress holds: the interpretation is published
+// before the sink is called, and no lock of the entity is held while it is
+// called. Whatever the sink returns afterwards, a stop included, takes effect as
+// for any other diagnostic.
+//
+// What a sink cannot do is make the parse record from inside the delivery. The
+// first reading of a disposition that is past a budget records a diagnostic, so
+// asking for that from a sink — about an entity nothing has asked about yet — is
+// parsing from inside a delivery, which the session does not support for any
+// recording, and blocks. Reading a field that is within its budgets records
+// nothing and is safe whenever it is first done.
+//
+// # Results are copies
+//
+// Every parameter map returned is a fresh copy, so a caller may modify it
+// without disturbing the entity, the decoders built from it, or a later call.
+// A nil map — no parameters, or a field that did not parse — is returned as
+// nil.
+
+// A dispositionSnapshot is the Content-Disposition value an entity was
+// constructed with, and the one interpretation of it under the budgets of the
+// parse the entity belongs to.
+//
+// It is referred to by pointer so that copying an Entity value — which callers
+// may do — neither copies its lock nor gives the copy a second interpretation
+// with a second diagnostic.
+//
+// # Publication before delivery
+//
+// Interpreting the field and reporting what the interpretation found are two
+// steps, done in that order and never under the same lock. The interpretation
+// does not deliver diagnostics: it scans and parses the retained value under
+// mu, then publishes the result and sets done before releasing mu. Decoding an
+// encoded-word parameter can call the configured CharsetReader; that hook must
+// not recursively request the field whose interpretation is still in progress. Only then is the budget diagnostic, if one is
+// owed, handed to the session, and so to the caller's DiagnosticSink.
+//
+// That order is what lets a sink read this entity's metadata. A sink is told
+// about the refusal synchronously, from inside the first get, and it may well
+// ask the entity what was kept: holding mu across that delivery — or a
+// sync.Once, which is a lock by another name — would make that read wait for
+// the delivery it is part of, for ever. With publication first, the read finds
+// done and returns the published value, and the delivery has nothing of its own
+// to wait for.
+//
+// The diagnostic is still recorded exactly once: only the call that set done
+// owes it, and only that call records it. What a concurrent first reader in
+// another goroutine may see is the published value before that recording has
+// reached the session — the interpretation is final, but ParseStop reports a
+// stop the sink asks for in that delivery only once the delivery has finished.
+// The session already orders concurrent recordings by whichever reaches it
+// first, so this adds no ordering it did not already lack.
+type dispositionSnapshot struct {
+	ctx parseContext
+	raw string
+
+	mu     sync.Mutex
+	done   bool
+	disp   string
+	params map[string]string
+	err    error
+}
+
+// newDispositionSnapshot captures the Content-Disposition of header, to be
+// interpreted later under ctx. Capturing it costs nothing beyond keeping the
+// string: no byte of it is read until it is interpreted.
+func newDispositionSnapshot(ctx parseContext, header Header) *dispositionSnapshot {
+	return &dispositionSnapshot{ctx: ctx, raw: header.Get("Content-Disposition")}
+}
+
+// get returns the interpretation of the captured value, making it on the first
+// call and recording its diagnostic after publishing it; see the type's comment
+// for why in that order. The returned map is the snapshot's own and is never
+// written after publication; callers outside this file get a copy.
+func (d *dispositionSnapshot) get() (string, map[string]string, error) {
+	d.mu.Lock()
+	if d.done {
+		disp, params, err := d.disp, d.params, d.err
+		d.mu.Unlock()
+		return disp, params, err
+	}
+	disp, params, refused, err := d.ctx.interpretDisposition(d.raw)
+	d.disp, d.params, d.err, d.done = disp, params, err, true
+	d.mu.Unlock()
+
+	// No lock of this entity is held from here on, so a sink that reads the
+	// entity back while it is told about the refusal gets the value just
+	// published.
+	d.ctx.recordParameterDiagnostic(refused)
+	return disp, params, err
+}
+
+// isAttachment reports whether the captured disposition is "attachment". It is
+// what ReadOptions.SkipTextAttachmentDecoding decides by, and it is the same
+// interpretation EffectiveContentDisposition reports, so that the charset
+// decision and a later classification cannot disagree.
+func (d *dispositionSnapshot) isAttachment() bool {
+	disp, _, err := d.get()
+	return err == nil && strings.EqualFold(disp, "attachment")
+}
+
+// EffectiveContentType returns the media type and parameters this entity was
+// constructed with, as the parse it came from interpreted them, and the error
+// that interpretation returned. These are the values the entity's transfer and
+// charset decoders and its MultipartReader were built from.
+//
+// For an entity from Parse they are read under Limits.MaxParameterCount and
+// Limits.MaxParameterSegments: a Content-Type past either keeps its media type
+// and the parameters within the budget, which is what is returned here with a
+// nil error, and the one diagnostic for it was recorded when the entity was
+// constructed. For an entity from New, Read or ReadWithOptions, which have no
+// budgets, they are what Header.ContentType returned for the header as it was
+// at construction. A missing Content-Type is "text/plain" with no parameters,
+// as there. A field that did not parse is returned as Header.ContentType returns
+// one: the raw value as the media type, no parameters, and the error.
+//
+// The result is a snapshot from construction rather than a reading of the
+// current header: an edit to Entity.Header after construction does not change
+// it, just as it does not change the decoders already chosen. The parameter map
+// is a fresh copy on every call. See the top of effective.go.
+//
+// An Entity that no constructor built — a struct literal — has no snapshot, and
+// for it EffectiveContentType is Header.ContentType of its current header.
+func (e *Entity) EffectiveContentType() (mediaType string, params map[string]string, err error) {
+	if e.disposition == nil {
+		return e.Header.ContentType()
+	}
+	return e.mediaType, maps.Clone(e.mediaParams), e.mediaErr
+}
+
+// EffectiveContentDisposition returns the disposition and parameters of the
+// Content-Disposition this entity was constructed with, as the parse it came
+// from interprets it, and the error that interpretation returned. It is what
+// ReadOptions.SkipTextAttachmentDecoding decided an attachment's charset stage
+// by, and what mail.Reader classifies a part by.
+//
+// For an entity from Parse the field is read under Limits.MaxParameterCount and
+// Limits.MaxParameterSegments, on the same terms as EffectiveContentType. It is
+// interpreted at most once: the first call to need it — the charset stage during
+// construction, or the first call to this method — reads it and records any
+// budget diagnostic, and every later call returns that same interpretation and
+// records nothing. For an entity from New, Read or ReadWithOptions it is what
+// Header.ContentDisposition returned for the header as it was at construction.
+// A missing or unparseable field is returned as Header.ContentDisposition
+// returns one: the raw value, which is empty for a missing field, no
+// parameters, and the error.
+//
+// Like EffectiveContentType it is a construction snapshot rather than a reading
+// of the current header, and the parameter map is a fresh copy on every call.
+// Recording a budget diagnostic may let a DiagnosticSink stop the parse; the
+// result is still returned, and ParseStop reports the stop. The result is
+// published before that diagnostic is delivered, so the sink may call this
+// method on the same entity and gets the same result; see "Reading from a
+// DiagnosticSink" at the top of effective.go for what a sink may and may not
+// do. A concurrent first call in another goroutine gets the same result too, but
+// may get it before the delivery has finished.
+//
+// An Entity that no constructor built — a struct literal — has no snapshot, and
+// for it EffectiveContentDisposition is Header.ContentDisposition of its current
+// header.
+func (e *Entity) EffectiveContentDisposition() (disp string, params map[string]string, err error) {
+	if e.disposition == nil {
+		return e.Header.ContentDisposition()
+	}
+	disp, params, err = e.disposition.get()
+	return disp, maps.Clone(params), err
+}
+
+// ParseStop returns the failure that ended the whole parse this entity belongs
+// to, or nil while that parse may continue. It is the identical value Parse,
+// MultipartReader.NextPart and Entity.Walk report for that stop: a FatalError
+// for a DiagnosticSink that asked the parse to stop, or for a budget whose scope
+// is the whole parse, such as Limits.MaxPartCount.
+//
+// It reports only a stop of the whole parse. A failure confined to one scope —
+// a child header past a budget, which ends one multipart iterator — is reported
+// by that scope and not here. It is read-only: nothing about it can stop a parse
+// or clear a stop.
+//
+// It exists for a layer that iterates an entity without going through the
+// parser's own scopes, as mail.Reader does for a message with a single part,
+// so that such a layer can refuse to continue a parse that was stopped. An
+// entity that does not come from Parse belongs to no parse that could be
+// stopped, and ParseStop returns nil for it.
+func (e *Entity) ParseStop() error {
+	return e.parse.fatalErr()
+}

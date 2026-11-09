@@ -73,6 +73,10 @@ func HeaderFromMap(m map[string][]string) Header {
 // field, on the entities Parse produces, and are documented there. A caller
 // parsing a field of unknown provenance bounds it itself, or reaches it through
 // Parse.
+//
+// It reads the header as it is now. Entity.EffectiveContentType is the other
+// answer: the Content-Type an entity was constructed with, as its parse
+// interpreted it, which is what the entity's body was decoded by.
 func (h *Header) ContentType() (t string, params map[string]string, err error) {
 	v := h.Get("Content-Type")
 	if v == "" {
@@ -89,7 +93,9 @@ func (h *Header) SetContentType(t string, params map[string]string) {
 // ContentDisposition parses the Content-Disposition header field, as defined in
 // RFC 2183.
 //
-// Like ContentType, it parses under no budget; see there.
+// Like ContentType, it parses under no budget and reads the header as it is
+// now; see there, and Entity.EffectiveContentDisposition for the field as an
+// entity was constructed with it.
 func (h *Header) ContentDisposition() (disp string, params map[string]string, err error) {
 	return parseHeaderWithParams(h.Get("Content-Disposition"))
 }

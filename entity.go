@@ -19,8 +19,21 @@ type Entity struct {
 	Header Header    // The entity's header.
 	Body   io.Reader // The decoded entity's body.
 
+	// mediaType, mediaParams and mediaErr are the Content-Type this entity was
+	// constructed with, as the parse it came from interpreted it — under that
+	// parse's parameter budgets — together with the error that interpretation
+	// returned. They decided the body's decoders and whether MultipartReader
+	// iterates anything, and EffectiveContentType reports them; mediaParams is
+	// never handed out, only copies of it. See effective.go.
 	mediaType   string
 	mediaParams map[string]string
+	mediaErr    error
+
+	// disposition is the Content-Disposition this entity was constructed with,
+	// interpreted at most once. It is nil only for an Entity that no constructor
+	// built — a struct literal — and that is how such an entity is recognized.
+	// See dispositionSnapshot.
+	disposition *dispositionSnapshot
 
 	// originalBody is the undecoded body as passed to New, together with the
 	// transfer encoding and charset it was encoded with. WriteTo copies the
@@ -115,7 +128,16 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// one of them refuses part of the field, so that what is kept is recorded
 	// rather than quietly dropped. It is Header.ContentType for a parse with no
 	// budgets, which is every entry point but Parse.
-	mediaType, mediaParams, _ := ctx.contentType(header)
+	mediaType, mediaParams, mediaErr := ctx.contentType(header)
+
+	// The disposition is captured now, as it is, and interpreted only if
+	// something asks: the charset stage below when it has to know whether this
+	// is an attachment, or later EffectiveContentDisposition, which is what
+	// mail.Reader classifies a part by. Whichever asks first reads it, under
+	// this parse's budgets, and every later answer is that same reading, so a
+	// field past a budget is diagnosed once however many times it is asked
+	// about, and a field no one asks about costs nothing and reports nothing.
+	disposition := newDispositionSnapshot(ctx, header)
 
 	// A sink that stopped the parse stopped all of it, so nothing further is
 	// interpreted here: the declared metadata is still read, because it
@@ -171,7 +193,7 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 				// the session's, so it is taken up here like any other: it is
 				// returned with the entity, and no charset decoder is set up
 				// after it.
-				skip = ctx.isAttachment(header)
+				skip = disposition.isAttachment()
 				fatal = ctx.fatalErr()
 			}
 			if fatal == nil && !skip {
@@ -198,6 +220,8 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 		Body:                       body,
 		mediaType:                  mediaType,
 		mediaParams:                mediaParams,
+		mediaErr:                   mediaErr,
+		disposition:                disposition,
 		originalBody:               originalBody,
 		decodedBody:                body,
 		encoding:                   encoding,

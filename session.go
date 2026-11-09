@@ -344,15 +344,18 @@ func (s *ParseSession) publishStop(f FatalError) FatalError {
 // describes, returning that error together with whatever it recovered up to
 // that point.
 //
-// A session only reaches the scopes of a parse started by Parse. Read,
-// ReadWithOptions, Entity.Walk and mail.Reader carry no session, so there is
-// nothing to stop them and nothing about them changes. The stickiness of record
+// A session only reaches the scopes of a parse started by Parse. Read and
+// ReadWithOptions carry no session, so there is nothing to stop what they
+// return, and Entity.Walk and mail.Reader stop only for an entity that came from
+// Parse; Entity.ParseStop is how a layer outside this package, such as
+// mail.Reader, asks. The stickiness of record
 // remains the backstop for a scope that does not check: it is handed the same
 // fatal error back rather than being allowed to continue quietly.
 //
 // It is deliberately read-only and unexported. A session reports what the
 // parser observed, so a caller can neither stop a parse through it nor clear a
-// stop; asking for a stop is what a DiagnosticSink is for.
+// stop; asking for a stop is what a DiagnosticSink is for. Entity.ParseStop is
+// the one exported reading of it, and it is read-only too.
 //
 // Two failures can end a whole session — a sink that asked the parse to stop,
 // and a resource budget whose scope is the parse — and which of them a session

@@ -355,17 +355,14 @@ func (c parseContext) contentType(h Header) (string, map[string]string, error) {
 	return c.parseParameterized("Content-Type", v)
 }
 
-// contentDisposition parses the entity's Content-Disposition under this parse's
-// parameter budgets, on the same terms as contentType.
-func (c parseContext) contentDisposition(h Header) (string, map[string]string, error) {
-	return c.parseParameterized("Content-Disposition", h.Get("Content-Disposition"))
-}
-
-// isAttachment reports whether the entity's Content-Disposition is "attachment",
-// reading that field under this parse's parameter budgets.
-func (c parseContext) isAttachment(h Header) bool {
-	disp, _, err := c.contentDisposition(h)
-	return err == nil && strings.EqualFold(disp, "attachment")
+// interpretDisposition interprets a Content-Disposition value under this
+// parse's parameter budgets, on the same terms as contentType, but leaves the
+// diagnostic a refusal is owed to the caller instead of recording it. It takes
+// the raw value rather than a Header because the engine reads the value an
+// entity was constructed with, which it captures then and interprets at most
+// once; see dispositionSnapshot for why the recording is separate.
+func (c parseContext) interpretDisposition(raw string) (string, map[string]string, *Diagnostic, error) {
+	return c.interpretParameterized("Content-Disposition", raw)
 }
 
 // parseParameterized parses one parameterized header field under this parse's
@@ -377,8 +374,8 @@ func (c parseContext) isAttachment(h Header) bool {
 //
 // Otherwise the raw value is scanned first and parsed second, and when a budget
 // refused it what is parsed is the retained prefix rather than the whole field.
-// The diagnostic is recorded before the parse, so that it is recorded whether or
-// not what remains turns out to be parseable at all.
+// The diagnostic is recorded after the bounded interpretation, whether or not
+// what remains turns out to be parseable at all.
 //
 // A field whose retained prefix does not parse is reported exactly as an
 // unparseable field has always been reported: the raw value as the media type,
@@ -386,31 +383,58 @@ func (c parseContext) isAttachment(h Header) bool {
 // second attempt — reaching for the assembler this scan exists to bound would
 // give back the work it saved.
 func (c parseContext) parseParameterized(field, raw string) (string, map[string]string, error) {
+	f, params, refused, err := c.interpretParameterized(field, raw)
+	c.recordParameterDiagnostic(refused)
+	return f, params, err
+}
+
+// interpretParameterized is parseParameterized without the recording: it
+// returns the bounded interpretation of the field and, when a budget refused
+// part of it, the diagnostic that refusal is owed, for the caller to record.
+//
+// It does not deliver diagnostics; encoded-word decoding can still call the
+// configured CharsetReader. A caller may cache this interpretation and record
+// its diagnostic afterwards, once its cache lock is released. That split is what lets
+// an entity publish its interpretation before the diagnostic reaches a
+// DiagnosticSink, which may read it back; see dispositionSnapshot.
+func (c parseContext) interpretParameterized(field, raw string) (f string, params map[string]string, refused *Diagnostic, err error) {
 	limits, ok := c.limits()
 	if !ok || (limits.MaxParameterCount <= 0 && limits.MaxParameterSegments <= 0) {
 		// Nothing to bound, so nothing is scanned: a scan that can refuse
 		// nothing would only walk the field to reach the same answer.
-		return parseHeaderWithParams(raw)
+		f, params, err = parseHeaderWithParams(raw)
+		return f, params, nil, err
 	}
 
 	head, occurrences, refusal := boundParameters(raw, limits.MaxParameterCount, limits.MaxParameterSegments)
 	if refusal == nil {
-		return parseHeaderWithParams(raw)
+		f, params, err = parseHeaderWithParams(raw)
+		return f, params, nil, err
 	}
 
-	// A parse a sink already stopped records nothing further: the budget still
-	// bounds the work, because the work is what it is for, but a diagnostic
-	// about a parse that has ended is not what the caller asked to be told.
-	if c.fatalErr() == nil {
-		// The failure of a sink here is picked up by the scope that called this,
-		// which reads it from the session as it reads every other stop.
-		_ = c.recordHeader(parameterDiagnostic(field, refusal))
-	}
+	// The diagnostic is owed whether or not what remains turns out to be
+	// parseable at all.
+	d := parameterDiagnostic(field, refusal)
 
 	kept := retainedParameters(raw, head, occurrences)
-	f, params, err := parseHeaderWithParams(kept)
+	f, params, err = parseHeaderWithParams(kept)
 	if err != nil {
-		return raw, nil, err
+		return raw, nil, &d, err
 	}
-	return f, params, nil
+	return f, params, &d, nil
+}
+
+// recordParameterDiagnostic records the diagnostic interpretParameterized
+// returned, if there is one.
+//
+// A parse a sink already stopped records nothing further: the budget still
+// bounded the work, because the work is what it is for, but a diagnostic about a
+// parse that has ended is not what the caller asked to be told. The failure of a
+// sink here is picked up by the scope that called this, which reads it from the
+// session as it reads every other stop.
+func (c parseContext) recordParameterDiagnostic(d *Diagnostic) {
+	if d == nil || c.fatalErr() != nil {
+		return
+	}
+	_ = c.recordHeader(*d)
 }
