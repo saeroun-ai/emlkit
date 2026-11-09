@@ -825,13 +825,61 @@ Each applicable test asserts:
 |---|---|---|---|
 | ROB-040-001 | Planned | Return partial address lists with per-address diagnostics. | Valid-invalid-valid sequences. |
 | ROB-040-002 | Planned | Support configurable loose parsing for unquoted commas and local-only addresses. | MimeKit-compatible fixtures. |
-| ROB-040-003 | Planned | Bound nested comments and address groups. | Deep nesting tests. |
+| ROB-040-003 | Done | Bound nested comments and address groups. | Deep nesting tests. |
 | ROB-040-004 | Planned | Tolerate obsolete route syntax, empty groups, repeated separators, and broken angle brackets without panic. | Corpus table tests. |
 | ROB-040-005 | Planned | Parse internationalized addresses and preserve undecodable originals. | RFC 6532 and IDN cases. |
 | ROB-040-006 | Planned | Parse common obsolete dates, report invalid dates, and retain raw values. | Zone/year/comment/weekday table. |
 | ROB-040-007 | Planned | Return partial Message-ID/References lists. | CFWS, truncation, invalid ID tests. |
 | ROB-040-008 | Planned | Add tolerant Received parsing with clause-level preservation. | Real provider fixtures. |
 | ROB-040-009 | Planned | Harden List-* parsing and preserve multiple URLs/NO values. | RFC 2369/2919 fixtures and fuzz. |
+
+`ROB-040-003` bounds the work of comments and groups; it does not cap their
+depth. The bound is a single in-place pass: skipping a comment costs time
+linear in its bytes and no memory beyond a depth counter, so a well-formed
+comment nested to any depth is accepted, and the size of the header field that
+holds it is the only size bound it needs. `Parse` applies its header budgets;
+standalone header and address accessors do not acquire those budgets, so their
+callers must bound input size themselves. Refusing deep but valid nesting would
+trade a recoverable value for no saving.
+
+- **msg-id and list-command accessors.** `Header.MessageID`, `MsgIDList` and
+  `ListCommandURLList` share one comment scanner. It used to collect each
+  skipped comment with per-byte string concatenation, so an `n`-byte comment
+  cost about `n²/2` bytes of garbage (565,546,464 bytes cumulative for the
+  public 32 KiB reproduction in
+  [issue #9](https://github.com/saeroun-ai/emlkit/issues/9)). No caller reads a
+  comment's text, so it is now scanned without being built and allocates
+  nothing (16 bytes for that reproduction, the returned identifier). Where a
+  comment ends, how backslash escapes apply (an escaped `(`, `)` or `\` does
+  not change the nesting; a trailing lone backslash escapes nothing), and
+  whether it is unterminated are byte-for-byte unchanged, checked against the
+  previous loop as an oracle.
+- **Results and errors are unchanged.** A comment that is never closed
+  consumes the rest of the value and the accessor returns its existing error.
+  `MsgIDList` and `ListCommandURLList` still return the entries completed
+  before the damage together with that error; the damaged entry is not
+  reported as parsed. Keeping a msg-id that is complete before a broken
+  trailing comment is `ROB-040-007`'s partial-list work. These standalone
+  accessors have no `ParseSession`, so their failures are returned errors, not
+  session diagnostics.
+- **Addresses and groups.** `Header.AddressList`, `ParseAddress` and
+  `ParseAddressList` call `net/mail` unchanged, and no local scanner is added.
+  `net/mail` (Go 1.26) skips comments iteratively with a depth counter, and
+  costs memory linear in the comment because it still builds the text;
+  it parses group members with groups disabled, so call depth is fixed and a
+  group inside a group is refused. Its lists remain all-or-nothing, and it
+  refuses a comment before an address although RFC 5322 allows one there; tests
+  record both as current behavior for `ROB-040-001` and `ROB-040-004` to change.
+- **Evidence.** `mail/header_comment_test.go` and
+  `mail/header_comment_internal_test.go`: cumulative heap bytes
+  (`runtime.MemStats.TotalAlloc`) at N, 2N, 4N and 8N for flat, nested, escaped
+  and repeated comments before, between and after msg-ids and list commands
+  (constant), and for `net/mail` comment and group shapes (linear);
+  escaped-delimiter, nested, truncated, leading, trailing and multiple-comment
+  tables; adversarial and nested groups; verbatim header write-back after every
+  accessor; and focused fuzz targets `FuzzSkipComment` (oracle differential)
+  and `FuzzHeaderCommentAccessors` (no panic, raw header unchanged). These
+  targets do not advance `ROB-130`.
 
 ### ROB-050 — MIME media types, dispositions, and parameters
 
@@ -1067,6 +1115,15 @@ in the optional charset plugin's existing quirks table, depending on nothing
 those items introduce. It does not advance, start or complete `ROB-080-001`,
 `ROB-080-005` or any other item.
 
+**Exception — `ROB-040-003`.** It was taken ahead of `ROB-010` through
+`ROB-080`, of `ROB-030`, and of `ROB-040-001` and `ROB-040-002`, at the user's
+request, as an independent resource fix
+([issue #9](https://github.com/saeroun-ai/emlkit/issues/9)): it replaces the
+comment scanner shared by the msg-id and list-command accessors with an
+allocation-free pass that returns identical results, and depends on nothing
+those items introduce. It does not advance, start or complete `ROB-040-001`,
+`ROB-040-004`, `ROB-040-007`, `ROB-040-009`, `ROB-130` or any other item.
+
 ## 9. Per-item implementation protocol
 
 Each Claude Code execution receives exactly one ledger ID and must:
@@ -1121,3 +1178,5 @@ Codex independently reviewed the `ROB-001-003` correction diff and regression fi
 Codex reviewed `ROB-100-006` against issue #1, verified the returned-object and fatal-precedence guards and their public-API regression tests, and independently confirmed root/child unknown-CTE preservation and the following sibling with the original reproduction program. Full tests, build, and formatting checks pass. The item is Done; callers must still handle a fatal result from Parse before constructing a mail reader.
 
 Codex reviewed `ROB-080-011` for issue #1, independently checked the fixed CP949 fixture against Python, inspected both alias entries and the public body/header tests, and confirmed the original reproduction now decodes both labels correctly. The final full race/coverage suite, build, formatting, README example compilation, and remaining vet analyzers pass; ordinary vet retains only the documented baseline warnings. The item is Done.
+
+Codex reviewed `ROB-040-003` for [issue #9](https://github.com/saeroun-ai/emlkit/issues/9), inspected the scanner and both test files, and independently measured 16 cumulative allocated bytes at each 4/8/16/32 KiB comment size. A separate 38,227-case public-API comparison retained the exact pre-change result digest. The full race suite, build, 386-target comment/address tests, formatting and whitespace checks pass; the executor also passed the full standard suite and 30/45-second focused fuzz runs. No new comment-depth rejection was introduced. This closes the resource item, not the separate partial-address and damaged-trailing-comment recovery requirements.

@@ -57,7 +57,7 @@ func (p *headerParser) skipCFWS() bool {
 			break
 		}
 
-		if _, ok := p.consumeComment(); !ok {
+		if !p.skipComment() {
 			return false
 		}
 
@@ -67,32 +67,40 @@ func (p *headerParser) skipCFWS() bool {
 	return true
 }
 
-func (p *headerParser) consumeComment() (string, bool) {
-	// '(' already consumed.
+// skipComment skips the rest of a comment whose opening '(' has already been
+// consumed, through its matching ')', and reports whether that ')' was found.
+// A backslash escapes the byte after it, so an escaped '(' or ')' does not
+// change the nesting and an escaped '\' does not escape what follows it.
+//
+// None of the callers uses a comment's text, so it is scanned in place rather
+// than collected: the cost is one pass over the comment's bytes and no
+// allocation, whatever its length or nesting depth. The depth is a counter,
+// not a stack or recursion, and cannot exceed the length of the input, so a
+// deeply nested but well-formed comment is skipped like a flat one; nesting
+// needs no limit of its own beyond the size of the header field holding it.
+//
+// When the comment is never closed, the whole remaining value is consumed and
+// false is returned, so every caller reports the field as malformed.
+func (p *headerParser) skipComment() bool {
 	depth := 1
-
-	var comment string
-	for {
-		if p.empty() || depth == 0 {
-			break
-		}
-
-		if p.peek() == '\\' && p.len() > 1 {
-			p.s = p.s[1:]
-		} else if p.peek() == '(' {
+	for i := 0; i < len(p.s); i++ {
+		switch p.s[i] {
+		case '\\':
+			// A backslash that ends the value escapes nothing; it is
+			// skipped like any other byte and the comment stays open.
+			i++
+		case '(':
 			depth++
-		} else if p.peek() == ')' {
+		case ')':
 			depth--
+			if depth == 0 {
+				p.s = p.s[i+1:]
+				return true
+			}
 		}
-
-		if depth > 0 {
-			comment += p.s[:1]
-		}
-
-		p.s = p.s[1:]
 	}
-
-	return comment, depth == 0
+	p.s = ""
+	return false
 }
 
 func (p *headerParser) parseAtomText(dot bool) (string, error) {
