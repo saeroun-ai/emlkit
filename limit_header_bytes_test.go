@@ -1124,13 +1124,16 @@ func TestParse_headerBytes_discoveryOrder(t *testing.T) {
 
 // TestParse_headerBytes_otherFailuresAreNotDiagnosed pins that only the budget
 // is translated: a part header that is malformed rather than too large fails
-// the way it always has, with nothing recorded, because nothing diagnoses
-// header framing yet.
+// the way it always has, with nothing recorded, because nothing diagnoses that
+// malformed line yet. The line here has neither a colon nor a semicolon
+// (ROB-020-003's); a part header that begins with a continuation line is no
+// longer such a failure but a malformed prefix (ROB-020-001), pinned in
+// framing_firstline_test.go.
 func TestParse_headerBytes_otherFailuresAreNotDiagnosed(t *testing.T) {
 	const text = "Content-Type: multipart/mixed; boundary=B\r\n" +
 		"\r\n" +
 		"--B\r\n" +
-		" this part header begins with a continuation\r\n" +
+		"this part header line has no separator\r\n" +
 		"\r\n" +
 		"body\r\n" +
 		"--B--\r\n"
@@ -1151,7 +1154,7 @@ func TestParse_headerBytes_otherFailuresAreNotDiagnosed(t *testing.T) {
 		t.Errorf("err = %v, want it not to be reported as a budget failure", got.err)
 	}
 	if d := session.Diagnostics(); d != nil {
-		t.Errorf("Diagnostics() = %v, want none: header framing is not diagnosed yet", d)
+		t.Errorf("Diagnostics() = %v, want none: a line without a separator is not diagnosed yet", d)
 	}
 }
 

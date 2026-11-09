@@ -2300,7 +2300,7 @@ whole input.
 
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
-| ROB-020-001 | Planned | Recover a first-line continuation as a raw malformed field/body candidate with policy-based interpretation. | Angus/Python/Mime4j compatibility fixtures. |
+| ROB-020-001 | Done | Recover a first-line continuation as a raw malformed field/body candidate with policy-based interpretation. Implemented as a header's malformed prefix, kept byte for byte and interpreted as nothing under every profile and compatibility; Strict refuses locally; a part's prefix never consumes its multipart's delimiter. See "ROB-020-001 — malformed prefixes" below. | Angus/Python/Mime4j compatibility fixtures. |
 | ROB-020-002 | Planned | Recover orphan continuation lines after malformed fields. | Raw preservation and diagnostic tests. |
 | ROB-020-003 | Planned | Support policy choices for a colonless line: raw malformed header, semicolon separator, or start of body. | Ambiguity and deterministic-precedence tests. |
 | ROB-020-004 | Planned | Recognize whitespace-only header/body separators when enabled. | Spaces/tabs/mixed fixtures. |
@@ -2309,6 +2309,226 @@ whole input.
 | ROB-020-007 | Planned | Preserve original field case, order, folding, whitespace, and physical line endings. | Byte-exact write tests. |
 | ROB-020-008 | Planned | Diagnose duplicate singleton fields without deleting them. | MIME-Version, Content-Type, From, Date fixtures. |
 | ROB-020-009 | Planned | Make every header parser path panic-free for arbitrary bytes and pathological lengths. | Native fuzz target and allocation bound. |
+
+#### ROB-020-001 — malformed prefixes (Done)
+
+Status: implemented by Claude for
+[issue #20](https://github.com/saeroun-ai/emlkit/issues/20), independently reviewed
+and verified by Codex on Linux amd64 / Go 1.26.10. Only ROB-020-001 is Done;
+other ROB-020 items remain separate. All five delegation calls ended normally
+with no permission denials. Claude ran no Go build, test, fuzz or benchmark;
+Codex executed the verification below.
+
+**Region.** A header block — the message's or a part's, after a UTF-8 byte
+order mark and after an opt-in mbox envelope, which lies outside it — whose
+first line begins with SP or HTAB begins with a malformed prefix: its first
+logical candidate, read exactly as a field's lines are read (that line, every
+continuation line after it, and whatever a `'\r'` that proves to be content
+joins to them, on `ROB-010-002`'s line rules). Whitespace-only lines are
+lines of the prefix; only an empty line ends a block (`ROB-020-004` is not
+done here). The line after the prefix is read as the block's next line always
+was: the empty line, or a field candidate held to every existing rule, a
+colonless or bad-key line still failing as before (`ROB-020-003`,
+`ROB-020-005`, `ROB-020-006`). A UTF-16/32-marked block is not read and has no
+prefix. Before, every entry point refused such a block ("malformed MIME header
+initial line"), with no entity under `Parse` and the iteration ended at a
+part for a caller that stopped at the first error.
+
+**Retention and interpretation.** `textproto.Header.MalformedPrefix` returns an
+immutable `MalformedPrefix` (`Present`, `Bytes` — a fresh copy each call —
+`Location` relative to the block on `LineEndings`' terms, the mark counted, and
+`Lines`); zero value and nil Header report none; getters do no I/O. Its bytes
+are captured as read, after the charge that admitted them: the input's own
+bytes, endings, NUL, 8-bit and control bytes as they were. It is no field:
+`Get`, `Has`, `Values`, `Fields`, `FieldsByKey`, `Len` and `Map` are unchanged
+and never see it, so an indented `Subject`, `Content-Type` or
+`Content-Transfer-Encoding` declares nothing under every profile and every
+`Compatibility` value; the entity is interpreted from the fields after it. No
+interpretation view is offered (an earlier `AsField` proposal was dropped as
+unverified for Angus's edge behavior).
+
+**Budgets and errors.** The prefix is one field candidate: the shared count is
+asked before its first byte (a spent count refuses it there, unread), it is
+charged to the field counts once when read whole, and its lines and bytes to
+`MaxLineBytes`, `MaxHeaderFieldBytes`, `MaxHeaderBytes` and the shared bytes as
+read, each byte once; capturing charges nothing. A refused block keeps neither
+prefix nor fields. A failure other than `io.EOF` keeps only lines read whole —
+a cut line, and a line whose `'\r'` the cut line was still settling, are
+dropped from the prefix and its capture — and is returned as the identical
+value; `io.EOF` keeps an unterminated last line. Retention is at most the
+admitted bytes (`MaxHeaderFieldBytes`, and the shared total across a parse).
+
+**Parts.** In a part's header that began with a prefix — and only there —
+every later line is first looked at as a delimiter line of its multipart
+(`MultipartReader.match` at the start of a line: opening or closing, white
+space after the boundary, a boundary with a colon included). Only a proved
+delimiter — its line ending (`"\r\n"`, `'\n'`, or a `'\r'` decided by the byte
+after it or `io.EOF`) or the end of the input seen after the white space —
+ends the block before it, uncharged to the header; a `'\r'` waiting on the
+previous line is a line ending; the part's body is empty and the multipart
+frames the delimiter as usual. `textproto.Part.HeaderSeparatorMissing` reports
+it. Most lines are decided by the scanner's sticky peek within one buffer. A
+line whose white space runs past the buffer is held out of it, bounded by the
+framing line budget `MaxLineBytes` — the bound the multipart reader puts on a
+delimiter line — or by one buffer when there is no line budget, and by no
+budget of the header alone: a delimiter is not header content, so a proved one
+is never refused for what `MaxHeaderBytes`, `MaxHeaderFieldBytes`,
+`MaxHeaderCount` or the shared header totals have left, and the hold may look
+at more bytes than those have left before the line is classified, as any
+input look-ahead may (input budget, cancellation and no-progress apply to it as
+to every read). Proved, the held bytes become the multipart reader's held
+candidate (`MultipartReader.cand`), which the empty body proves and
+line-budgets as framing, and no header budget is charged; otherwise they are
+replayed as the first bytes of the line (`headerScan.replay`, a buffer at a
+time) and charged then, once, to every header budget, which refuses the line
+where it overflows one — so `--B` + 4093 spaces + `: value` is the field it is,
+the fields after it stay the part's, and a field the header budgets cannot
+hold is refused by them where they say; a line held to the line budget
+overflows it, and a spent shared field count refuses it at its first byte.
+With no line budget (legacy entry points, or a disabled `MaxLineBytes`) the
+multipart reader bounds an undecided framing candidate to its 4 KiB buffer,
+and so does this guard: a line decided within that buffer is read as above,
+and one still undecided past it is the multipart reader's own
+`bufio.ErrBufferFull` framing refusal, which ends the iteration as it does for
+any such framing line. `Parse` always has a positive line budget by default. A
+failure before the line is decided, a false candidate (`--Bx`, `--B : value`)
+and a header without a prefix are read as before; a boundary containing `'\r'`
+or `'\n'` is never held.
+
+Codex's QA of this item found the guard twice taking the wrong side and
+corrected it here: first an unproved long padding (`--B` + 4093 spaces +
+`: value`) taken for a delimiter, losing the fields after it; then a proved
+long-padded delimiter refused for exhausted header-only budgets (block, field,
+shared bytes), losing a healthy sibling the old error-and-retry path recovered
+(54 baseline cases against 36 lost). The hold is now bounded by the framing
+line budget alone. This preserves recovery that existed: the parent's
+baselines (108 retry cases, and the 54 header-budget retry cases) reached the
+healthy sibling by calling `NextPart` again after the initial-line error; now
+the damaged part itself is returned and the sibling follows. General
+delimiter-aware header ending, for blocks without a prefix, is
+`ROB-020-005`'s; the guard is the narrowly shared foundation it may reuse.
+
+**Parse policy** (`firstline.go`, through `headerLineEndings`): one
+`header.first_line_continuation` per block over the whole prefix (Recovered;
+input-free message counting lines), and for such a part
+`header.missing_body_separator` (Recovered) at the point its header ended,
+ordered by offset with `input.bom` and the line-ending notes. `ProfileStrict`
+records them as InvalidMetadata and refuses the entity on `ROB-010-002`'s
+terms with the first refusing note by offset (a mark's first): prefix and
+fields kept, Content-Type not interpreted, raw body, FatalError copy carried
+past `MaxDiagnosticCount`, no session stop, siblings read (`NextPart`
+continues; `Walk` ends at the refused entity as for every Strict refusal).
+Sink stops, budgets, cancellation and no-progress keep their precedence.
+`Read`, `ReadWithOptions`, `New`, `textproto` and `mail` heal identically and
+record nothing.
+
+**Serialization.** `WriteHeader` (hence `CreateWriter`, `CreatePart`,
+`Entity.WriteTo`, `NewMultipart` bodies) writes the prefix first, after any
+UTF-8 mark and before every field, those added since included, so it never
+becomes a field's continuation; every byte in order, a last line with no
+ending followed by `\r\n` and one ended by a bare `'\r'` by `\n` (the evidence
+`Bytes` is unchanged). An unmodified complete CRLF header with a prefix
+round-trips byte for byte; reparsing written output gives the written prefix
+and writing again the same bytes. `Copy` and every mutation keep the prefix;
+`HeaderFromMap` does not. Write errors are returned as the writer's own. Not
+raw replay (`ROB-020-007`, #41); no consumed body is replayed.
+
+**Compatibility evidence.** The 16 + 9 minimized fixtures, run once each through
+Angus 2.0.5/Jakarta Mail 2.1.5, Mime4j 0.8.15 and Python 3.14.10, are archived
+with their 175 observations in
+[`docs/qa/ROB-020-001/references/`](qa/ROB-020-001/references/README.md)
+(`manifest.json` pins versions, jar and snapshot hashes and limits) and pinned
+in `framing_firstline_test.go` with emlkit's results. Recorded intentional
+differences: Angus reads a trimmed first line as a field and frames an indented
+multipart, keeps colonless lines as raw headers, drops a whitespace-only first
+line, and throws `IndexOutOfBoundsException` for a whitespace-only first line
+followed by indented lines; Mime4j default/permissive keeps indented colon
+lines as semantic fields (an indented Content-Type frames a multipart) and
+drops other runs, strict fails; Python default/compat32 omits the lines with one
+defect per line, reads a bare CR as a line ending (so `first-internal-cr` is a
+missing separator to it) and recognizes no byte order mark, strict raises; MimeKit
+was not run (`CompatibilityMimeKit` takes the conservative choice). No parity
+with any engine is claimed; #17 stays open.
+
+**API added.** `textproto.MalformedPrefix` (`Present`, `Bytes`, `Location`,
+`Lines`), `textproto.Header.MalformedPrefix`,
+`textproto.Part.HeaderSeparatorMissing`. Producers of the reserved codes
+`header.first_line_continuation` and `header.missing_body_separator`
+(the latter only as above). No signature changed; `HeaderLimits` unchanged.
+Compatibility implication: inputs that failed at every entry point now
+succeed; a caller that must reject them checks `MalformedPrefix().Present()`
+or the diagnostic. The error string "malformed MIME header initial line" is no
+longer produced.
+
+**Tests added or updated (not run by Claude).** `textproto/prefix_test.go`
+(case table over every delivery and buffer size; view, ownership and
+mutations; writer output, write failures at every byte, reparse stability;
+block, line, field, count and shared budgets; every-cut read failures; CR
+settlement failures; multipart delimiter guard over boundaries `B` and `b:c`,
+three endings, opening/closing, false/truncated candidates; every-cut multipart
+failures held to an exact table for ordinary failures and to the bytes alone
+for `io.EOF`; long padding 0–5000 around the buffer, fields and delimiters,
+with and without budgets, offsets and once-only charging, failures inside the
+held padding; a deadline subprocess for a source failing with
+`bufio.ErrBufferFull` inside the prefix and the delimiter look-ahead and hold;
+`FuzzMultipartReader_malformedPrefixDelimiter`, boundary-aware raw framing with
+an independent delimiter reading; padded opening and closing delimiters under
+exactly spent block, field, shared-byte and shared-count budgets, with the
+shared budget charged the header blocks alone, and padded fields refused by
+the budget they overflow); `framing_firstline_test.go` (reference
+fixtures with provenance over
+profiles × compatibilities × deliveries; legacy entry points; indented
+metadata; middle child under NextPart/Walk/Strict; delimiter recovery matrix
+mirroring the retry baseline; Strict diagnostic cap; sinks, reentrant reads and
+discard; budgets and input-budget sweep; shared count; every-cut input
+errors; cancellation per byte and buffered; no-progress 99/100;
+writers and `NewMultipart`; the long-padding matrix through `Parse` with its
+diagnostics, and with every header budget exactly spent); `mail/reader_firstline_test.go`. Updated:
+`limit_header_bytes_test.go` (the unrelated malformed part header is now a
+line without a separator, the prefix having become healed),
+`textproto/header_budget.go` (stale doc),
+`textproto/bom_test.go` (a mark then white space now yields a prefix),
+`framing_bom_test.go` (that input moved out of the unchanged-malformed list),
+`limit_header_total_test.go` (the leading-whitespace residual is now a
+candidate refused at its first byte; white space added to the endless-candidate
+preflight list), and `FuzzReadHeader_lineEndings` (prefix compared across
+deliveries, held to the input's bytes, and to what writing it back gives).
+
+**Final Codex verification.** The final functional code passed 16/16 sequential
+independent/unit stages: 28,314 finite cases and 222,512 assertions, 1,110
+unchanged observations (including source call counts; only a generated random
+boundary normalized), 108 baseline retry cases, all 54 small-header-budget retry
+cases, and the uncached full six-package suite. The 15/15 platform/regression
+stages passed full race, GOARCH=386, build, formatting, whitespace and previous
+BOM/line-ending/mbox/empty-input regressions. Plain vet still reports exactly
+13 existing unkeyed literals and the existing WriteTo signature warning; the
+other analyzers pass, with no new warning. Three final 30-second, two-worker
+fuzz runs passed: header line endings 472,258 executions, first-line Parse
+37,602 and multipart prefix delimiters 66,099 (575,959 total).
+
+The two concrete delimiter regressions described above were fixed and retested,
+not accepted as compatibility changes. Error-cut test expectations and the
+parent QA's random-boundary, cancellation and sink-stop assumptions were checked
+against existing behavior before correction; original failures remain recorded.
+One public API comment was corrected after the final tests; reversing exactly
+that comment reproduces all 165 source/doc hashes captured before verification,
+so no executable or test code changed afterwards. Final logs, source hashes,
+known limitations and reference snapshots are committed under
+[ROB-020-001 QA evidence](qa/ROB-020-001/README.md). Standalone probes and initial
+failure logs remain under `/tmp/emlkit-firstline/`; they are not a portable
+checked-in differential harness. Every Go/parser QA and Claude invocation ran
+as the only bounded service, with RAM 1536 MiB, swap 0, CPU quota 2, 128 tasks
+and a deadline; final jobs exited normally with no OOM. This is local QA, not
+completion of CI, corpus or generic fuzz infrastructure (#11–#14).
+
+**Not done here.** Orphan continuations after fields (`ROB-020-002`), colonless
+lines (`ROB-020-003`), whitespace separators (`ROB-020-004`), general missing
+separators (`ROB-020-005`), invalid names (`ROB-020-006`), raw replay
+(`ROB-020-007`, #41), completion state (#10), the profile/compatibility engine
+(#17). A part header without a prefix whose first field is shaped like a padded
+delimiter (`--B` + long white space + `: value`) can still be taken for a
+headerless part by the existing empty-header check; that is unchanged here and
+tracked with #29 (`ROB-060-007` to `ROB-060-009`).
 
 ### ROB-030 — RFC 2047 and unstructured text
 
@@ -3385,6 +3605,18 @@ It does not preserve or budget nested epilogues or preambles, enforce
 `MaxPreambleBytes`/`MaxEpilogueBytes`, retain or replay raw bytes (#41,
 `ROB-110`), or define message completion (#10); those items stay Planned and
 may build on the primitive.
+
+**Reviewed dependency note — `ROB-020-001` and #17, `ROB-020-005`.** Issue #20
+depends on the profile and compatibility engine of
+[#17](https://github.com/saeroun-ai/emlkit/issues/17), which stays open. This
+item documents one narrow producer policy only: every `Compatibility` value
+keeps the malformed prefix raw and uninterpreted, Tolerant and Forensic record
+it, Strict refuses the entity locally. It needs, and adds, one prefix-specific
+piece of missing-separator recovery — a part header that began with a prefix
+ends before its multipart's delimiter line — so that healing the first line
+cannot consume a delimiter that the earlier error-and-retry path recovered.
+General separator recovery and its diagnostics for other blocks remain
+`ROB-020-005`'s, which stays Planned.
 
 **Exception — `ROB-100-006`.** It was taken ahead of `ROB-010` through `ROB-090`
 at the user's request, as an independent compatibility fix

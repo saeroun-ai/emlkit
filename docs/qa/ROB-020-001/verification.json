@@ -1,0 +1,479 @@
+{
+  "item": "ROB-020-001",
+  "reviewer": "Codex",
+  "date": "2026-11-10",
+  "base_commit": "e2a1c2e",
+  "environment": {
+    "os": "Linux amd64",
+    "go": "1.26.10",
+    "goarch_tested": [
+      "amd64",
+      "386"
+    ]
+  },
+  "limits": {
+    "memory_mib": 1536,
+    "swap_mib": 0,
+    "cpu_quota_cores": 2,
+    "tasks": 128,
+    "GOMAXPROCS": 2,
+    "GOMEMLIMIT": "512MiB",
+    "GOFLAGS": "-p=2",
+    "concurrent_bounded_jobs": 1,
+    "deadlines_seconds": {
+      "independent_and_unit": 900,
+      "platform": 900,
+      "fuzz": 300
+    }
+  },
+  "verification": {
+    "post-review-r2-qa": [
+      {
+        "name": "controls",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.602
+      },
+      {
+        "name": "core",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.197,
+        "cases": 3744,
+        "assertions": 86112
+      },
+      {
+        "name": "errors",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.19,
+        "cases": 21060,
+        "assertions": 115740
+      },
+      {
+        "name": "boundary-edge",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.287,
+        "cases": 168,
+        "assertions": 1680
+      },
+      {
+        "name": "closing",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.471,
+        "cases": 360,
+        "assertions": 3384
+      },
+      {
+        "name": "guard-budgets",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.229,
+        "cases": 108,
+        "assertions": 486
+      },
+      {
+        "name": "guard-errors",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 1.094,
+        "cases": 1200,
+        "assertions": 2520
+      },
+      {
+        "name": "public-small",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.351,
+        "cases": 144,
+        "assertions": 1872
+      },
+      {
+        "name": "legacy-padding",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.182,
+        "cases": 36,
+        "assertions": 135
+      },
+      {
+        "name": "scope",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.242,
+        "cases": 216,
+        "assertions": 5616
+      },
+      {
+        "name": "budgets",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.165,
+        "cases": 538,
+        "assertions": 1252
+      },
+      {
+        "name": "mutation",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.173,
+        "cases": 577,
+        "assertions": 2923
+      },
+      {
+        "name": "stops",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.17,
+        "cases": 163,
+        "assertions": 792
+      },
+      {
+        "name": "retry",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.203
+      },
+      {
+        "name": "budget-retry",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.278
+      },
+      {
+        "name": "unit",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 6.529
+      }
+    ],
+    "final-platform": [
+      {
+        "name": "race",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 44.062
+      },
+      {
+        "name": "386",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 7.543
+      },
+      {
+        "name": "build",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.091
+      },
+      {
+        "name": "vet",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.474
+      },
+      {
+        "name": "plain-vet",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.528
+      },
+      {
+        "name": "prior-bom-lineend",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 2.839,
+        "cases": 1095,
+        "assertions": 4131
+      },
+      {
+        "name": "mbox-controls",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.197
+      },
+      {
+        "name": "mbox-core",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.199,
+        "cases": 3146,
+        "assertions": 33574
+      },
+      {
+        "name": "mbox-offset",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.17,
+        "cases": 1220,
+        "assertions": 8996
+      },
+      {
+        "name": "mbox-errors",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.185,
+        "cases": 7971,
+        "assertions": 30789
+      },
+      {
+        "name": "mbox-misc",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.16,
+        "cases": 242,
+        "assertions": 1446
+      },
+      {
+        "name": "prior-empty",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.198
+      },
+      {
+        "name": "prior-empty-exceptions",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.161
+      },
+      {
+        "name": "format",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.124
+      },
+      {
+        "name": "diff",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 0.015
+      }
+    ],
+    "final-fuzz": [
+      {
+        "name": "FuzzReadHeader_lineEndings",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 32.636,
+        "executions": 472258
+      },
+      {
+        "name": "FuzzParse_firstLine",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 35.897,
+        "executions": 37602
+      },
+      {
+        "name": "FuzzMultipartReader_malformedPrefixDelimiter",
+        "returncode": 0,
+        "passed": true,
+        "seconds": 30.259,
+        "executions": 66099
+      }
+    ]
+  },
+  "standalone_matrix_totals": {
+    "cases": 28314,
+    "assertions": 222512
+  },
+  "additional_controls": {
+    "unchanged_observations": 1110,
+    "retry_baseline_cases": 108,
+    "small_budget_retry_baseline_cases": 54
+  },
+  "vet": {
+    "plain_vet_passed": false,
+    "known_unkeyed_warnings": 13,
+    "known_WriteTo_signature_warnings": 1,
+    "new_warnings": 0,
+    "other_analyzers_passed": true
+  },
+  "source_sha256_after_comment_correction": {
+    "firstline.go": "91513e856fed59bc804e9d2401cd47f2e8e8a9763b968eedad0a8cd595adaf5c",
+    "framing_firstline_test.go": "c71cecd29b49da80bddec0f137ba31e29f0b77c05f7534c2871d31c0fa764e2c",
+    "mail/reader_firstline_test.go": "2bc0e1439b236109798af0b5836b083014547b35d817b397fe86521ed7ecd461",
+    "textproto/prefix.go": "ec4baee32b74a4ac497ed6b837fe32873e7f4771e4921349450c1ec3e8b07ffe",
+    "textproto/prefix_test.go": "6b4a5865167ebf468dd6d13c8e1b83a0cabe27b48ad0c65368c9c96b5b381989",
+    "bom.go": "ef52bc4bb552e6a5508e332d8bb59930e31bbb03ec589ce0f575874e327793be",
+    "budget.go": "5b63d9591f3f3e2ef3f9e58e6a99d8c567687610e7250ac26ec4ff564769553e",
+    "budget_test.go": "5670c6773ceb822af33d9f2c2ccf9e843cb4fe80de0a6251fcb135bc327a3f84",
+    "cancel.go": "16a22367c3dc94c4b7d4cb569c2a0e2cb8d362ee2beb4289a31615a3fba4116b",
+    "cancel_block_test.go": "8ba654940c037f2b39c4b06d70e03c52d5ddb7a2a3f274655c183e095240fca3",
+    "cancel_nested_test.go": "088d74d3ca1b168564da69cb0aeee9c54aeeaf5f2cdc30ba2e0c8715cce742e1",
+    "cancel_stage_test.go": "a21ea0794f2bc8134767e15a56d269bf5f50d72a3521a6c15b6e7dfb685bae90",
+    "cancel_sweep_test.go": "9fa8b45cd89aca75e5c8042a70682e400402cf905cd3fd19d8dcbf17494f05e1",
+    "cancel_test.go": "57efcb121e4b380142b9a609408da5ec6711f85e52c70fdfd464234ef71abd0a",
+    "charset.go": "a6a5428197024b3606747f7feccdd3208dca7fc637be2313761cb14f91af2fb0",
+    "charset/body_budget_test.go": "9988dba6976e706af6531908436f4dedfa4846c1fb6059ebc12997bd6c288a03",
+    "charset/charset.go": "5a034e163171a53a4198062f5a658de33b042f4b8648ce6380ec76ed7d36d22e",
+    "charset/charset_test.go": "7dcc5d17d692e411643525464f6b9d28cdefadbe947a9dff3c5b400734e5e133",
+    "charset/korean_alias_test.go": "b610177880261cfe72900e2f81521d632c7935e1c24ea2152c891861332daf2a",
+    "charset/progress_test.go": "500595b341b8810ef37d790df1b605fd4a6d1ecd9330c26807e7ae0348b4e8f7",
+    "charset/utf7.go": "0f6061dd88b65a779948e012bc8a44477f2438e1eaf4a00e9d5a57462d5349cf",
+    "charset/utf7_test.go": "06fe712e5a63fc71445c80e412e2443fbda0f67606307c0aea2e28e96f922426",
+    "diagnostic.go": "6d50d91d5e3105dbc91a001eb42802dcbf13edd4f5943860f589adc7b10da43a",
+    "diagnostic_code.go": "f8f519aa338912f4e39190979c301b9af5c39b84444a415291ad84ffb8b64bcd",
+    "diagnostic_code_test.go": "7f56bf40ad8b234fc3fe28abf7fb1bfb99d8f38159e9cf8dca7d37233e9019a2",
+    "diagnostic_sink.go": "aca9b1f65b882f20690431836f5fc733a65a6a93e2b03cf25a111fa258b6233d",
+    "diagnostic_sink_test.go": "b732cbb1bcf29d331657904ea60e04f8dfe45c249b189d2c9fdf8021b4676803",
+    "diagnostic_test.go": "059241fffdd4f917b4582abb7913d637a01d5913ddc513e0fea750fb9f317682",
+    "effective.go": "253bf09a2f56c9be3562c5748f72516e86891cbbdd8c1bf3140eb15eb64d476a",
+    "effective_test.go": "5a06bc48c901515b9bed0622197b90729261251682ea4dfb83a61324fb8c8d4f",
+    "encoding.go": "f822ff936c70018e3421df8eb43d2f4768ee996db8fc0e272811271e075defdc",
+    "encoding_test.go": "7dd3d6b04e5a9bb64b16725f4e317de3a12a2cc3502bb87f7beeee266d846c26",
+    "entity.go": "cedb1427da47fe75d4b50411cc17b5556de5ac2e464d99705e39bab175cbd773",
+    "entity_test.go": "628262fabeb8a9936201308258794d31afae07674dd9df6748ce9403dab87957",
+    "errgraph_test.go": "0d24ce395b36b15f0b9311d9a447fda7b7a8b7bf8c2b8674a48c1ddadccd9c52",
+    "example_test.go": "532e1cbde193313775e13d05df93cd21ad33feb970b7ed1bcacbd62e973820be",
+    "fatal.go": "3599024bc52793934bc12a606e0dd1ff6b3e95adc6cf8f1c2c86a7f5871dfd44",
+    "fatal_test.go": "373672d36ffcf21951d4b73cc345a290c40b8c2b7c4e7f9031448ae35900ef48",
+    "framing_bom_test.go": "45609f425745c86d57b6120a5a25e2c694857ca04973a7a58f59adced94b337a",
+    "framing_empty_test.go": "df17f2c9cb0c58673ef6747516db2bec1b3a9ce8586fa7a29f53b1d458567980",
+    "framing_lineend_test.go": "1f89d7ca4f3ce19fffb97815ba2b32a06baa4a59c08b35d84d3c2f95386c986e",
+    "framing_mbox_test.go": "22ae3467c2c68086d8396d26a93bbbd0196e7b84ef5246c9606789516b9d0f16",
+    "framing_trailing_test.go": "6f6b3aae9cfd72ddc3fa84f2855077aac0087b0872ffb2a3623c126a54dd6678",
+    "go.mod": "1b76ddb4d76db27cfd297c59d3778fdaff72ce32f7630ef906569d59f1992d60",
+    "go.sum": "87a3a553316a4698d02ccaa6a5c8563221a9104b14f90954ee234359d6c5e96b",
+    "header.go": "951600ea966a5b4c3b21383a704dc06dff4d249f288b9e46972359c96e718e0a",
+    "header_test.go": "6ba2df0dba9b4ee47415e6215b8153ed9c2aa95995c4f223949b44d700ce6536",
+    "internal/errgraph/errgraph.go": "a6d4dc5563b4c7b721bc491420bd128ffad57e45cfe8dafa9a85b69c46ab93e9",
+    "internal/errgraph/errgraph_test.go": "92c235bf6231ed3c4736d384fda81a1c8fae32469ade6cab102593a0d28ffd86",
+    "io_error_test.go": "b0b7f4272fe2ff0c05d018024e5a22509430ac820cda90bafa91ccff404a129f",
+    "limit_body.go": "f908a785e6b600c90a99d8a9dc9813e7f08e66c6dab3d4259155624b9057ac12",
+    "limit_body_test.go": "42dc0167e8364a7275593d48d6587cd2e3d00829d47cf73daf17dc4d47de94d0",
+    "limit_diagnostic_count_test.go": "af95f35bfd1c9437c642f20ba43021ef61b55e42cdaae3ff2256b21acfba7349",
+    "limit_diagnostics.go": "87d1628971b6a31ad3c655dbe07954a680247936faae3763d85594c8fbc74c57",
+    "limit_disposition_stop_test.go": "eca31768b43ec5346c915750ac0744225a9c68cbe661cdc1ed18f43c0765475a",
+    "limit_header.go": "8dfdd9be6bb8190930b832a99f416d4ab514e2faf7ef1edeac3bfa69b32a714d",
+    "limit_header_bytes_test.go": "2427f209978bbfa682d89c8a71adc1e6ef0b647833460d8dee01a6615abdd5bc",
+    "limit_header_fields_test.go": "5bde3fee89838b5eed054e00e24b93b45c94204ca3b92be1dfce200d2fd9af57",
+    "limit_header_total.go": "44615405992d4825fa9421ff5911c4061666227ac57a1dbc44ca2b7b2893a85d",
+    "limit_header_total_test.go": "bdb6cdf597920cf402cb1eb3a14a0eed3899ba7665cd0dc8ab21c8a7333f0002",
+    "limit_input.go": "9989b9078452d72751a7cc50af88de2cca5b41d65f9af5491e6031868757d1fa",
+    "limit_input_test.go": "065d3d64b8f6c42856f2ee55442367cdd5f3ec9f14bb29694871874e695ed29d",
+    "limit_line_bytes.go": "4918c66c283a5edce8db7b79eb1b2c09e7349376e75869fcc664942712471f5d",
+    "limit_line_bytes_test.go": "bb7ea9ba4d6ce0538145fcc962392b8471b8a1c4b4aae5119478c024a8889609",
+    "limit_mime_depth_test.go": "e1de911ba457a35030834cac2beb0e2b59022860b6f6479c3a03e21750121087",
+    "limit_parameters.go": "207590f100f472106b4a813d517d82e7c1a139dc75cfc784e2e8f1e22da6c1c6",
+    "limit_parameters_test.go": "c70b21e7a450de7561d892cf39a9f5eedf90ac53b7762afdec8d8cf25ffa7432",
+    "limit_part_count_stop_test.go": "2e1079d4dad829c754c9517736658bf69da20381f2f93c610100768911c957e0",
+    "limit_part_count_test.go": "a1d6e93c4e9fcccad318aea358b3596fb4b853585cf04fc4e96a2cd528f8320e",
+    "limit_tree.go": "ea676b134c376d7ad25b799017a91d5bf286ffd72b65192dfe67a850a95db62d",
+    "limit_tree_test.go": "15a4796a982272aab0962d88b63b54cb46e04e83f6bc8759f16809e4af9c38ca",
+    "limits.go": "0490bc197444d4e6523fb333d0fbf257d29c0012c3eaa13f2aa1ba65598b1f66",
+    "limits_doc_test.go": "a38e43f167abe9f7c4188136683a200f67e3258b986f4f56e8ac8fc74db9de68",
+    "limits_internal_test.go": "5987170dc8d12ca3d8f28f1ca0b99050e77acac9c19cb9fd765bd3e6a3b4a495",
+    "limits_test.go": "05126c63610eacd975cd4e47ce0e63f929abe4a97553954dca485bc053aef511",
+    "line_endings.go": "3191f044299f7baee1e595300bead16d41810ebd90a1bac6ade4a4b3b31b54d8",
+    "mail/address.go": "3c178cd64e24b93147a8c74d66be13d9d918b13887b61fabc9f0e7ab9bd4a91e",
+    "mail/address_test.go": "08ee5a0a2933dffba94b85dd59af9471cbb1ce023fd963a9bce6ca720e468280",
+    "mail/attachment.go": "ab16fb04acb36e7bd14f65cfa771f3986d406f790562cf871e20e7cb76640823",
+    "mail/attachment_test.go": "0b9b71cbdbe3315a0d2acff5018013efad07657ba12b2bff5e6755ceb5240b2d",
+    "mail/header.go": "4d040325f1967309e4956a5dd88d6fa40dd755176d0e30b68faa8837ab6d7844",
+    "mail/header_comment_internal_test.go": "50c7fab626040ce6250755f0788c1969bb5d63742bb4d6984c7938616a6c4e41",
+    "mail/header_comment_test.go": "8f4ee030c9433dea8b7641c858fbf1ae3f57ee311eacaa7232a63da2580a054f",
+    "mail/header_test.go": "43c7841cb83c9e39336890bd8be4f7bba603df8601fb512083ac75a62d553bce",
+    "mail/inline.go": "de4ac4e19761868b7ab21508485630f7912bbb79426d7e22176c886869cbe7bf",
+    "mail/mail.go": "a7f46f0e4e3c5073a02018d99ce1b429e98e6308a7d614d8a7314dae22b2b1b0",
+    "mail/mail_test.go": "f5d2703810ccc683c827729c9307a0814fcfdcbbac3e44c5593a78909366c1db",
+    "mail/reader.go": "1a1b7555f300f2baae00d12423281d32137bd54187a3bf1ecdea82f49a5d1c73",
+    "mail/reader_bom_test.go": "ac2815febea1e41b3ff183f6fbe370d2fd908b9793a7260f55c456a3ce306fe7",
+    "mail/reader_cancel_test.go": "8a47d7447f8545a05229aff803c6215e361515554f1893d8a9a9af48b757ade7",
+    "mail/reader_diagnostic_count_test.go": "03e81817f41cf1985a0dd4c1bbec0b358c773071641c51228d3d7dc8e9a2ee90",
+    "mail/reader_empty_test.go": "d3357a8eab7fb83b7236fc651725b8246d0da315c82153de241bc8d56cd3d3eb",
+    "mail/reader_errgraph_test.go": "56e97f8893cb1c0ae79157de8fe6730d45b07c8b479ab5978ef571472e85fd0a",
+    "mail/reader_input_limit_test.go": "dfed1c272425f01976b125d3997469cc2e0d7896ef27bf41dbf9e67f714a7e31",
+    "mail/reader_ioerror_test.go": "9440f925fb8c2a3e97864879df95949a1a91ab6469f61c7978ca295cb9c8e727",
+    "mail/reader_lineend_test.go": "d82694fb8ebb9d404c7eeeef3f469e13b36a65d16458f934c8b272e3fbe90562",
+    "mail/reader_mbox_test.go": "393e05e7ef98ad6160e0e07f7308671113c7858a4e3b284c91cc4cf0f26eddd8",
+    "mail/reader_metadata_test.go": "bd3750866d3cd8e9e4097bb84b7600f9f24da3f36bd01be64651b97863fe2759",
+    "mail/reader_progress_test.go": "4accc40866af3ce3363c4e69e6d23e869cf79fdfc74b9edf089226a37252d2f4",
+    "mail/reader_repair_test.go": "44a9a652c38f1957bf348a5d58d6b2438f9c1d6aa797ead2f46bcd56449a22dd",
+    "mail/reader_test.go": "c535bb87475c2a8419e3080de29f25882d5e1c0e8c859d1c1f51e1067d96aff4",
+    "mail/reader_total_header_test.go": "0daad79f55aa8816ffa0e0b02adbe9483ae477f59044607856e3ee8276e4e50a",
+    "mail/reader_trailing_test.go": "53cfd74f4244d993bba3d11016de63b9ee64f6af71d55c333d2794ee7e460769",
+    "mail/reader_warning_test.go": "76eea9467964ee510a8225d36904abf69a0e81389e31a62ea7cb278633e80236",
+    "mail/writer.go": "ddaf21438fcc5776483c98432fa2b447e5fa379bd0fd0fb2ef9d9d231fd652e9",
+    "mail/writer_test.go": "ee49b8e35d9351756490d6dad89c4e9aceeed083ab241c5b3805725292602137",
+    "mbox.go": "a1babd6c9cc4bc7b7f616dad5219670e4b198bde67ea30430b8e7291ee584be1",
+    "mbox_internal_test.go": "90c92f667db6d721f0e97539b3067c37bb47a7837530b92fedb1504df9827192",
+    "message.go": "6d16b7b146af657b392441ee8e28a472b018ae2a4555a3731ee8dcfc73644c7a",
+    "metadata_repair.go": "5c8a3a378a1e4b364e2326175fb750ea165b49ec8ae9c8c1852c9193b8d660f1",
+    "metadata_repair_empty_test.go": "b047f5a147faff762d079ed66db2cea3601a20c0668e92a3b1ef9e6f7c5f2443",
+    "metadata_repair_test.go": "6cfd84b671a6f1d823b1791ed301610df11ffaa7e86344fe37bb00be08a7625b",
+    "metadata_repair_unframed_test.go": "084e950773e777b85dab68c66fdc7c4aa61ffa82c2d435ab057ea5002075d267",
+    "multipart.go": "c5d9b5d1e936f296a0d4757a78d18236930ae226cf94e619b211b65be2ce4716",
+    "multipart_lineend_test.go": "c9ffc7f697f8a6bb6a010ba219c35bcd463a0bb43a961cd61c31009ace0222a0",
+    "origin.go": "40ac58367c977ffec8151712a4a6e6ec68196a68e6a3a7ffa7c36b10a1c652cd",
+    "origin_test.go": "588ac4b71fa7f15afa03afb148e4dea3e04d6cb5ff41c280930bb2d5d9e75c08",
+    "parse.go": "0c43049749b4a0735887ce68e44ecd46565e84b410c9156a3909df9a7abb7431",
+    "parse_context.go": "3ede6123a24b451bcf380ffb6e39032e7e19408d910cf94315f6e7d014b76eca",
+    "parse_context_test.go": "012d0ce414ace8b300218ec35bd327ea462221cc89ddeee1cba0ab03b6a7b919",
+    "parse_internal_test.go": "0c1bcaf2bc40aa76ec41fa666d7a55fdea631db7966666258cf07c51451982b1",
+    "parse_test.go": "572ba472559d333786458db90ae3c97bc46ec13204452d08fcfda874c9b5bb7c",
+    "profile.go": "8581c58a43c071a893cd9911feea52105ba5df24c3bc904095f3514a64ca0efc",
+    "profile_test.go": "b2f6a917d9fa231bc012d69f191233ca0be36d8cae3a65bdce6275f54801893e",
+    "progress.go": "92db03a40e94d773f32e55a7eb07d08a267f9687920af9cc80107c1e9a17cb72",
+    "progress_metadata_test.go": "ffc4115433be18b2765e6799dbdaef5803f1a187f9cc75c6880b44fbac59cc7e",
+    "progress_test.go": "1702c37fc3b29e676cf27518020a1d3e3b102d45e96417be0ca09141e9b26664",
+    "session.go": "3c07c56c41125c27a19aed8bcb6c3b200ad200baa9e62d4920919c334bc7e838",
+    "session_test.go": "e9fbed05bfd2b897567e5c84dc6074db5af7325c184ffd994df3d96fe964b840",
+    "textproto/bench_test.go": "cb993468bf40417935e2a249036a07d011fabaca9ccbc26ac1bbe2cb07a2052b",
+    "textproto/bom.go": "4a808bd57f5318ac5924f6c16e097782f65161200ab339de62e9f637cbc16b02",
+    "textproto/bom_test.go": "3dac4ba9883b5f9a117c14dca966b37d00704a8e06816c4029cbd3da3afcf2dd",
+    "textproto/example_test.go": "c6a564ec34fa6035637d7ae6561f28c430c60d204b629989eb46cc38672afa73",
+    "textproto/header.go": "e3c16f31a4909b6a69eb27771f4bbf2815aa0eaee4527121837cbcc4ac19919f",
+    "textproto/header_budget.go": "e719e92e911e51661e4e849959fa55c37440c4dba1323624a727e5f6988a6709",
+    "textproto/header_budget_test.go": "a9e0dfe255227bfe59d8c6247aeedcff19d6b1116ed61efd89b3945110dadd52",
+    "textproto/header_empty_test.go": "c611fc40ed345db69e0973e0521d4c2f3fb3c2a0a6fdd6ad3cab2da239e74aee",
+    "textproto/header_ioerror_test.go": "9ad15df809969af7a07a210385ed9b8df12e9aa6a56d395c5c26f51f33e04003",
+    "textproto/header_limit_test.go": "b77e2f37cdbf31f74e86cfea7714c46dea11362db70a5bf1fa204f4f70e91309",
+    "textproto/header_limits_test.go": "fcfc22a2855e7615336ad25e262eb22555a04e6ad82a0ad6511eaa0d0ac83863",
+    "textproto/header_test.go": "6f2e7e2301042b8620553ae73d743c9b9f143dbd0139b801faf739fe65bfe90b",
+    "textproto/limits.go": "04bf7deb3b723d03240749be19e5291779809571db711f4640e73e2508fdbc20",
+    "textproto/line_endings.go": "170572bd873dd13cab5c9038c5f28d41c3c532f51902d6b7d4418d323f971942",
+    "textproto/line_endings_test.go": "d2a24ae327cd05b532204bb32ea547729fdc01424a41748d9a38f21bf779524b",
+    "textproto/multipart.go": "c91063e9ad3941a152c8e24b757ec4f7bb6289efc344f2127f09c4bc51ea6ef6",
+    "textproto/multipart_epilogue_test.go": "68a9bca7fc0eb345db6e179905421ce1e94c23671553da13fac55a9ebe15bc03",
+    "textproto/multipart_errgraph_test.go": "b0de267825b10d9dd11d21b3c5cb53a43c4bc962dc2fb6c6a37d575fb476a37a",
+    "textproto/multipart_limits_test.go": "115ecb2ba419a1a3658cf00c62b3196dc76f0f5d86804ff976557fc57371870c",
+    "textproto/multipart_line_edge_test.go": "ab2436695d3dda88c6490caf074fb33b81f674375050455ebc7cd258f78dbfcf",
+    "textproto/multipart_lineend_test.go": "fcd336a9a79fd3558161db928323294e14c49941d4d2e32709de49f813293104",
+    "textproto/multipart_test.go": "46aac44f1be4958f7345f66d8b9218a423d2dbb2ce51fb5223cf1ea866e579da",
+    "textproto/textproto.go": "fd8c495461ba7fce700ee54a5b7c9e93a57403ff76fd27a83cdefbcee85ceb0f",
+    "trailing.go": "ebeb8b78f9e317915c464439efafb58c3fb369d5caa0b543248906c1683f16ac",
+    "trailing_internal_test.go": "7c9446246ae1e040e0b041d8eb3224102679715d7e15995a7c762cd96afc485e",
+    "utf7/decoder.go": "4a81aa25c21174468ec8c131bb391064f2b8c8851c52fb45fec95b0a3bbca135",
+    "utf7/decoder_test.go": "92b965a4ba2015d6e401b9cdab8800d985086b0fe2525a8a53dbff253d58d914",
+    "utf7/encoder.go": "6445ee734e7233112c2e69d397a7043b4036351b56ecd4b671d604ef12d0f30f",
+    "utf7/encoder_test.go": "242041726d977f36988f5a6c8712bdc0e49bc1a107951fe60f52301ae184a24c",
+    "utf7/utf7.go": "8dce888fe11c1fa8a849c79dda2747d458bdabaa5d28ebd864066185f2f179ff",
+    "writer.go": "79d41252e64526cade170c7bfa3dcd81911429f6508b847e7d5c0cb61e86e77e",
+    "writer_lifecycle_test.go": "99b891b014c234a6099643e629bb8f530d10e1a0fe4e1bf2549468830b20b22b",
+    "writer_malformed_test.go": "3fdac265d0acea9b5fc0a235ec6ceb137232f2144986069135bb041cc8223a16",
+    "writer_test.go": "71a8961bbbb513102f37863ad839832eaa03e8f08b6e36879167e16e49616f86"
+  },
+  "final_comment_only_correction": "Part.HeaderSeparatorMissing now names framing MaxLineBytes and the no-line-budget buffer refusal. Reversing exactly that comment yields all 165 source/doc hashes captured before final QA; no executable/test code changed.",
+  "delegation": {
+    "model_alias": "opus",
+    "effort": "high",
+    "calls": 5,
+    "permission_denials": [],
+    "claude_ran_parser_or_go_qa": false
+  },
+  "limitations": [
+    "Local Linux checks only; no CI or Windows claim.",
+    "Scoped finite fuzzing, not proof for arbitrary inputs or decoder chunk invariance (#34).",
+    "No full compatibility engine (#17), general missing separator recovery (ROB-020-005), or raw replay (#41).",
+    "No-prefix padded-first-field defect is preexisting and tracked in #29.",
+    "Without MaxLineBytes, a framing candidate still undecided past one buffer is refused; not unbounded legacy recovery."
+  ],
+  "log_sha256": {
+    "post-review-r2-qa.txt": "3892e0d77269336c56865fede39ecbfa6bda18d2715f427e16be9f6ab173a346",
+    "final-platform.txt": "e840ccc787842bce186e775a32b1fb525cf40b32a46d69ad42fe10d6db8c3989",
+    "final-fuzz.txt": "2fc8e6975aaedda201847d760c6e5b9b103c14f7161058f7b03b1c29b41d9a98"
+  }
+}

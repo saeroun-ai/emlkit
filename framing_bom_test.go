@@ -312,7 +312,9 @@ func TestParse_byteOrderMark_malformedUnchanged(t *testing.T) {
 		"\x00\x00\xff\xfeA: 1\r\n\r\nbody",
 		bomUTF8 + bomUTF8 + "A: 1\r\n\r\nbody",
 		bomUTF8 + "\xff\xfeA: 1\r\n\r\nbody",
-		bomUTF8 + " A: 1\r\n\r\nbody",
+		// A mark followed by white space (bomUTF8 + " A: 1") is no longer an error:
+		// the white space begins the block's malformed prefix after the mark
+		// (ROB-020-001), pinned with the mark in framing_firstline_test.go.
 		"A: 1\r\n" + bomUTF8 + "B: 2\r\n\r\nbody",
 	} {
 		for _, profile := range []Profile{ProfileTolerant, ProfileStrict, ProfileForensic} {

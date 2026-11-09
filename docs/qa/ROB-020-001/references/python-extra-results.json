@@ -1,0 +1,468 @@
+[
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "blank-then-indented-field",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  \r\n",
+          "FirstHeaderLineIsContinuationDefect:  Subject: shifted\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "blank-then-indented-field",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  \r\n",
+          "FirstHeaderLineIsContinuationDefect:  Subject: shifted\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "blank-then-indented-field",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  \r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "two-blanks-then-indented",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  \t\r\n",
+          "FirstHeaderLineIsContinuationDefect: \t\r\n",
+          "FirstHeaderLineIsContinuationDefect:  Subject: shifted\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "two-blanks-then-indented",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  \t\r\n",
+          "FirstHeaderLineIsContinuationDefect: \t\r\n",
+          "FirstHeaderLineIsContinuationDefect:  Subject: shifted\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "two-blanks-then-indented",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  \t\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "indented-second-field",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  Subject: first\r\n",
+          "FirstHeaderLineIsContinuationDefect:  To: second\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "indented-second-field",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  Subject: first\r\n",
+          "FirstHeaderLineIsContinuationDefect:  To: second\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "indented-second-field",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  Subject: first\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "empty-prefix-name",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  : value\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "empty-prefix-name",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  : value\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "empty-prefix-name",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  : value\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "spaces-eof",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  \t "
+        ],
+        "body": ""
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "spaces-eof",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  \t "
+        ],
+        "body": ""
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "spaces-eof",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  \t "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "blank-then-raw",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect: \t\r\n",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "blank-then-raw",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect: \t\r\n",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "blank-then-raw",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect: \t\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "bom-blank-indented",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "\ufffd\ufffd\ufffd \r\n Subject: shifted\r\nX: kept\r\n\r\nbody"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "bom-blank-indented",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "\ufffd\ufffd\ufffd \r\n Subject: shifted\r\nX: kept\r\n\r\nbody"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "bom-blank-indented",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "long-run",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "long-run",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n",
+          "FirstHeaderLineIsContinuationDefect:  continuation\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "long-run",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "first-internal-cr",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: ",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r"
+        ],
+        "body": "not a field\nX: kept\n\nbody"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "first-internal-cr",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: ",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r"
+        ],
+        "body": "not a field\nX: kept\n\nbody"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "first-internal-cr",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  }
+]

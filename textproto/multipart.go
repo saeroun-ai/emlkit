@@ -45,6 +45,32 @@ type Part struct {
 
 	headerOffset int64 // offset of the part's header block in mr's input
 	bodyOffset   int64 // offset of the part's body in mr's input
+
+	// separatorMissing reports that the part's header block, which began with
+	// a malformed prefix, was ended by a delimiter line rather than by an empty
+	// line; see HeaderSeparatorMissing.
+	separatorMissing bool
+}
+
+// HeaderSeparatorMissing reports that this part's header block was ended by the
+// next delimiter line of its multipart rather than by the empty line that
+// separates a header from a body, so that the part's body is empty and the
+// delimiter line, unread by the header, is what ended the part.
+//
+// It is only ever reported for a header block that began with a malformed
+// prefix (see Header.MalformedPrefix), whose later lines are each looked at as
+// a delimiter line before they are read, and only for a line proved one — its
+// line ending, or the end of the input, seen after the boundary and any white
+// space — so such a delimiter is never read as one of its fields and the part
+// after it is not lost. White space past the reader's buffer is decided within
+// the framing line budget, HeaderLimits.MaxLineBytes, and no header-only
+// budget; with no line budget, a line still undecided past one buffer is this
+// reader's framing refusal wrapping bufio.ErrBufferFull, which ends the
+// iteration. A line that only begins like one is read as the line it is. A
+// header block without a malformed prefix is read as it always was, and a
+// missing separator there is not looked for (ROB-020-005).
+func (p *Part) HeaderSeparatorMissing() bool {
+	return p.separatorMissing
 }
 
 // HeaderOffset returns the offset of the first byte of this part's header
@@ -147,7 +173,9 @@ func newPart(mr *MultipartReader) (*Part, error) {
 	// The delimiter line that introduced this part has already been consumed,
 	// so the reader is standing on the first byte of the part's header block.
 	bp := &Part{mr: mr, headerOffset: mr.offset()}
-	scan := &headerScan{lim: mr.limits, base: bp.headerOffset}
+	// The block is a part's header, so after a malformed prefix it ends before
+	// a delimiter line of this reader rather than reading one; see prefix.go.
+	scan := &headerScan{lim: mr.limits, base: bp.headerOffset, parent: mr}
 	if err := bp.populateHeaders(scan); err != nil {
 		// Only this reader's own budgets make a HeaderLimitError. The test is
 		// against the sentinel no reader can present, not against the ones it
@@ -165,6 +193,7 @@ func newPart(mr *MultipartReader) (*Part, error) {
 		}
 		return nil, err
 	}
+	bp.separatorMissing = scan.atDelim
 	bp.bodyOffset = mr.offset()
 	bp.r = partReader{bp}
 	return bp, nil

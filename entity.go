@@ -173,7 +173,8 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// by a bare '\r', or whose last line the input ended before any line ending,
 	// is refused on the terms of a refused Content-Type, which is then not
 	// interpreted at all; see line_endings.go. So is one that began with a byte
-	// order mark.
+	// order mark, or with a malformed prefix (firstline.go), whose lines are no
+	// fields and so declare no Content-Type or transfer encoding in any profile.
 	//
 	// A header block that began with a UTF-16 or UTF-32 byte order mark was not
 	// read, so the entity is opaque, under every entry point and whatever

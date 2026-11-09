@@ -660,8 +660,8 @@ func (r *endlessHeader) Read(p []byte) (int, error) {
 // TestParse_totalHeaders_countPreflight pins the count's bound on a candidate
 // with every other budget off, MaxInputBytes included: once the count is
 // spent, the next candidate is refused at its first byte, whatever kind of
-// candidate it is, however long it would be. The leading-whitespace line is no
-// candidate, and keeps the malformed-header error it always had.
+// candidate it is, however long it would be. A line beginning with white space
+// begins a malformed prefix (ROB-020-001), which is such a candidate.
 func TestParse_totalHeaders_countPreflight(t *testing.T) {
 	const head = "Content-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\n"
 	// A bare '\r' at the start of a part's header is the empty line that ends
@@ -683,7 +683,7 @@ func TestParse_totalHeaders_countPreflight(t *testing.T) {
 			t.Errorf("read %d bytes past the header, want at most two buffers", src.n)
 		}
 	})
-	for _, prefix := range []string{"X: ", ":", "X-no-colon", "bad key\x01"} {
+	for _, prefix := range []string{"X: ", ":", "X-no-colon", "bad key\x01", " ", "\t"} {
 		t.Run(fmt.Sprintf("%q", prefix), func(t *testing.T) {
 			src := &endlessHeader{prefix: prefix}
 			session, e, err := Parse(io.MultiReader(strings.NewReader(head), src), &ParseOptions{Limits: totalsOnly("count", 1)})
@@ -709,16 +709,24 @@ func TestParse_totalHeaders_countPreflight(t *testing.T) {
 		})
 	}
 
-	t.Run("leading whitespace residual", func(t *testing.T) {
+	// A part header that begins with white space used to be refused as a
+	// malformed initial line before any candidate was counted. It now begins
+	// with a malformed prefix (ROB-020-001), which is a field candidate like any
+	// other: the spent shared count refuses it at its first byte, the identical
+	// stop, before any of it is read.
+	t.Run("leading whitespace is a candidate", func(t *testing.T) {
 		text := head + " leading white space\r\n\r\nbody\r\n--x--\r\n"
 		session, e, err := Parse(strings.NewReader(text), &ParseOptions{Limits: totalsOnly("count", 1)})
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = e.MultipartReader().NextPart()
-		if err == nil || IsFatal(err) || session.Diagnostics() != nil {
-			t.Errorf("NextPart() = %v, %v: want the malformed-header error, undiagnosed", err, codesOfDiags(session.Diagnostics()))
+		mr := e.MultipartReader()
+		p, err := mr.NextPart()
+		_, again := mr.NextPart()
+		if p != nil || err == nil || err != again || session.fatalErr() == nil {
+			t.Fatalf("NextPart() = (%v, %v) then %v, want the identical stop", p, err, again)
 		}
+		checkTotalStop(t, session, err, "count", 1, &totalBlock{path: []int{0}}, int64(len(head)))
 	})
 
 	t.Run("non-candidates are free", func(t *testing.T) {

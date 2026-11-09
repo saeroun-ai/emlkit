@@ -1,0 +1,38 @@
+[
+  {
+    "name": "blank-then-indented-field",
+    "base64": "IA0KIFN1YmplY3Q6IHNoaWZ0ZWQNClg6IGtlcHQNCg0KYm9keQ=="
+  },
+  {
+    "name": "two-blanks-then-indented",
+    "base64": "IAkNCgkNCiBTdWJqZWN0OiBzaGlmdGVkDQpYOiBrZXB0DQoNCmJvZHk="
+  },
+  {
+    "name": "indented-second-field",
+    "base64": "IFN1YmplY3Q6IGZpcnN0DQogVG86IHNlY29uZA0KWDoga2VwdA0KDQpib2R5"
+  },
+  {
+    "name": "empty-prefix-name",
+    "base64": "IDogdmFsdWUNClg6IGtlcHQNCg0KYm9keQ=="
+  },
+  {
+    "name": "spaces-eof",
+    "base64": "IAkg"
+  },
+  {
+    "name": "blank-then-raw",
+    "base64": "CQ0KIG9ycGhhbg0KWDoga2VwdA0KDQpib2R5"
+  },
+  {
+    "name": "bom-blank-indented",
+    "base64": "77u/IA0KIFN1YmplY3Q6IHNoaWZ0ZWQNClg6IGtlcHQNCg0KYm9keQ=="
+  },
+  {
+    "name": "long-run",
+    "base64": "IG9ycGhhbg0KIGNvbnRpbnVhdGlvbg0KIGNvbnRpbnVhdGlvbg0KIGNvbnRpbnVhdGlvbg0KIGNvbnRpbnVhdGlvbg0KIGNvbnRpbnVhdGlvbg0KIGNvbnRpbnVhdGlvbg0KIGNvbnRpbnVhdGlvbg0KIGNvbnRpbnVhdGlvbg0KWDoga2VwdA0KDQpib2R5"
+  },
+  {
+    "name": "first-internal-cr",
+    "base64": "IG9ycGhhbg1ub3QgYSBmaWVsZApYOiBrZXB0Cgpib2R5"
+  }
+]

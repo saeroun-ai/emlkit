@@ -1,0 +1,111 @@
+Bounded unit emlkit-bounded-ba788fd0da: RAM 1536 MiB, swap 0, CPU quota 2, tasks 128, deadline 900s
+RUN race
+ok  	github.com/saeroun-ai/emlkit	38.887s
+ok  	github.com/saeroun-ai/emlkit/charset	1.074s
+ok  	github.com/saeroun-ai/emlkit/internal/errgraph	1.011s
+ok  	github.com/saeroun-ai/emlkit/mail	2.281s
+ok  	github.com/saeroun-ai/emlkit/textproto	22.051s
+ok  	github.com/saeroun-ai/emlkit/utf7	1.010s
+
+RUN 386
+ok  	github.com/saeroun-ai/emlkit	3.359s
+ok  	github.com/saeroun-ai/emlkit/charset	0.018s
+ok  	github.com/saeroun-ai/emlkit/internal/errgraph	0.002s
+ok  	github.com/saeroun-ai/emlkit/mail	0.262s
+ok  	github.com/saeroun-ai/emlkit/textproto	1.384s
+ok  	github.com/saeroun-ai/emlkit/utf7	0.002s
+
+RUN build
+
+RUN vet
+
+RUN plain-vet
+mail/address.go:28:12: net/mail.AddressParser struct literal uses unkeyed fields
+mail/address.go:29:4: mime.WordDecoder struct literal uses unkeyed fields
+mail/address.go:38:12: net/mail.AddressParser struct literal uses unkeyed fields
+mail/address.go:39:4: mime.WordDecoder struct literal uses unkeyed fields
+mail/address_test.go:10:26: *net/mail.Address struct literal uses unkeyed fields
+mail/address_test.go:11:3: *net/mail.Address struct literal uses unkeyed fields
+mail/address_test.go:22:11: net/mail.Address struct literal uses unkeyed fields
+mail/header_test.go:17:26: *github.com/saeroun-ai/emlkit/mail.Address struct literal uses unkeyed fields
+mail/header_test.go:175:32: *net/mail.Address struct literal uses unkeyed fields
+mail/header_test.go:176:30: *github.com/saeroun-ai/emlkit/mail.Address struct literal uses unkeyed fields
+mail/header_test.go:201:26: *github.com/saeroun-ai/emlkit/mail.Address struct literal uses unkeyed fields
+mail/writer_test.go:16:26: *github.com/saeroun-ai/emlkit/mail.Address struct literal uses unkeyed fields
+mail/writer_test.go:17:24: *github.com/saeroun-ai/emlkit/mail.Address struct literal uses unkeyed fields
+entity.go:839:18: method WriteTo(w io.Writer) error should have signature WriteTo(io.Writer) (int64, error)
+
+{"returncode": 1, "unkeyed": 13, "write_to_signature": 1, "other": [], "matches_known_baseline": true}
+
+RUN prior-bom-lineend
+RUN bom-controls
+BOM unchanged control observations= 60 failures= 0
+
+RUN bom-stops
+BOM stop/cap cases=1095 assertions=4131 failures=0
+
+RUN bom-core
+BOM core cases=1260 assertions=14742 failures=0
+
+RUN bom-errors-budgets
+BOM source/budget cases=1934 assertions=6564 failures=0
+
+RUN candidate-prefix
+candidate prefix budget cases=144 failures=0
+
+RUN strict-resume
+strict resume cases=432 assertions=3536 failures=0
+
+RUN policy
+multipart policy cases=1299 assertions=7226 failures=0
+
+RUN replacement-cancel
+replacement cancel cases=531 failures=0
+
+RUN multipart
+multipart cases=5879 assertions=87623 failures=0
+
+RUN boundary-edges
+multipart edge cases=840 failures=0
+
+RUN multipart-errors
+multipart error/budget cases=514 assertions=3410 failures=0
+
+RUN headers
+cases=6962 assertions=29290 failures=0 fixtures=80
+
+RUN header-errors
+cases=1139 assertions=3234 failures=0
+
+RUN strict-headers
+strict/serialization assertions=130 failures=0
+
+PASSED 14 OF 14
+
+RUN mbox-controls
+mbox option-off controls PASS observations 360
+
+RUN mbox-core
+mbox core cases=3146 assertions=33574 failures=0
+
+RUN mbox-offset
+mbox offsets/budgets cases=1220 assertions=8996 failures=0
+
+RUN mbox-errors
+mbox error/stop cases=7971 assertions=30789 failures=0
+
+RUN mbox-misc
+mbox misc cases=242 assertions=1446 failures=0
+
+RUN prior-empty
+parse_matrix=1872 header_split_matrix=3336 legacy_matrix=78 assertions=24399 failures=0
+
+RUN prior-empty-exceptions
+empty_exception_checks=265 failures=0
+
+RUN format
+
+
+RUN diff
+
+ALL_STEPS_PASSED 15

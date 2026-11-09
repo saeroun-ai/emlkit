@@ -41,7 +41,6 @@ func byteOrderMarkCases() []byteOrderMarkCase {
 	const (
 		malformedKey  = "message: malformed MIME header key"
 		malformedLine = "message: malformed MIME header line"
-		initialLine   = "message: malformed MIME header initial line"
 	)
 	utf16le := "\xff\xfeA\x00:\x00 \x001\x00\r\x00\n\x00\r\x00\n\x00b\x00"
 	utf16be := "\xfe\xff\x00A\x00:\x00 \x001\x00\r\x00\n\x00\r\x00\n\x00b"
@@ -101,7 +100,11 @@ func byteOrderMarkCases() []byteOrderMarkCase {
 		{name: "00 00 ff fe", in: "\x00\x00\xff\xfeA: 1\r\n\r\n", err: malformedKey},
 		{name: "repeated utf8 mark", in: utf8Mark + utf8Mark + "A: 1\r\n\r\n", bom: BOMUTF8, err: malformedKey},
 		{name: "utf8 mark then utf16le mark", in: utf8Mark + "\xff\xfeA: 1\r\n\r\n", bom: BOMUTF8, err: malformedKey},
-		{name: "utf8 mark then white space", in: utf8Mark + " A: 1\r\n\r\n", bom: BOMUTF8, err: initialLine},
+		// The mark is still recognized before a first line that begins with
+		// white space, which is now the block's malformed prefix rather than an
+		// error (ROB-020-001; its bytes are pinned in prefix_test.go).
+		{name: "utf8 mark then white space", in: utf8Mark + " A: 1\r\n\r\n", bom: BOMUTF8,
+			ends: ends(wantEnds{2, 0, 0, 8, none, none, none, none})},
 		{name: "mark at a later field", in: "A: 1\r\n" + utf8Mark + "B: 2\r\n\r\n", fields: a, err: malformedKey},
 	}
 }

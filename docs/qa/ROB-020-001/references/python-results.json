@@ -1,0 +1,853 @@
+[
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "valid",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "valid",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "valid",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "space-field",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X-Keep",
+            "yes"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  Subject: shifted\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "space-field",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X-Keep",
+            "yes"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  Subject: shifted\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "space-field",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  Subject: shifted\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "tab-field",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X-Keep",
+            "yes"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect: \tSubject: shifted\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "tab-field",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "X-Keep",
+            "yes"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect: \tSubject: shifted\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "tab-field",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect: \tSubject: shifted\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "raw-orphan",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan text\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "raw-orphan",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan text\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "raw-orphan",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  orphan text\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "multiple",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan text\r\n",
+          "FirstHeaderLineIsContinuationDefect: \tmore text\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "multiple",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan text\r\n",
+          "FirstHeaderLineIsContinuationDefect: \tmore text\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "multiple",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  orphan text\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "space-only",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  \t\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "space-only",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  \t\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "space-only",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  \t\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "orphan-eof",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan text"
+        ],
+        "body": ""
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "orphan-eof",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan text"
+        ],
+        "body": ""
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "orphan-eof",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  orphan text"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "field-eof",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  Subject: shifted"
+        ],
+        "body": ""
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "field-eof",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  Subject: shifted"
+        ],
+        "body": ""
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "field-eof",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  Subject: shifted"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "lf",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "lf",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "lf",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  orphan\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "cr",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan\r"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "cr",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan\r"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "cr",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  orphan\r"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "indented-multipart",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  Content-Type: multipart/mixed; boundary=B\r\n"
+        ],
+        "body": "--B\r\n\r\nkept\r\n--B--\r\n"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "indented-multipart",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  Content-Type: multipart/mixed; boundary=B\r\n"
+        ],
+        "body": "--B\r\n\r\nkept\r\n--B--\r\n"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "indented-multipart",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  Content-Type: multipart/mixed; boundary=B\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "invalid-name",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  X\u0000: value\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "invalid-name",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  X\u0000: value\r\n"
+        ],
+        "body": "body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "invalid-name",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  X\u0000: value\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "utf8-bom",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "\ufffd\ufffd\ufffd orphan\r\nSubject: intact\r\n\r\nbody"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "utf8-bom",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "\ufffd\ufffd\ufffd orphan\r\nSubject: intact\r\n\r\nbody"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "utf8-bom",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "first-only-crlf",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": ""
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "first-only-crlf",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": ""
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "first-only-crlf",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "blank-first",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [],
+        "body": " Subject: body\r\n"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "blank-first",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [],
+        "body": " Subject: body\r\n"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "blank-first",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [],
+        "body": " Subject: body\r\n"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "middle-child",
+    "parts": [
+      {
+        "content_type": "multipart/mixed",
+        "headers": [
+          [
+            "Content-Type",
+            "multipart/mixed; boundary=B"
+          ]
+        ],
+        "defects": [],
+        "body": null
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "first"
+          ]
+        ],
+        "defects": [],
+        "body": "one"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "middle"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "two"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "last"
+          ]
+        ],
+        "defects": [],
+        "body": "three"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "middle-child",
+    "parts": [
+      {
+        "content_type": "multipart/mixed",
+        "headers": [
+          [
+            "Content-Type",
+            "multipart/mixed; boundary=B"
+          ]
+        ],
+        "defects": [],
+        "body": null
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "first"
+          ]
+        ],
+        "defects": [],
+        "body": "one"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "middle"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "two"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "last"
+          ]
+        ],
+        "defects": [],
+        "body": "three"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "middle-child",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+  }
+]

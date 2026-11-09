@@ -1,0 +1,254 @@
+[
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "blank-then-indented-field",
+    "error": "java.lang.IndexOutOfBoundsException: Index -1 out of bounds for length 0",
+    "result": ""
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "blank-then-indented-field",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=c2hpZnRlZA== raw=IA0KIFN1YmplY3Q6IHNoaWZ0ZWQ=\nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "blank-then-indented-field",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=c2hpZnRlZA== raw=IA0KIFN1YmplY3Q6IHNoaWZ0ZWQ=\nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "blank-then-indented-field",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "two-blanks-then-indented",
+    "error": "java.lang.IndexOutOfBoundsException: Index -1 out of bounds for length 0",
+    "result": ""
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "two-blanks-then-indented",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=c2hpZnRlZA== raw=IAkNCgkNCiBTdWJqZWN0OiBzaGlmdGVk\nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "two-blanks-then-indented",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=c2hpZnRlZA== raw=IAkNCgkNCiBTdWJqZWN0OiBzaGlmdGVk\nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "two-blanks-then-indented",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "indented-second-field",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogZmlyc3QNCiBUbzogc2Vjb25k\nraw WDoga2VwdA==\nsemantic U3ViamVjdA== Zmlyc3QNCiBUbzogc2Vjb25k\nsemantic WA== a2VwdA==\nbody Ym9keQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "indented-second-field",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=Zmlyc3QgVG86IHNlY29uZA== raw=IFN1YmplY3Q6IGZpcnN0DQogVG86IHNlY29uZA==\nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "indented-second-field",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=Zmlyc3QgVG86IHNlY29uZA== raw=IFN1YmplY3Q6IGZpcnN0DQogVG86IHNlY29uZA==\nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "indented-second-field",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "empty-prefix-name",
+    "error": "",
+    "result": "part root type text/plain\nraw OiB2YWx1ZQ==\nraw WDoga2VwdA==\nsemantic  dmFsdWU=\nsemantic WA== a2VwdA==\nbody Ym9keQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "empty-prefix-name",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name= body=dmFsdWU= raw=IDogdmFsdWU=\nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "empty-prefix-name",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name= body=dmFsdWU= raw=IDogdmFsdWU=\nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "empty-prefix-name",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "spaces-eof",
+    "error": "",
+    "result": "part root type text/plain\nbody \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "spaces-eof",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_END_HEADER \nT_BODY \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "spaces-eof",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_END_HEADER \nT_BODY \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "spaces-eof",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Unexpected end of headers detected. Higher level boundary detected or EOF reached.",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "blank-then-raw",
+    "error": "java.lang.IndexOutOfBoundsException: Index -1 out of bounds for length 0",
+    "result": ""
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "blank-then-raw",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "blank-then-raw",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "blank-then-raw",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "bom-blank-indented",
+    "error": "",
+    "result": "part root type text/plain\nraw w6/Cu8K/IA0KIFN1YmplY3Q6IHNoaWZ0ZWQ=\nraw WDoga2VwdA==\nsemantic w6/Cu8K/IA0KIFN1YmplY3Q= c2hpZnRlZA==\nsemantic WA== a2VwdA==\nbody Ym9keQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "bom-blank-indented",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "bom-blank-indented",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "bom-blank-indented",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "long-run",
+    "error": "",
+    "result": "part root type text/plain\nraw b3JwaGFuDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9u\nraw WDoga2VwdA==\nsemantic b3JwaGFuDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9u b3JwaGFuDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9uDQogY29udGludWF0aW9u\nsemantic WA== a2VwdA==\nbody Ym9keQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "long-run",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "long-run",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "long-run",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "first-internal-cr",
+    "error": "",
+    "result": "part root type text/plain\nraw b3JwaGFu\nraw bm90IGEgZmllbGQ=\nraw WDoga2VwdA==\nsemantic b3JwaGFu b3JwaGFu\nsemantic bm90IGEgZmllbGQ= bm90IGEgZmllbGQ=\nsemantic WA== a2VwdA==\nbody Ym9keQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "first-internal-cr",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "first-internal-cr",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=WA== body=a2VwdA== raw=WDoga2VwdA==\nT_END_HEADER \nT_BODY Ym9keQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "first-internal-cr",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  }
+]

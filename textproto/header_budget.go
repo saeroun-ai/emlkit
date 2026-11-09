@@ -32,9 +32,8 @@ import "sync"
 // byte of the next candidate, before any of that candidate is read, so that an
 // exhausted count bounds a candidate however long it is. A line that is the
 // empty line ending the block, and an input with no byte left, are not
-// candidates. A block whose very first line begins with white space is
-// malformed and ends with that error; that line is not a field candidate, and
-// only the byte budgets bound its length.
+// candidates. A block whose first lines begin with white space begins with a
+// malformed prefix (ROB-020-001), which is one candidate like any other.
 //
 // # Refusal
 //

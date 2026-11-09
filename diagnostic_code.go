@@ -71,8 +71,18 @@ const (
 
 // Header framing and field codes.
 const (
-	CodeHeaderFirstLineContinuation   Code = "header.first_line_continuation"
-	CodeHeaderOrphanContinuation      Code = "header.orphan_continuation"
+	// CodeHeaderFirstLineContinuation reports a header block whose first lines
+	// began with white space, which no field began before: they are kept apart
+	// as the header's malformed prefix (ROB-020-001); recorded once per block,
+	// over the whole prefix. See firstline.go.
+	CodeHeaderFirstLineContinuation Code = "header.first_line_continuation"
+	CodeHeaderOrphanContinuation    Code = "header.orphan_continuation"
+
+	// CodeHeaderMissingBodySeparator reports a header block that ended with no
+	// empty line. It is recorded only for a part's header that began with a
+	// malformed prefix and was ended by its multipart's next delimiter line
+	// (ROB-020-001); a missing separator anywhere else is not yet looked for
+	// (ROB-020-005). See firstline.go.
 	CodeHeaderMissingBodySeparator    Code = "header.missing_body_separator"
 	CodeHeaderWhitespaceBodySeparator Code = "header.whitespace_body_separator"
 	CodeHeaderMissingColon            Code = "header.missing_colon"

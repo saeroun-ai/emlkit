@@ -1,0 +1,55 @@
+Bounded unit emlkit-bounded-5ab7e7e7f5: RAM 1536 MiB, swap 0, CPU quota 2, tasks 128, deadline 900s
+RUN controls
+PASS unchanged controls 1080 parse +30 serialization observations, including source-call counts; only random generated boundary normalized in no-boundary serialization
+
+RUN core
+firstline_core cases=3744 assertions=86112 failures=0
+
+RUN errors
+firstline_errors cases=21060 assertions=115740 failures=0
+
+RUN boundary-edge
+firstline_boundary_edge cases=168 assertions=1680 failures=0
+
+RUN closing
+firstline_closing cases=360 assertions=3384 failures=0
+
+RUN guard-budgets
+firstline_guard_budgets cases=108 assertions=486 failures=0
+
+RUN guard-errors
+firstline_guard_errors cases=1200 assertions=2520 failures=0
+
+RUN public-small
+firstline_public_small cases=144 assertions=1872 failures=0
+
+RUN legacy-padding
+firstline_legacy_padding cases=36 assertions=135 failures=0
+
+RUN scope
+firstline_scope cases=216 assertions=5616 failures=0
+
+RUN budgets
+firstline_budgets cases=538 assertions=1252 failures=0
+
+RUN mutation
+firstline_mutation cases=577 assertions=2923 failures=0
+
+RUN stops
+firstline_stops cases=163 assertions=792 failures=0
+
+RUN retry
+PASS retry compatibility 108 boundary/profile/chunk observations; retained healthy siblings and closes
+
+RUN budget-retry
+budget retry baseline/current 54 cases; failures 0
+
+RUN unit
+ok  	github.com/saeroun-ai/emlkit	2.529s
+ok  	github.com/saeroun-ai/emlkit/charset	0.014s
+ok  	github.com/saeroun-ai/emlkit/internal/errgraph	0.002s
+ok  	github.com/saeroun-ai/emlkit/mail	0.206s
+ok  	github.com/saeroun-ai/emlkit/textproto	1.381s
+ok  	github.com/saeroun-ai/emlkit/utf7	0.002s
+
+RESULT 16 / 16

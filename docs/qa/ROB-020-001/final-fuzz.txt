@@ -1,0 +1,53 @@
+Bounded unit emlkit-bounded-ea5cf0ee80: RAM 1536 MiB, swap 0, CPU quota 2, tasks 128, deadline 300s
+RUN FuzzReadHeader_lineEndings
+fuzz: elapsed: 0s, gathering baseline coverage: 0/509 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 509/509 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 99192 (33052/sec), new interesting: 1 (total: 510)
+fuzz: elapsed: 6s, execs: 204587 (35136/sec), new interesting: 3 (total: 512)
+fuzz: elapsed: 9s, execs: 275257 (23556/sec), new interesting: 7 (total: 516)
+fuzz: elapsed: 12s, execs: 313278 (12674/sec), new interesting: 9 (total: 518)
+fuzz: elapsed: 15s, execs: 355029 (13917/sec), new interesting: 9 (total: 518)
+fuzz: elapsed: 18s, execs: 404598 (16522/sec), new interesting: 9 (total: 518)
+fuzz: elapsed: 21s, execs: 445608 (13671/sec), new interesting: 9 (total: 518)
+fuzz: elapsed: 24s, execs: 472258 (8884/sec), new interesting: 9 (total: 518)
+fuzz: elapsed: 27s, execs: 472258 (0/sec), new interesting: 9 (total: 518)
+fuzz: elapsed: 30s, execs: 472258 (0/sec), new interesting: 9 (total: 518)
+fuzz: elapsed: 31s, execs: 472258 (0/sec), new interesting: 9 (total: 518)
+PASS
+ok  	github.com/saeroun-ai/emlkit/textproto	31.054s
+
+RUN FuzzParse_firstLine
+fuzz: elapsed: 0s, gathering baseline coverage: 0/99 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 99/99 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 37602 (12532/sec), new interesting: 7 (total: 106)
+fuzz: elapsed: 6s, execs: 37602 (0/sec), new interesting: 7 (total: 106)
+fuzz: elapsed: 9s, execs: 37602 (0/sec), new interesting: 7 (total: 106)
+fuzz: elapsed: 12s, execs: 37602 (0/sec), new interesting: 7 (total: 106)
+fuzz: elapsed: 15s, execs: 37602 (0/sec), new interesting: 7 (total: 106)
+fuzz: elapsed: 18s, execs: 37602 (0/sec), new interesting: 7 (total: 106)
+fuzz: elapsed: 21s, execs: 37602 (0/sec), new interesting: 7 (total: 106)
+fuzz: elapsed: 24s, execs: 37602 (0/sec), new interesting: 7 (total: 106)
+fuzz: elapsed: 27s, execs: 37602 (0/sec), new interesting: 7 (total: 106)
+fuzz: elapsed: 30s, execs: 37602 (0/sec), new interesting: 7 (total: 106)
+fuzz: elapsed: 31s, execs: 37602 (0/sec), new interesting: 7 (total: 106)
+PASS
+ok  	github.com/saeroun-ai/emlkit	31.031s
+
+RUN FuzzMultipartReader_malformedPrefixDelimiter
+fuzz: elapsed: 0s, gathering baseline coverage: 0/143 completed
+fuzz: elapsed: 1s, gathering baseline coverage: 143/143 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 3013 (1004/sec), new interesting: 11 (total: 154)
+fuzz: elapsed: 6s, execs: 3175 (54/sec), new interesting: 14 (total: 157)
+fuzz: elapsed: 9s, execs: 4859 (561/sec), new interesting: 21 (total: 164)
+fuzz: elapsed: 12s, execs: 8900 (1347/sec), new interesting: 27 (total: 170)
+fuzz: elapsed: 15s, execs: 13530 (1543/sec), new interesting: 33 (total: 176)
+fuzz: elapsed: 18s, execs: 22759 (3077/sec), new interesting: 49 (total: 192)
+fuzz: elapsed: 21s, execs: 22859 (33/sec), new interesting: 49 (total: 192)
+fuzz: elapsed: 24s, execs: 26705 (1282/sec), new interesting: 52 (total: 195)
+fuzz: elapsed: 27s, execs: 38810 (4036/sec), new interesting: 56 (total: 199)
+fuzz: elapsed: 30s, execs: 66099 (9095/sec), new interesting: 72 (total: 215)
+fuzz: elapsed: 30s, execs: 66099 (0/sec), new interesting: 72 (total: 215)
+PASS
+ok  	github.com/saeroun-ai/emlkit/textproto	30.061s
+
+ALL_PASSED 3

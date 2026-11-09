@@ -59,6 +59,15 @@ import (
 // replays the input, whose LF, CR and missing line endings the raw fields
 // store as CRLF. Every Compatibility value behaves the same.
 
+// A headerNote is a diagnostic a header block owes, at the offset at in the
+// block that orders it among the block's others, and whether ProfileStrict
+// refuses the entity for it.
+type headerNote struct {
+	at     int64
+	d      Diagnostic
+	refuse bool
+}
+
 // A lineNote is one of the once-per-parse line-ending notes.
 type lineNote uint8
 
@@ -108,7 +117,8 @@ const (
 // The byte order mark is the first thing a block can hold, so its note, at
 // offset 0 of the block, comes before every line-ending note, and under
 // ProfileStrict its refusal is the one the entity is returned with; see
-// byteOrderMarkNote.
+// byteOrderMarkNote. A malformed prefix and a part's missing separator after
+// one (firstline.go) are noted with them, in the same order of offsets.
 func (c parseContext) headerLineEndings(h *textproto.Header) error {
 	s := c.session
 	if s == nil {
@@ -116,17 +126,18 @@ func (c parseContext) headerLineEndings(h *textproto.Header) error {
 	}
 	strict := s.Profile() == ProfileStrict
 
-	type owed struct {
-		at     int64
-		d      Diagnostic
-		refuse bool
-	}
+	type owed = headerNote
 	var notes []owed
 
 	if bom := h.ByteOrderMark(); bom != textproto.BOMNone {
 		d, refuse := c.byteOrderMarkNote(bom, strict)
 		notes = append(notes, owed{at: 0, d: d, refuse: refuse})
 	}
+
+	// A malformed prefix comes right after any mark, and a part's header that
+	// a delimiter line ended after one ends after every line of the block; see
+	// firstline.go.
+	notes = c.malformedPrefixNotes(h, strict, notes)
 
 	// An unknown LineEndings — a block that began with a UTF-16 or UTF-32
 	// mark was not read — reports nothing below.

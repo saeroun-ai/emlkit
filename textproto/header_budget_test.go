@@ -209,21 +209,20 @@ func (r *cappedEndless) Read(p []byte) (int, error) {
 }
 
 // TestHeaderBudget_preflightNonCandidates pins what an exhausted field count
-// does not refuse: the end of a block, the end of the input, a fold of a field
-// already admitted, and the malformed leading-whitespace line, which keeps its
-// own error.
+// does not refuse: the end of a block, the end of the input, and a fold of a
+// field already admitted. A leading-whitespace line, which used to keep its own
+// malformed-header error here, now begins a malformed prefix, which is a
+// candidate (ROB-020-001; see TestReadHeader_malformedPrefixBudgets).
 func TestHeaderBudget_preflightNonCandidates(t *testing.T) {
 	for _, tc := range []struct {
 		name, input string
 		fields      int
-		malformed   bool
 	}{
-		{"empty block crlf", "\r\n", 0, false},
-		{"empty block lf", "\n", 0, false},
-		{"end of input", "", 0, false},
-		{"folded last field", "A: 1\r\n 2\r\n\t3\r\n\r\n", 1, false},
-		{"field at end of input", "A: 1", 1, false},
-		{"leading white space", " x\r\n\r\n", 0, true},
+		{"empty block crlf", "\r\n", 0},
+		{"empty block lf", "\n", 0},
+		{"end of input", "", 0},
+		{"folded last field", "A: 1\r\n 2\r\n\t3\r\n\r\n", 1},
+		{"field at end of input", "A: 1", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for name, src := range budgetSources(tc.input) {
@@ -236,15 +235,6 @@ func TestHeaderBudget_preflightNonCandidates(t *testing.T) {
 					}
 				}
 				h, err := ReadHeaderLimits(bufio.NewReader(src()), HeaderLimits{Total: b})
-				if tc.malformed {
-					if err == nil || strings.Contains(err.Error(), "exceeds") {
-						t.Fatalf("%s: err = %v, want the malformed-header error", name, err)
-					}
-					if _, refused := HeaderLimit(err); refused {
-						t.Fatalf("%s: err = %v is a refusal", name, err)
-					}
-					continue
-				}
 				if err != nil {
 					t.Fatalf("%s: err = %v", name, err)
 				}

@@ -158,6 +158,9 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 	// with this part's index, carries the parent's session down to it, and
 	// counts it one level deeper than the entity whose body this is.
 	ctx := r.parent.child(r.next, p.HeaderOffset(), p.BodyOffset())
+	// A part whose header began with a malformed prefix and was ended by the
+	// next delimiter line is diagnosed when it is built; see firstline.go.
+	ctx.separatorMissing = p.HeaderSeparatorMissing()
 
 	// The budgets on the shape of the tree are charged here, where a child has
 	// been framed and nothing but its header block has been read yet. A refused

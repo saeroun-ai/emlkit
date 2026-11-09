@@ -124,6 +124,12 @@ func createWriter(w io.Writer, header *Header) (*Writer, error) {
 // mark is written once, before every field, the added MIME-Version included.
 // A UTF-16 or UTF-32 mark means the block was not read, and such a header is
 // refused before anything is written, as CreatePart refuses one for a part.
+//
+// A header read from a block that began with a malformed prefix (ROB-020-001;
+// see textproto.Header.MalformedPrefix) keeps it in the copy written: it is
+// written right after any UTF-8 mark and before every field, the added
+// MIME-Version included, on the terms of textproto.WriteHeader. It declares
+// nothing, so it decides nothing about what is written.
 func CreateWriter(w io.Writer, header Header) (*Writer, error) {
 	// Ensure that modifications are invisible to the caller
 	header = header.Copy()

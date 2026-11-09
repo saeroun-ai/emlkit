@@ -40,7 +40,9 @@ const (
 	// ending, is refused for that entity, and a multipart with a bare CR
 	// before or after a delimiter line is refused for its remaining parts
 	// (ROB-010-002). A header block that begins with a byte order mark is
-	// refused for that entity too (ROB-010-003).
+	// refused for that entity too (ROB-010-003), and so is one that begins
+	// with a malformed prefix — lines beginning with white space before any
+	// field — whose prefix and fields are still kept (ROB-020-001).
 	ProfileStrict
 
 	// ProfileForensic includes every tolerant result and diagnostic, and

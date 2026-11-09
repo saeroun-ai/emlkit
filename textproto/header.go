@@ -54,7 +54,9 @@ func (f *headerField) raw() ([]byte, error) {
 // CRLF and the empty line; a line the reader skipped or repaired rather than
 // kept as a field — such as one whose name is empty — is not written at all
 // (see ReadHeader, WriteHeader and ByteOrderMark). A block that began with a
-// UTF-16 or UTF-32 mark is not read, and is not written.
+// UTF-16 or UTF-32 mark is not read, and is not written. A block whose first
+// lines began with white space keeps those lines apart, as its malformed prefix,
+// and writes them back first, before every field (see MalformedPrefix).
 //
 // Mutating the header is restricted: the only two allowed operations are
 // inserting a new header field at the top and deleting a header field. This is
@@ -75,6 +77,11 @@ type Header struct {
 	// with. Unlike ends it is the header's own: Copy and every mutation keep
 	// it. See ByteOrderMark.
 	bom ByteOrderMark
+
+	// prefix is the malformed prefix the block this header was read from began
+	// with, or nil. Like bom it is the header's own and is never modified once
+	// set: Copy shares it and every mutation keeps it. See MalformedPrefix.
+	prefix *malformedPrefix
 }
 
 func makeHeaderMap(fs []*headerField) map[string][]*headerField {
@@ -242,7 +249,7 @@ func (h *Header) Copy() Header {
 	l := make([]*headerField, len(h.l))
 	copy(l, h.l)
 	m := makeHeaderMap(l)
-	return Header{l: l, m: m, ends: h.ends, bom: h.bom}
+	return Header{l: l, m: m, ends: h.ends, bom: h.bom, prefix: h.prefix}
 }
 
 // Len returns the number of fields in the header.
@@ -806,6 +813,31 @@ type headerScan struct {
 	// the scanner keeps it: once it is set no read of the block refills the
 	// reader, and only bytes it already holds are read. See peek and nextChunk.
 	fail error
+
+	// capturing reports that the block began with a malformed prefix that may
+	// still grow, and capture is that prefix's exact bytes so far, line endings
+	// as they were read, followed by those of whatever is being read after it
+	// while it is not yet known whether that continues it. capLast is where the
+	// last physical line kept whole begins in capture. Bytes are captured only
+	// after the charge that admitted them, so capture never holds more than the
+	// budgets admitted; nothing is charged for capturing them. See prefix.go.
+	capturing bool
+	capture   []byte
+	capLast   int
+
+	// parent is the multipart reader whose part header this block is, or nil.
+	// It is looked at only after a malformed prefix, to end the block at that
+	// reader's next delimiter line rather than read the line as a field; and
+	// atDelim reports that it did. See prefix.go.
+	parent  *MultipartReader
+	atDelim bool
+
+	// replay is the beginning of a line that looked like such a delimiter and
+	// was taken out of the reader to decide it, and proved not to be one: the
+	// first bytes of the next line, which nextChunk returns before reading on.
+	// They were not charged when they were taken out; they are charged when
+	// they are read, as any bytes of a line are. They hold no '\r' or '\n'.
+	replay []byte
 }
 
 // A crLine is what a line ended by a bare '\r' that may still prove to be
@@ -895,6 +927,18 @@ const eofNext = -1
 // returned with endInput and the failure, as the last byte of a line the
 // failure cut.
 func (s *headerScan) nextChunk(r *bufio.Reader) (b []byte, end lineEnd, next int, err error) {
+	// The beginning of a line taken out of the reader to be decided comes
+	// first, as content of a line that goes on; see holdDelimiter.
+	// It is handed out a buffer at a time, as the reader would have.
+	if len(s.replay) > 0 {
+		n := min(len(s.replay), r.Size())
+		b, s.replay = s.replay[:n], s.replay[n:]
+		if len(s.replay) == 0 {
+			s.replay = nil
+		}
+		return b, endNone, 0, nil
+	}
+
 	// scanned is how many held bytes are known to hold neither '\r' nor '\n',
 	// so that holding on for more bytes never searches the same ones again.
 	scanned := 0
@@ -1228,6 +1272,9 @@ func readLineSlice(r *bufio.Reader, line []byte, scan *headerScan) ([]byte, erro
 	given := len(line)
 
 	scan.beginLine()
+	// Where this line's exact bytes begin in the capture of a malformed prefix
+	// that may still grow; see headerScan.capture.
+	capStart := len(scan.capture)
 
 	for {
 		b, end, next, err := scan.nextChunk(r)
@@ -1235,11 +1282,14 @@ func readLineSlice(r *bufio.Reader, line []byte, scan *headerScan) ([]byte, erro
 		// The budgets are charged before the bytes are kept, so a line longer
 		// than a budget is refused after one buffer rather than accumulated:
 		// what this appends never exceeds the budget by more than that buffer.
+		// The exact bytes a prefix captures are kept on the same terms, after
+		// the charge that admitted them, line endings included.
 		switch end {
 		case endNone:
 			if terr := scan.take(b, 0, false); terr != nil {
 				return line, terr
 			}
+			scan.keep(b)
 			line = append(line, b...)
 
 		case endLF, endCRLF:
@@ -1251,6 +1301,8 @@ func readLineSlice(r *bufio.Reader, line []byte, scan *headerScan) ([]byte, erro
 			if terr := scan.take(content, int64(term), true); terr != nil {
 				return line, terr
 			}
+			scan.keep(b)
+			scan.lineKept(capStart)
 			scan.ends.note(kind, scan.consumed-int64(term))
 			return append(line, content...), nil
 
@@ -1264,12 +1316,15 @@ func readLineSlice(r *bufio.Reader, line []byte, scan *headerScan) ([]byte, erro
 				if terr := scan.take(b, 0, false); terr != nil {
 					return line, terr
 				}
+				scan.keep(b)
 				line = append(line, b...)
 				continue
 			}
 			if terr := scan.take(content, 1, true); terr != nil {
 				return line, terr
 			}
+			scan.keep(b)
+			scan.lineKept(capStart)
 			cr := scan.consumed - 1
 			if !atStart && next != eofNext && validHeaderKeyByte(nb) {
 				// Whether this '\r' ended the line is settled by the next
@@ -1300,15 +1355,19 @@ func readLineSlice(r *bufio.Reader, line []byte, scan *headerScan) ([]byte, erro
 				if terr := scan.take(b, 0, true); terr != nil {
 					return line, terr
 				}
+				scan.keep(b)
+				scan.lineKept(capStart)
 				scan.ends.unterminated = true
 				scan.ends.untermStart, scan.ends.untermEnd = scan.lineStart, scan.consumed
 				return append(line, b...), nil
 			}
 			// Cut by a read failure, possibly after earlier buffers of the
-			// same long line: none of it is kept.
+			// same long line: none of it is kept, and none of its bytes stay
+			// in a prefix's capture either.
 			if terr := scan.take(b, 0, false); terr != nil {
 				return line, terr
 			}
+			scan.unkeep(capStart)
 			if scan.probe != probeOff || scan.lineRejoined {
 				// The '\r' before this line was content, or was never settled:
 				// the line it ended is cut with this one.
@@ -1382,6 +1441,11 @@ func hasContinuationLine(r *bufio.Reader, scan *headerScan) bool {
 // with no byte left — its end, or a failed read — is neither. A failed look is
 // recorded by the scanner, and the read that follows reports it.
 func atBlockEnd(r *bufio.Reader, scan *headerScan) (end, candidate bool) {
+	if len(scan.replay) > 0 {
+		// A line taken out of the reader to be decided as a delimiter, which it
+		// was not: it begins with "--", so it is a candidate.
+		return false, true
+	}
 	b, err := scan.peek(r, 1)
 	if err != nil || len(b) == 0 {
 		return false, false
@@ -1619,6 +1683,16 @@ func trimAroundNewlines(v []byte) string {
 // mark is never transcoded. Only the first bytes of a block are looked at, at
 // most four, before anything else about the block is decided; see bom.go for
 // what that look-ahead reads and which refusal it can precede.
+//
+// # Malformed prefixes
+//
+// A block whose first line — after any UTF-8 mark — begins with white space
+// begins with no field. Its first logical candidate, that line and the
+// continuation lines after it, is kept apart as the Header's malformed prefix,
+// byte for byte, and is no field; the block is read on after it (ROB-020-001).
+// See prefix.go and Header.MalformedPrefix. Before, such a block was refused
+// with a "malformed MIME header initial line" error and no fields; that error
+// is no longer returned.
 func ReadHeader(r *bufio.Reader) (Header, error) {
 	return readHeader(r, &headerScan{})
 }
@@ -1768,58 +1842,139 @@ func readHeader(r *bufio.Reader, scan *headerScan) (Header, error) {
 func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 	fs := make([]*headerField, 0, 32)
 
-	// The first line cannot start with a leading space. A failed look is
+	// A field cannot begin with white space. A block whose first line does
+	// anyway begins with a malformed prefix: its first logical candidate — that
+	// line and every continuation line after it, and whatever a '\r' joins to
+	// them — is kept apart, byte for byte, rather than read as a field, and the
+	// block goes on after it (ROB-020-001; see prefix.go). A failed look is
 	// recorded by the scanner and reported by the read below.
+	prefixed := false
+	prefixStart := scan.consumed
 	if buf, err := scan.peek(r, 1); err == nil && isSpace(buf[0]) {
-		scan.beginField()
-		line, err := readLineSlice(r, nil, scan)
-		if err != nil {
-			return headerResult(fs, err)
-		}
-
-		return headerResult(fs, fmt.Errorf("message: malformed MIME header initial line: %v", string(line)))
+		prefixed = true
+		scan.capturing = true
 	}
+	first := true
 
 	// The last field read is held as pending rather than built at once, because
 	// the next candidate may still continue it (a '\r' that turns out to be
 	// content; see take). It is built exactly once, when what follows settles
 	// that it is complete, so a run of such continuations costs one pass over
 	// its bytes. skipping reports that the last candidate was skipped for an
-	// empty name, whose continuations are skipped with it.
+	// empty name, whose continuations are skipped with it. A malformed prefix
+	// is held the same way, and is built into prefix instead of a field.
 	var pend pendingField
+	var prefix *malformedPrefix
 	skipping := false
 	finish := func() {
-		if pend.kv != nil {
+		switch {
+		case pend.kv == nil:
+		case pend.prefix:
+			prefix = scan.prefixOf(prefixStart, pend.kv)
+		default:
 			fs = append(fs, pend.field())
-			pend = pendingField{}
 		}
+		pend = pendingField{}
+	}
+	// result is headerResult with the prefix: a block a budget refused keeps
+	// neither.
+	result := func(err error) (Header, error) {
+		h, err := headerResult(fs, err)
+		if !isBudgetExhausted(err) {
+			h.prefix = prefix
+		}
+		return h, err
+	}
+	// ended returns the header of a block that ended without a failure of its
+	// own: at its empty line, at the end of the input, or at a delimiter.
+	ended := func() (Header, error) {
+		var err error
+		if scan.fail != nil && scan.fail != io.EOF {
+			// A read of this block failed, and nothing since has reported
+			// it. Only a failure a read of the block itself observed is
+			// meant: one still buffered past the empty line that ends the
+			// block was never observed and belongs to what follows.
+			err = scan.fail
+		}
+		finish()
+		h, err := result(err)
+		if err == nil {
+			ends := scan.ends
+			ends.known = true
+			h.ends = &ends
+		}
+		return h, err
 	}
 
 	for {
+		// In a part's header that began with a malformed prefix, the next line
+		// is looked at as a delimiter of the multipart before it is read as
+		// anything else. A proved one is never read as a field or as part of
+		// one: the block ends before it, and the part's body is empty. A '\r'
+		// that ended the line before it, and was still waiting for that line to
+		// say whether it was content, was a line ending. A line that is not
+		// proved one is read below, from its first byte, as it always was. See
+		// prefix.go.
+		if prefixed && !first && scan.parent != nil {
+			look, m := scan.parentDelimiter(r)
+			proved := look == lookProved
+			if look == lookLong {
+				var herr error
+				if proved, herr = scan.holdDelimiter(r, m); herr != nil {
+					finish()
+					return result(herr)
+				}
+			}
+			if proved {
+				if c := scan.crKey; c.ok {
+					scan.ends.note(LineEndingCR, c.cr)
+					scan.crKey = crLine{}
+				}
+				scan.atDelim = true
+				scan.endCapture(len(scan.capture))
+				return ended()
+			}
+		}
+
+		mark := len(scan.capture)
 		kv, last, err := readContinuedLineSlice(r, scan)
 		rejoined, dropPrev := scan.rejoined, scan.dropPrev
 		scan.rejoined, scan.dropPrev = false, false
 		if dropPrev && !skipping {
 			// A failure cut the line a '\r' that was content, or was never
-			// settled, ended: that line is cut with the line after it.
+			// settled, ended: that line is cut with the line after it. Its
+			// bytes leave a prefix's capture with it.
+			if pend.prefix {
+				scan.unkeep(scan.capLast)
+			}
 			pend.dropLastLine()
 		}
+
+		if first {
+			first = false
+			if prefixed && len(kv) > 0 {
+				// The malformed prefix, read whole as one logical candidate:
+				// charged to the field count once, like any candidate, and
+				// held until what follows settles that nothing continues it.
+				if cerr := scan.chargeField(); cerr != nil {
+					return result(cerr)
+				}
+				pend = pendingField{kv: kv, lastLine: last, prefix: true}
+				continue
+			}
+		} else if scan.capturing && !(rejoined && len(kv) > 0 && pend.prefix) {
+			// What this read is not the prefix's: its bytes leave the capture,
+			// and the prefix can no longer grow.
+			scan.endCapture(mark)
+		}
+
 		if len(kv) == 0 {
-			if err == nil && scan.fail != nil && scan.fail != io.EOF {
-				// A read of this block failed, and nothing since has reported
-				// it. Only a failure a read of the block itself observed is
-				// meant: one still buffered past the empty line that ends the
-				// block was never observed and belongs to what follows.
-				err = scan.fail
+			scan.endCapture(len(scan.capture))
+			if err == nil {
+				return ended()
 			}
 			finish()
-			h, err := headerResult(fs, err)
-			if err == nil {
-				ends := scan.ends
-				ends.known = true
-				h.ends = &ends
-			}
-			return h, err
+			return result(err)
 		}
 
 		if rejoined {
@@ -1842,7 +1997,7 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 		// lines included, so this charges once however many physical lines the
 		// field spans.
 		if cerr := scan.chargeField(); cerr != nil {
-			return headerResult(fs, cerr)
+			return result(cerr)
 		}
 
 		// Key ends at first colon; should not have trailing spaces but they
@@ -1854,7 +2009,7 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 			i = bytes.IndexByte(kv, ';')
 			if i < 0 {
 				finish()
-				return headerResult(fs, fmt.Errorf("message: malformed MIME header line: %v", string(kv)))
+				return result(fmt.Errorf("message: malformed MIME header line: %v", string(kv)))
 			}
 		}
 
@@ -1865,7 +2020,7 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 		for _, c := range keyBytes {
 			if !validHeaderKeyByte(c) {
 				finish()
-				return headerResult(fs, fmt.Errorf("message: malformed MIME header key: %v", string(keyBytes)))
+				return result(fmt.Errorf("message: malformed MIME header key: %v", string(keyBytes)))
 			}
 		}
 
@@ -1887,7 +2042,7 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 
 		if err != nil {
 			finish()
-			return headerResult(fs, err)
+			return result(err)
 		}
 	}
 }
@@ -1903,6 +2058,11 @@ type pendingField struct {
 	kv         []byte
 	valueStart int
 	lastLine   int
+
+	// prefix reports that this is the block's malformed prefix rather than a
+	// field: it has no key and no value, and is built into a malformedPrefix
+	// from the exact bytes the scanner captured. See prefix.go.
+	prefix bool
 }
 
 // join appends cand, a candidate that a '\r' made the continuation of this
@@ -2043,6 +2203,16 @@ func formatHeaderField(k, v string) string {
 // whose block began with a UTF-16 or UTF-32 mark is refused with an error
 // before anything is written: that block was never read, and neither its
 // fields nor its mark are this header's to write.
+//
+// A header whose block began with a malformed prefix writes it right after any
+// UTF-8 mark and before every field, so that it can never become the
+// continuation of a field — not even of one added since, which Add puts at the
+// top of the fields, after the prefix. Every byte of the prefix is written, in
+// order, its line endings as they were read; only a last line the prefix did
+// not end with "\r\n" or "\n" is given one: a last line the input ended with
+// no line ending is followed by "\r\n", and one ended by a bare '\r' by "\n",
+// so that what follows can never be read as a continuation of that line. See
+// MalformedPrefix.
 func WriteHeader(w io.Writer, h Header) error {
 	if h.bom.wide() {
 		return errWideHeader(h.bom)
@@ -2051,6 +2221,9 @@ func WriteHeader(w io.Writer, h Header) error {
 		if _, err := io.WriteString(w, bomBytes[BOMUTF8]); err != nil {
 			return err
 		}
+	}
+	if err := h.prefix.writeTo(w); err != nil {
+		return err
 	}
 	for i := len(h.l) - 1; i >= 0; i-- {
 		f := h.l[i]

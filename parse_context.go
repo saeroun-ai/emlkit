@@ -43,6 +43,13 @@ type parseContext struct {
 	// descended is true either way, so a budget on nesting keeps counting
 	// through a detached body instead of starting over at zero.
 	depth int64
+
+	// separatorMissing reports that this entity is a part whose header block,
+	// which began with a malformed prefix, was ended by its multipart's next
+	// delimiter line rather than by an empty line (textproto
+	// Part.HeaderSeparatorMissing). It is this entity's own and is never carried
+	// to a child. See firstline.go.
+	separatorMissing bool
 }
 
 // rootContext returns the context of the root entity of a message parsed from

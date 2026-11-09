@@ -95,6 +95,50 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   mark is read as it always was: the start of a malformed line (`ROB-020`); a
   mark in a value or body is content.
   ([`textproto/bom.go`](../textproto/bom.go), [`bom.go`](../bom.go))
+- **A header block that begins with white space** (`ROB-020-001`). A block —
+  the message's or a part's, after any UTF-8 mark — whose first line begins
+  with a space or a tab used to be refused with "malformed MIME header initial
+  line", losing every field after it and, for a caller that stopped at the first
+  error, the parts after it. Its first logical candidate — that line, the
+  continuation lines after it, and what a `\r` that proves to be content joins
+  to them; whitespace-only lines included, the empty line never — is now kept
+  apart as `textproto.Header.MalformedPrefix`: an immutable view whose `Bytes`
+  (a fresh copy each call) are the input's exact bytes, line endings, NUL and
+  8-bit bytes as they were, with its `Location` in the block and its `Lines`.
+  It is **not a field**: `Get`, `Has`, `Values`, `Fields`, `Len` and `Map` never
+  see it, so an indented `Subject`, `Content-Type` or
+  `Content-Transfer-Encoding` declares nothing, under every `Profile` and every
+  `Compatibility` value; the block is read on after it as usual. It is one field
+  candidate for the budgets (the shared count asked before its first byte,
+  charged once), every byte charged once; a refused block keeps no prefix; a
+  read failure keeps only whole lines and is returned as itself; a last line
+  `io.EOF` ended is kept. `Copy` and every field edit keep it; the writers write
+  it first, after any UTF-8 mark and before every field — those added since
+  included — every byte in order, a last line with no ending or a bare-CR ending
+  being followed by `\r\n` or `\n`, so an unmodified complete CRLF header
+  round-trips byte for byte; this is not raw replay. In a part's header that
+  began with such a prefix, a line proved to be a delimiter line of its
+  multipart (opening or closing, any line ending or the end of input after the
+  boundary and white space, a boundary with a colon included) is never read as
+  a field: the header ends before it, the part's body is empty, the next part
+  follows, and `textproto.Part.HeaderSeparatorMissing` reports it. A line that
+  only begins like one (`--B` + spaces + `: value`) is the field it is, even
+  when its white space runs past the 4 KiB buffer: such a line is held, within
+  the framing line budget `MaxLineBytes` and no header-only budget, until a byte
+  decides it. A proved delimiter is never charged to, or refused by, the
+  header's byte, field, count or shared budgets; a line that proves to be a
+  field is charged to them once and refused where it overflows one. With no
+  line budget a line still undecided past one buffer is the multipart reader's
+  usual framing refusal, which ends the iteration. Recovering a missing
+  separator in general is `ROB-020-005`'s. Under `Parse` each such block
+  records `header.first_line_continuation` (Recovered) over the whole prefix,
+  and such a part `header.missing_body_separator` (Recovered) where its header
+  ended; `ProfileStrict` refuses that entity locally, keeping the prefix and
+  fields, and siblings are read as usual. `Read`, `ReadWithOptions`,
+  `textproto` and `mail` heal the same way and record nothing. Other engines
+  read such lines differently (as fields, dropped, or fatal); no parity is
+  claimed.
+  ([`textproto/prefix.go`](../textproto/prefix.go), [`firstline.go`](../firstline.go))
 - **One leading mbox `From_` envelope line, on request** (`ROB-010-004`).
   Off by default. With `ParseOptions.RecognizeMboxEnvelope`, `Parse` and
   `ParseContext` recognize one envelope line at input offset 0 and keep it
@@ -141,7 +185,8 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   header-only multipart with a usable boundary has no part (`NextPart`: an error
   wrapping `io.EOF`, then `io.EOF`; the empty-container policy is
   `ROB-060-009`'s). Other line endings are described above (`ROB-010-002`); a
-  malformed or whitespace-only first line is `ROB-020`'s.
+  first line beginning with white space is the malformed prefix above
+  (`ROB-020-001`), and other malformed lines are `ROB-020`'s.
   ([`parse.go`](../parse.go) · `Parse`, [`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
 - **Over-long header keys** do not crash the line-folder (a naive fold width would
   go negative; it falls back to the hard limit). ([`textproto/header.go`](../textproto/header.go) · `formatHeaderField`)
@@ -341,7 +386,8 @@ These are deliberate boundaries, each with a reason.
   fit is refused whole (so usage may stay below the budget while the diagnostic
   names the first byte past it), and nothing is refunded. Once the count is
   spent, the next field candidate is refused at its first byte before it is
-  read; a malformed first line beginning with white space is not a candidate.
+  read; a malformed prefix — first lines beginning with white space
+  (`ROB-020-001`) — is such a candidate.
   Exceeding either records one `limit.total_header_bytes` or
   `limit.total_header_count` diagnostic and ends the whole parse with one
   `FatalError`; content already returned stays valid. `Read` and

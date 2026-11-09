@@ -2,6 +2,7 @@ package textproto
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -519,14 +520,29 @@ type lineEndingOutcome struct {
 	fields []wantField
 	ends   LineEndings
 	bom    ByteOrderMark
+	prefix prefixOutcome
 	rest   string
 	err    string
+}
+
+// prefixOutcome is what a Header reports of its malformed prefix (ROB-020-001).
+type prefixOutcome struct {
+	present    bool
+	bytes      string
+	start, end int64
+	lines      int
+}
+
+func prefixOutcomeOf(h *Header) prefixOutcome {
+	p := h.MalformedPrefix()
+	start, end := p.Location()
+	return prefixOutcome{present: p.Present(), bytes: string(p.Bytes()), start: start, end: end, lines: p.Lines()}
 }
 
 func readLineEndingOutcome(t *testing.T, br *bufio.Reader) lineEndingOutcome {
 	t.Helper()
 	h, err := ReadHeader(br)
-	o := lineEndingOutcome{fields: fieldsOf(t, h), ends: h.LineEndings(), bom: h.ByteOrderMark()}
+	o := lineEndingOutcome{fields: fieldsOf(t, h), ends: h.LineEndings(), bom: h.ByteOrderMark(), prefix: prefixOutcomeOf(&h)}
 	if err != nil {
 		o.err = err.Error()
 	}
@@ -556,6 +572,10 @@ func FuzzReadHeader_lineEndings(f *testing.F) {
 	for _, tc := range byteOrderMarkCases() {
 		f.Add([]byte(tc.in))
 	}
+	// Malformed prefixes (ROB-020-001).
+	for _, tc := range prefixCases() {
+		f.Add([]byte(tc.in))
+	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 8192 {
 			return
@@ -574,9 +594,65 @@ func FuzzReadHeader_lineEndings(f *testing.F) {
 			},
 		} {
 			got := readLineEndingOutcome(t, newReader())
-			if !sameFields(got.fields, want.fields) || got.ends != want.ends || got.bom != want.bom || got.rest != want.rest || got.err != want.err {
+			if !sameFields(got.fields, want.fields) || got.ends != want.ends || got.bom != want.bom || got.prefix != want.prefix || got.rest != want.rest || got.err != want.err {
 				t.Errorf("%s:\n got %+v\nwant %+v", name, got, want)
 			}
 		}
+		checkPrefixOutcome(t, s, want)
 	})
+}
+
+// checkPrefixOutcome holds the malformed prefix of one read of a finite string
+// s, which no read failure but io.EOF ends, to what the text alone says: a
+// block not left unread begins with one exactly when its first byte after any
+// UTF-8 mark is a space or a tab; its bytes are the input's own at its
+// location, from that byte; it has at least one line. Written back and read
+// again, the prefix is what was written of it.
+func checkPrefixOutcome(t *testing.T, s string, o lineEndingOutcome) {
+	t.Helper()
+	off := 0
+	if o.bom == BOMUTF8 {
+		off = 3
+	}
+	if o.bom.wide() {
+		if o.prefix != (prefixOutcome{}) {
+			t.Errorf("a block left unread reports a prefix %+v", o.prefix)
+		}
+		return
+	}
+	starts := len(s) > off && (s[off] == ' ' || s[off] == '\t')
+	if o.prefix.present != starts {
+		t.Fatalf("prefix present = %v, want %v for %q", o.prefix.present, starts, s)
+	}
+	if !starts {
+		if o.prefix != (prefixOutcome{}) {
+			t.Errorf("no prefix, but %+v reported", o.prefix)
+		}
+		return
+	}
+	if o.prefix.start != int64(off) || o.prefix.end <= o.prefix.start || o.prefix.end > int64(len(s)) ||
+		s[o.prefix.start:o.prefix.end] != o.prefix.bytes || o.prefix.lines < 1 {
+		t.Fatalf("prefix %+v is not the input's bytes at its location", o.prefix)
+	}
+	h, _ := ReadHeader(bufio.NewReader(strings.NewReader(s)))
+	var b bytes.Buffer
+	if err := WriteHeader(&b, h); err != nil {
+		return
+	}
+	again, _ := ReadHeader(bufio.NewReader(&b))
+	if got, want := string(again.MalformedPrefix().Bytes()), writtenPrefix(o.prefix.bytes); got != want {
+		t.Errorf("read back, the prefix is %q, want what was written of it, %q", got, want)
+	}
+}
+
+// writtenPrefix is what WriteHeader writes of a prefix p: p, and a line ending
+// after a last line that has none or ends with a bare '\r'.
+func writtenPrefix(p string) string {
+	switch {
+	case p == "" || strings.HasSuffix(p, "\n"):
+		return p
+	case strings.HasSuffix(p, "\r"):
+		return p + "\n"
+	}
+	return p + "\r\n"
 }
