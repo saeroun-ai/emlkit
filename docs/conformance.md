@@ -105,6 +105,12 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
 - **Malformed UTF-7 shifts** in the optional `charset` plugin are preserved
   literally instead of making the body unreadable; valid shifted sequences are
   still decoded as standard UTF-7. ([`charset/utf7.go`](../charset/utf7.go) · `standardUTF7Decoder`)
+- **Korean `cp949` / `x-windows-949` labels** (any case) are accepted by the
+  optional `charset` plugin as code page 949, the same decoder `euc-kr`,
+  `windows-949` and `ks_c_5601-1987` use, extended Hangul syllables included,
+  for bodies and RFC 2047 words alike. Only the declared label is honored:
+  nothing detects a missing or wrong charset declaration.
+  ([`charset/charset.go`](../charset/charset.go) · `charsets`)
 - **Malformed encoded-words** degrade to the raw header value; in parameter
   parsing the decode error is swallowed entirely. ([`charset.go`](../charset.go) · `decodeHeader`)
 - **Missing Content-Type** defaults to `text/plain`. ([`header.go`](../header.go) · `ContentType`)

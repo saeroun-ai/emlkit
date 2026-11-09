@@ -893,6 +893,22 @@ Each applicable test asserts:
 | ROB-080-006 | Planned | Keep standard UTF-7 and IMAP modified UTF-7 behavior separate and explicit. | Cross-codec negative tests. |
 | ROB-080-007 | Planned | Add opt-in declaration-suspicion heuristics without making guessing the default. | False-positive/negative corpus. |
 | ROB-080-008 | Planned | Bound charset decode expansion and state-machine work. | Adversarial charset tests. |
+| ROB-080-011 | Done | Accept the Korean compatibility labels `cp949` and `x-windows-949`, case-insensitively, in the optional charset plugin. | Fixed CP949 bytes including an extended syllable, body and RFC 2047 B/Q headers, near-miss labels still unknown. |
+
+`ROB-080-011` ([issue #1](https://github.com/saeroun-ai/emlkit/issues/1)) maps
+`cp949` and `x-windows-949` to `golang.org/x/text/encoding/korean.EUCKR`, the
+WHATWG `EUC-KR` decoder that `euc-kr`, `windows-949` and `ks_c_5601-1987`
+already resolve to, which is code page 949 including its extended syllables.
+Before it, both labels were an unknown charset. Evidence:
+`charset/korean_alias_test.go`, on the fixed bytes Python's `cp949` codec
+produces for "안녕하세요 똠" — 똠 (`0x8C 0x63`) exists only in the CP949
+extension, so strict EUC-KR would reject it — through `charset.Reader`, a
+`message.Read` body in `8bit` and `base64`, and `Header.Text` on B and Q encoded
+words, for both labels in mixed and upper case and for the three existing labels
+unchanged; near-miss labels stay unknown with the raw body kept, and a body that
+declares no charset is not guessed to be Korean. It adds two labels and nothing
+else: no detection, no repair of wrong declarations, no recovery diagnostics.
+`ROB-080-001`, the general alias registry, and `ROB-080-005` remain Planned.
 
 ### ROB-090 — Nested messages and special MIME structures
 
@@ -1044,6 +1060,13 @@ at the user's request, as an independent compatibility fix
 returns, and depends on nothing those milestones introduce. It does not advance,
 start or complete any other `ROB-100` item or any earlier milestone.
 
+**Exception — `ROB-080-011`.** It was taken ahead of `ROB-010` through `ROB-070`
+and of `ROB-080-001` at the user's request, as a scoped compatibility fix
+([issue #1](https://github.com/saeroun-ai/emlkit/issues/1)): two label entries
+in the optional charset plugin's existing quirks table, depending on nothing
+those items introduce. It does not advance, start or complete `ROB-080-001`,
+`ROB-080-005` or any other item.
+
 ## 9. Per-item implementation protocol
 
 Each Claude Code execution receives exactly one ledger ID and must:
@@ -1096,3 +1119,5 @@ Codex reviewed the `ROB-001-004` corrections for [issue #1](https://github.com/s
 Codex independently reviewed the `ROB-001-003` correction diff and regression fixtures for issue #1, reproduced the corrected 4095-byte framing boundary and Content-Disposition sink stop, and passed the full race suite, build, and formatting checks. The remaining vet analyzers also pass with the two pre-existing warning categories (`composites` and `stdmethods`) excluded; the ordinary vet command still reports those baseline findings. The item is Done.
 
 Codex reviewed `ROB-100-006` against issue #1, verified the returned-object and fatal-precedence guards and their public-API regression tests, and independently confirmed root/child unknown-CTE preservation and the following sibling with the original reproduction program. Full tests, build, and formatting checks pass. The item is Done; callers must still handle a fatal result from Parse before constructing a mail reader.
+
+Codex reviewed `ROB-080-011` for issue #1, independently checked the fixed CP949 fixture against Python, inspected both alias entries and the public body/header tests, and confirmed the original reproduction now decodes both labels correctly. The final full race/coverage suite, build, formatting, README example compilation, and remaining vet analyzers pass; ordinary vet retains only the documented baseline warnings. The item is Done.

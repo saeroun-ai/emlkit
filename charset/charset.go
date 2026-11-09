@@ -14,6 +14,7 @@ import (
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/htmlindex"
 	"golang.org/x/text/encoding/ianaindex"
+	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/encoding/unicode"
 )
 
@@ -30,6 +31,13 @@ var charsets = map[string]encoding.Encoding{
 	// IMAP "modified UTF-7" (RFC 3501 section 5.1.3) implemented by the utf7
 	// package. For IMAP mailbox names, use utf7 directly.
 	"utf-7": standardUTF7,
+	// Korean compatibility labels for Windows code page 949 (Unified Hangul
+	// Code), which ianaindex does not know. korean.EUCKR is the WHATWG
+	// "EUC-KR" decoder, which is CP949: it is what euc-kr, windows-949 and
+	// ks_c_5601-1987 already resolve to, extended syllables included.
+	// Keys are lowercase; Reader lowercases the label before looking it up.
+	"cp949":         korean.EUCKR,
+	"x-windows-949": korean.EUCKR,
 }
 
 func init() {
