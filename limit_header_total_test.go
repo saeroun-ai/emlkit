@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -993,23 +994,395 @@ func TestParse_totalHeaders_tolerantRepairUnaffected(t *testing.T) {
 	}
 }
 
-// TestParse_totalHeaders_acceptedPathAllocations pins that a parse within the
-// totals allocates no more per header block than one with them disabled,
-// beyond the shared budget itself.
-func TestParse_totalHeaders_acceptedPathAllocations(t *testing.T) {
-	text := "Content-Type: multipart/mixed; boundary=B\r\n\r\n" + strings.Repeat("--B\r\nX: 1\r\n\r\nb\r\n", 50) + "--B--\r\n"
-	measure := func(l Limits) float64 {
-		return testing.AllocsPerRun(20, func() {
-			_, e, _ := Parse(strings.NewReader(text), &ParseOptions{Limits: l})
-			readTree(e)
-		})
+// The accepted-path allocation check (ROB-130-010, issue #61) compares a parse
+// with the totals at their defaults against one with both disabled. The
+// totals' one shared budget is a constant cost of the parse; what the check
+// exists to catch is a cost that grows with the header blocks and fields read.
+// The two are measured apart:
+//
+//   - the constant: the mean extra allocations per parse at
+//     totalAllocSmallParts parts, at most totalAllocMaxConstant (the one
+//     budget, and one to spare, as before);
+//   - the growth: how much that extra grows from totalAllocSmallParts to
+//     totalAllocLargeParts parts, at most totalAllocMaxGrowth in all over the
+//     49 more header blocks (98 more fields).
+//
+// A single comparison at 50 parts, as the check used to make, reads both at
+// once against a bound of two, in a quantity that is not exact under the race
+// detector. Every NextPart closes the part before it with
+// io.Copy(io.Discard, part), whose buffer comes from a sync.Pool, and under
+// -race sync.Pool.Put drops one value in four at random, so the next close
+// allocates a new buffer. That is a source-level account, not a measured
+// attribution: a model of it alone (each close allocating two objects with
+// probability 1/4, the totals adding one) predicts the old check failing in
+// about 22% of runs, against the 19 and 23 of 100 reported in #61. Whatever
+// its source, a per-part noise of that kind grows with the parts, and the
+// constant is measured where there are few, the growth over enough runs for
+// its mean to settle; see totalAllocLargeRuns.
+//
+// Without -race, Put drops nothing at random, so that source of variation is
+// absent and each quantity is expected to come out at its nominal increment.
+// That is an expectation, not a guarantee of exact counts: a collection in the
+// window still clears the pool, a pool can still miss, and the runtime or
+// anything else in the process can still allocate in the window, all of which
+// Mallocs counts. Each measurement starts with a collection to make the first
+// less likely (see totalAllocMean); none of them is ruled out.
+const (
+	totalAllocSmallParts = 1
+	totalAllocLargeParts = 50
+
+	// totalAllocSmallRuns and totalAllocLargeRuns are the fixed numbers of
+	// measured parses at each size, after one warm-up parse. They bound the
+	// work: at most (1+1+runs) parses of the fixture per measurement, the
+	// first of them checked against the safety caps below before any
+	// repetition. Under the per-close model above, the difference of two
+	// means over runs parses of p parts has a standard deviation of
+	// sqrt(1.5*p/runs) allocations: about 0.09 for the constant and 0.4 for
+	// the growth, so the one allocation between the totals' constant and its
+	// bound is about 11 deviations, and the bound on the growth about 5. The
+	// model is only a model: the bounds are not derived from it, it explains
+	// why these run counts let the check settle.
+	totalAllocSmallRuns = 200
+	totalAllocLargeRuns = 500
+
+	// totalAllocMaxConstant is the most the totals may add to a parse of
+	// totalAllocSmallParts parts, as a mean: the one shared budget, and one
+	// allocation to spare, which is the bound the check has always had.
+	totalAllocMaxConstant = 2
+
+	// totalAllocMaxGrowth is the most that added cost may grow, as a mean,
+	// from totalAllocSmallParts to totalAllocLargeParts parts. One allocation
+	// per header block or per field grows it by 49 or 98, and one per eighth
+	// part by 6; amortized growth, such as a slice that gains one entry per
+	// block and doubles when full, by about 5 over those sizes. What grows by
+	// less — a few allocations in all — is below what this check resolves.
+	totalAllocMaxGrowth = 2
+
+	// totalAllocCapMallocs and totalAllocCapBytes bound one parse of either
+	// fixture, checked on a single parse before it is repeated. They are far
+	// above what a parse makes — the former check measured about 810
+	// allocations for a 50-part parse of a one-field fixture (#61), and the
+	// parse's own buffers are a few KiB each — so they never decide the check:
+	// they stop a parse that has started to allocate without bound from being
+	// replayed hundreds of times.
+	totalAllocCapMallocs = 1 << 14
+	totalAllocCapBytes   = 4 << 20
+
+	// totalAllocMaxReads bounds the reads of one part's body.
+	totalAllocMaxReads = 8
+)
+
+const totalAllocRootType = "multipart/mixed; boundary=B"
+
+// totalAllocText is the measured fixture: a root container of parts parts,
+// each with a header block of two fields and the body "b".
+func totalAllocText(parts int) string {
+	return "Content-Type: " + totalAllocRootType + "\r\n\r\n" +
+		strings.Repeat("--B\r\nX: 1\r\nY: 2\r\n\r\nb\r\n", parts) + "--B--\r\n"
+}
+
+// totalAllocCase is one configuration a measurement parses under: the limits,
+// whether they create the shared budget, and the deliberate allocations a
+// control adds.
+type totalAllocCase struct {
+	limits    Limits
+	wantTotal bool
+
+	// perParse allocations are made once per parse, and one more every
+	// everyNthPart parts (none when it is zero), each a 32-byte object kept in
+	// totalAllocSink so that the compiler cannot elide it.
+	perParse     int
+	everyNthPart int
+}
+
+var totalAllocSink *[32]byte
+
+func totalAllocWith() totalAllocCase {
+	return totalAllocCase{limits: DefaultLimits(), wantTotal: true}
+}
+
+func totalAllocWithout() totalAllocCase {
+	l := DefaultLimits()
+	l.MaxTotalHeaderBytes, l.MaxTotalHeaderCount = LimitDisabled, LimitDisabled
+	return totalAllocCase{limits: l}
+}
+
+// totalAllocRecord collects, without allocating, how many parses ran and what
+// the first one that did not read the fixture exactly as written got wrong.
+// what is a constant string and err the value the parse returned, so recording
+// them allocates nothing; they are formatted only by check, after the
+// measurement.
+type totalAllocRecord struct {
+	runs  int
+	bad   int // 1-based; 0 if every run read the fixture exactly
+	what  string
+	err   error
+	parts int
+}
+
+func (r *totalAllocRecord) fail(what string, err error, parts int) {
+	if r.bad == 0 {
+		r.bad, r.what, r.err, r.parts = r.runs, what, err, parts
 	}
-	off := DefaultLimits()
-	off.MaxTotalHeaderBytes, off.MaxTotalHeaderCount = LimitDisabled, LimitDisabled
-	with, without := measure(DefaultLimits()), measure(off)
-	// One budget per parse; nothing per block.
-	if with > without+2 {
-		t.Errorf("%v allocations with the totals, %v without", with, without)
+}
+
+// check fails the test unless exactly runs parses ran and every one read the
+// whole fixture: a parse that failed or stopped early allocates less, and must
+// not pass for that.
+func (r *totalAllocRecord) check(t *testing.T, label string, runs int) {
+	t.Helper()
+	if r.runs != runs {
+		t.Fatalf("%s: %d parses ran, want %d", label, r.runs, runs)
+	}
+	if r.bad != 0 {
+		t.Fatalf("%s: parse %d of %d: %s after %d parts (err %v)", label, r.bad, runs, r.what, r.parts, r.err)
+	}
+}
+
+var (
+	errTotalAllocBodyLong  = errors.New("part body longer than the fixture's")
+	errTotalAllocBodyReads = errors.New("part body not ended within the read cap")
+)
+
+// readSmallBody reads r to its end into buf, in at most totalAllocMaxReads
+// reads, without allocating.
+func readSmallBody(r io.Reader, buf []byte) (int, error) {
+	n := 0
+	for range totalAllocMaxReads {
+		m, err := r.Read(buf[n:])
+		n += m
+		if err == io.EOF {
+			return n, nil
+		}
+		if err != nil {
+			return n, err
+		}
+		if n == len(buf) {
+			return n, errTotalAllocBodyLong
+		}
+	}
+	return n, errTotalAllocBodyReads
+}
+
+// sessionHasTotal reports whether the parse created its shared budget, without
+// creating one as headerLimits would.
+func sessionHasTotal(s *ParseSession) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.headerTotal != nil
+}
+
+// totalAllocRun is one measured parse: it parses the fixture of parts parts
+// under c and reads the whole tree as a caller does, every body to its end,
+// adding c's deliberate allocations. Every result is held to the fixture —
+// the parse's error and entity, the root's and every part's fields and body,
+// the part count, the end of the iteration, no diagnostic, no stop, and
+// whether the shared budget exists — and the first difference recorded in rec.
+// Nothing here formats, reflects or calls t.
+//
+// The loop asks for at most parts+1 parts and each body takes at most
+// totalAllocMaxReads reads, whatever the parser returns.
+func totalAllocRun(text string, parts int, c *totalAllocCase, rec *totalAllocRecord) {
+	rec.runs++
+	for range c.perParse {
+		totalAllocSink = new([32]byte)
+	}
+	session, e, err := Parse(strings.NewReader(text), &ParseOptions{Limits: c.limits})
+	if err != nil || e == nil {
+		rec.fail("Parse failed", err, 0)
+		return
+	}
+	if e.Header.Len() != 1 || e.Header.Get("Content-Type") != totalAllocRootType {
+		rec.fail("root header differs", nil, 0)
+		return
+	}
+	mr := e.MultipartReader()
+	if mr == nil {
+		rec.fail("root is not multipart", nil, 0)
+		return
+	}
+	var buf [8]byte
+	n := 0
+	for {
+		p, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil || p == nil {
+			rec.fail("NextPart failed", err, n)
+			return
+		}
+		if n++; n > parts {
+			rec.fail("more parts than the fixture has", nil, n)
+			return
+		}
+		if c.everyNthPart > 0 && n%c.everyNthPart == 0 {
+			totalAllocSink = new([32]byte)
+		}
+		if p.Header.Len() != 2 || p.Header.Get("X") != "1" || p.Header.Get("Y") != "2" {
+			rec.fail("part header differs", nil, n)
+			return
+		}
+		got, err := readSmallBody(p.Body, buf[:])
+		if err != nil {
+			rec.fail("part body read failed", err, n)
+			return
+		}
+		if string(buf[:got]) != "b" {
+			rec.fail("part body differs", nil, n)
+			return
+		}
+	}
+	if n != parts {
+		rec.fail("fewer parts than the fixture has", nil, n)
+		return
+	}
+	if session.Len() != 0 {
+		rec.fail("diagnostics recorded", nil, n)
+		return
+	}
+	if stop := e.ParseStop(); stop != nil {
+		rec.fail("parse stopped", stop, n)
+		return
+	}
+	if sessionHasTotal(session) != c.wantTotal {
+		rec.fail("shared budget presence differs", nil, n)
+	}
+}
+
+// totalAllocMean returns the mean heap allocations (runtime.MemStats.Mallocs)
+// of one call of f over runs calls. It is testing.AllocsPerRun — one warm-up
+// call, then runs calls at GOMAXPROCS 1 — with two differences: the heap is
+// collected first, so that every measurement starts from a like heap and a
+// collection inside the window is less likely; and the mean is not truncated
+// to an integer, which before subtracting two means could add up to one
+// allocation to their difference, the same size as the bounds' margins.
+//
+// Mallocs is process-wide: anything else that allocates in the window is
+// charged to f, spread over runs calls. Like AllocsPerRun it must not run
+// during a parallel test; none of the tests that call it is parallel.
+func totalAllocMean(runs int, f func()) float64 {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	runtime.GC()
+	f()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range runs {
+		f()
+	}
+	runtime.ReadMemStats(&after)
+	return float64(after.Mallocs-before.Mallocs) / float64(runs)
+}
+
+// totalAllocSample is a configuration's mean allocations per parse at the two
+// fixture sizes.
+type totalAllocSample struct {
+	small, large float64
+}
+
+// measureTotalAlloc measures c at both sizes. Before each size is repeated,
+// one parse of it must read the fixture exactly within the safety caps; every
+// measured parse, the warm-up included, must too.
+func measureTotalAlloc(t *testing.T, label string, c totalAllocCase) totalAllocSample {
+	t.Helper()
+	at := func(parts, runs int) float64 {
+		t.Helper()
+		label := fmt.Sprintf("%s, %d parts", label, parts)
+		text := totalAllocText(parts)
+		var rec totalAllocRecord
+		f := func() { totalAllocRun(text, parts, &c, &rec) }
+
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		f()
+		runtime.ReadMemStats(&after)
+		rec.check(t, label+", preflight", 1)
+		if m, b := after.Mallocs-before.Mallocs, after.TotalAlloc-before.TotalAlloc; m > totalAllocCapMallocs || b > totalAllocCapBytes {
+			t.Fatalf("%s: one parse made %d allocations of %d bytes, over the safety caps %d and %d; not repeating it",
+				label, m, b, totalAllocCapMallocs, totalAllocCapBytes)
+		}
+
+		mean := totalAllocMean(runs, f)
+		rec.check(t, label, 1+1+runs)
+		return mean
+	}
+	return totalAllocSample{
+		small: at(totalAllocSmallParts, totalAllocSmallRuns),
+		large: at(totalAllocLargeParts, totalAllocLargeRuns),
+	}
+}
+
+// totalAllocVerdict is what one configuration adds over a baseline: the
+// constant, at the small size, and its growth from the small size to the large.
+type totalAllocVerdict struct {
+	constant, growth float64
+}
+
+func compareTotalAlloc(with, without totalAllocSample) totalAllocVerdict {
+	constant := with.small - without.small
+	return totalAllocVerdict{constant: constant, growth: (with.large - without.large) - constant}
+}
+
+func (v totalAllocVerdict) constantOK() bool { return v.constant <= totalAllocMaxConstant }
+func (v totalAllocVerdict) growthOK() bool   { return v.growth <= totalAllocMaxGrowth }
+
+func (v totalAllocVerdict) String() string {
+	return fmt.Sprintf("constant %.3f (bound %d), growth %.3f (bound %d)", v.constant, totalAllocMaxConstant, v.growth, totalAllocMaxGrowth)
+}
+
+// TestParse_totalHeaders_acceptedPathAllocations pins that a parse within the
+// totals allocates no more per header block or field than one with them
+// disabled, and nothing beyond the shared budget itself and one to spare.
+// Every measured parse reads the whole fixture exactly; see totalAllocRun.
+func TestParse_totalHeaders_acceptedPathAllocations(t *testing.T) {
+	with := measureTotalAlloc(t, "totals on", totalAllocWith())
+	without := measureTotalAlloc(t, "totals off", totalAllocWithout())
+	v := compareTotalAlloc(with, without)
+	// Both measurements have ended; nothing below is in a measured window.
+	t.Logf("the totals add %v (mean allocations per parse: with %+v, without %+v)", v, with, without)
+	if !v.constantOK() || !v.growthOK() {
+		t.Errorf("the totals add %v (with %+v, without %+v)", v, with, without)
+	}
+}
+
+// TestParse_totalHeaders_acceptedPathAllocationControls runs the same
+// measurement and verdict against deliberate allocations of known size, on
+// the configuration with the totals off so that the expected difference is
+// only what each control adds: one allocation per parse and none must pass;
+// three per parse must fail the constant and not the growth; one per part's
+// header block, and one per eighth of them, must fail the growth and not the
+// constant. The allocations are made by the traversal rather than inside the
+// parser, which the process-wide count does not tell apart. Each control's own
+// parses are held to the fixture as the measured ones are.
+func TestParse_totalHeaders_acceptedPathAllocationControls(t *testing.T) {
+	base := measureTotalAlloc(t, "baseline", totalAllocWithout())
+	// The nominal difference each control adds, which every one keeps at least
+	// one allocation from its bound. It is what the measurement is expected to
+	// come close to, not a count it is guaranteed to reproduce: the same
+	// process-wide noise as in the measured check applies, with or without
+	// -race.
+	const s, l = totalAllocSmallParts, totalAllocLargeParts
+	for _, ctl := range []struct {
+		name                     string
+		perParse, everyNth       int
+		wantConstant, wantGrowth float64
+		constantOK, growthOK     bool
+	}{
+		{"unchanged", 0, 0, 0, 0, true, true},
+		{"one per parse", 1, 0, 1, 0, true, true},
+		{"three per parse", 3, 0, 3, 0, false, true},
+		{"one per header block", 0, 1, s, l - s, true, false},
+		{"one per eighth block", 0, 8, s / 8, l/8 - s/8, true, false},
+	} {
+		c := totalAllocWithout()
+		c.perParse, c.everyNthPart = ctl.perParse, ctl.everyNth
+		v := compareTotalAlloc(measureTotalAlloc(t, ctl.name, c), base)
+		if v.constantOK() != ctl.constantOK || v.growthOK() != ctl.growthOK {
+			t.Errorf("%s: %v, want constant within bound %v and growth within bound %v (adds nominally %v and %v)",
+				ctl.name, v, ctl.constantOK, ctl.growthOK, ctl.wantConstant, ctl.wantGrowth)
+		}
+		// Reported after the control's measurement has ended, for -v.
+		t.Logf("%s: %v; adds nominally constant %v, growth %v", ctl.name, v, ctl.wantConstant, ctl.wantGrowth)
 	}
 }
 

@@ -2675,7 +2675,7 @@ spinning; cycles that never end run only in the subprocess probes.
 | ROB-130-007 | Planned | Add long-running randomized soak tests with leak and memory ceilings. | Repeatable seeded job. |
 | ROB-130-008 | Planned | Run `go test`, race tests, fuzz smoke tests, formatting, vet/static analysis, and benchmarks in CI. | Required green checks. |
 | ROB-130-009 | Done | Stabilize comment-parser cumulative-allocation regression checks without weakening their ability to detect allocation growth ([issue #59](https://github.com/saeroun-ai/emlkit/issues/59)). | Bounded repeated checks, finite deliberate-allocation positive controls, original accessor results and scanner no-allocation assertions, full/race/386 verification; no threshold-only relaxation or retry-until-pass. |
-| ROB-130-010 | Planned | Stabilize the shared-header accepted-path allocation regression check under race without hiding per-header allocation growth; see issue #61 and the section below. | Finite baseline/current reproduction, checked parse results, bounded positive allocation controls, repeatability and full unit/race/386/build review. |
+| ROB-130-010 | Done | Stabilize the shared-header accepted-path allocation regression check under race without hiding per-header allocation growth; see issue #61 and the section below. | Finite baseline/current reproduction, checked parse results, bounded positive allocation controls, repeatability and full unit/race/386/build review. |
 
 `ROB-130-009` changes test measurement only, in `mail/header_comment_test.go`.
 `allocBytesPerOp` replaces the single-call `TotalAlloc` reading with one
@@ -2736,7 +2736,7 @@ Claude calls had empty permission-denial arrays. This is empirical stability
 under the tested conditions, not proof that process-wide measurement noise or
 one-time-cost dilution cannot occur.
 
-#### ROB-130-010 — shared-header allocation measurement (Planned)
+#### ROB-130-010 — shared-header allocation measurement (Done)
 
 Registered before implementation as [issue #61](https://github.com/saeroun-ai/emlkit/issues/61).
 During ROB-010-004 final QA, the existing
@@ -2762,6 +2762,149 @@ by this item. Use the host-safe runner, finite work/byte caps and one job at a
 time. Evidence: `/tmp/emlkit-mbox-allocation-investigation.json` and `.out`,
 current/baseline repeat and full-race logs; the original failure is retained in
 `/tmp/emlkit-mbox-final-platform-race.out`.
+
+**Design, independently reviewed.** The change is limited to test code
+in `limit_header_total_test.go` and to this section. No product code, budget,
+default, mbox file or other ledger item changes. The single 50-part
+`AllocsPerRun(20)` comparison (with − without ≤ 2) is replaced by two
+quantities, each measured where its noise is small:
+
+- *constant*: the totals' mean extra allocations per parse of a one-part
+  fixture, bound `totalAllocMaxConstant` = 2. This is the shared budget plus
+  one spare, the bound the test always had. From the source, the expected
+  value is one: `session.headerBudget` creates one `HeaderBudget`, and
+  `textproto`'s `TestHeaderBudget_acceptedChargeAllocatesNothing` pins zero
+  allocations per accepted charge and per block.
+- *growth*: how much that extra grows from 1 to 50 parts (49 more header
+  blocks, 98 more fields), bound `totalAllocMaxGrowth` = 2. One allocation per
+  block or field grows it by 49 or 98. One allocation per eighth block grows it
+  by 6, and an amortized slice gaining an entry per block grows it by about 5.
+
+The fixture is a root container plus parts of two fields (`X: 1`, `Y: 2`) and
+body `b`. `totalAllocMean` is `AllocsPerRun`'s procedure: GOMAXPROCS 1, one
+warm-up call, then `MemStats.Mallocs` around a fixed number of calls. It adds
+a `runtime.GC()` first and does not truncate the mean to an integer;
+truncating two means before subtracting can shift the difference by one, which
+is the bound's margin. Fixed work: 200 measured parses at 1 part and 500 at 50
+parts, each after one warm-up and one preflight parse. The byte metric of
+`ROB-130-009` was not copied: a pool miss allocates an 8 KiB buffer, so bytes
+are far noisier here than counts.
+
+The cause is a source-level account, not a measured attribution. Every
+`NextPart` closes the previous part via `io.Copy(io.Discard, part)`
+(`textproto/multipart.go`), `io.Discard.ReadFrom` takes its buffer from
+`blackHolePool`, and under `-race` `sync.Pool.Put` drops one value in four.
+Each drop costs the next close two allocations (`make([]byte, 8192)` and its
+escaping slice header). A Python model of this alone — two allocations with
+probability 1/4 per close, the totals adding one, `AllocsPerRun` truncation —
+predicts the old check failing in 22.1% of runs, with failing differences of
+3–5. That matches 19/100 and 23/100 in #61. The same model with a constant of
+2 predicts 40%, and with a second such pool 30%. Under this model, the
+standard deviation of the new constant is about 0.09 and of the growth about
+0.4 allocations, so the bounds sit about 11 and 5 deviations from the expected
+values. Without `-race`, Put drops nothing at random, so the measurements are
+expected to land at their nominal increments. That is not a guarantee of exact
+counts. A collection in the window still clears the pool, a pool can still
+miss, and the runtime or other code in the process can still allocate, and
+`Mallocs` counts all of it. The model explains the chosen run counts; the
+bounds were not derived from it.
+
+Parent's initial bounded QA (`/tmp/emlkit-totalheader-alloc-initial.json` and
+`.out`) included an `io.Discard`-only control, 50 calls per run over 50 pairs.
+In normal mode allocations were 0..0 and the largest same-work difference was 0.
+Under `-race` they were 22..29, with a largest difference of 4 and 8 of 50
+pairs over 2. This is consistent with the pool account, but it is not an
+attribution of the parser's own variation. The main and control tests passed
+once in normal mode and once under `-race` there; repeated and full QA are
+still pending.
+
+Every measured parse, plus its warm-up and preflight, is checked without
+allocating inside the window. `totalAllocRun` records into
+`totalAllocRecord`, and `check` fails afterwards on any of the following:
+
+- a `Parse` error or nil entity, or a wrong root header or a non-multipart root;
+- a `NextPart` error, or any part count other than exactly the fixture's;
+- a wrong field count or value in a part;
+- a body that is not exactly `b`, or a body read error;
+- any retained diagnostic, or a `ParseStop`;
+- a shared budget that is missing (totals on) or present (totals off).
+
+A failed or partial parse cannot pass by allocating less.
+
+Hard caps independent of the parser:
+
+- input is fixed (at most about 1.2 KiB);
+- the traversal asks for at most parts+1 parts and makes at most 8 reads per
+  body, into an 8-byte stack buffer;
+- one preflight parse at each size must stay within 16,384 allocations and
+  4 MiB before it is repeated;
+- control allocations are one 32-byte object each, with at most one per part
+  plus three per parse.
+
+No guard is disabled, and no old unbounded or quadratic function is restored.
+
+`TestParse_totalHeaders_acceptedPathAllocationControls` runs the same
+measurement and verdict against the totals-off configuration, comparing it to
+a separately measured totals-off baseline, so each expected difference is
+the nominal increment the control adds. The measurement is expected to come
+close to it, not to reproduce it exactly, in either mode:
+
+| Control | Added (constant, growth) | Constant check | Growth check |
+|---|---|---|---|
+| unchanged | (0, 0) | pass | pass |
+| one per parse | (1, 0) | pass | pass |
+| three per parse | (3, 0) | fail | pass |
+| one per header block | (1, 49) | pass | fail |
+| one per eighth block | (0, 6) | pass | fail |
+
+Each control is at least one allocation from each bound.
+
+The allocations are made by the traversal, not inside the parser. The
+process-wide count cannot tell the two apart, so the controls prove the
+measurement and verdict can detect such allocations, not where a regression
+would be.
+
+Limits of what the check catches:
+
+- growth of at most two allocations in total over 49 blocks is not resolved;
+- a constant of up to two allocations is tolerated;
+- `Mallocs` is process-wide, so any foreign allocation in a window (another
+  goroutine, a runtime collection) is charged to that configuration, diluted
+  by the run count. In a totals-on window it can cause a false failure; in a
+  totals-off window it can hide up to that amount;
+- the tests must not run in parallel (none does).
+
+Work is about 4,000 parses of 50 parts in total, or about 200,000 part
+parses, versus about 2,100 before. Scaling #61's 0.02–0.03 s, expect about 2–4
+s per run of both tests under `-race`. This is an estimate, not measured.
+
+**Independent review and verification completed.** Codex reviewed the final
+measurement, checked every control's margin and the parse-result checks, and
+requested qualified normal-mode claims and post-measurement `-v` logging.
+Both Claude result files report no permission denials. No parser code changed.
+
+The final fixed-count normal and race runs each executed both accepted-path
+tests 100 times with zero failures (34.239 s and 253.942 s respectively),
+without retrying a failure. A separate verbose run measured the totals'
+constant/growth at 0.990/0.010 normally and 0.960/0.018 under race. The five
+controls all produced their required verdicts, including three per parse,
+one per block and one per eighth block. Fractional normal-mode variation was
+visible too; the count is not promised exact.
+
+All 13 steps in `/tmp/emlkit-totalheader-mbox-final-qa.json` and `.out` passed:
+verbose measurements and both fixed repetitions; all six packages' full unit,
+race and 386 tests; build; vet excluding the two established warning classes;
+previous empty/header-only and exceptional-input QA; formatting and diff.
+Fresh unfiltered vet still reports exactly the prior 13 unkeyed literals and
+one WriteTo-signature warning, with no other output
+(`/tmp/emlkit-totalheader-mbox-plain-vet.json` and `.out`). It is not clean vet.
+
+The final sequential service, `emlkit-bounded-9e739c7782`, finished normally
+in 341.287 s with a reported 1.2 GiB peak, inside the enforced 1.5 GiB RAM,
+zero swap, CPU quota 2, 128 tasks and deadline. No guard was disabled. This
+completes #61's local implementation/review/QA, not CI or the general
+performance audit. Original failing runs remain available at the paths above.
+
 
 ### ROB-140 — Optional interoperability extensions
 
