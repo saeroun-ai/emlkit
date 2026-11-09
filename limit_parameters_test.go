@@ -165,6 +165,11 @@ func TestParse_parameterSegments_boundary(t *testing.T) {
 // occurrences as they appear, before anything is interpreted. Duplicates count
 // separately, RFC 2231 segments count separately, a semicolon inside a quoted
 // string separates nothing, and an empty item declares nothing.
+//
+// Some of these fields are also malformed — duplicates, an unterminated quote —
+// and since ROB-050-001 a malformed field with a valid base is repaired and
+// diagnosed under Parse as well. That is pinned in metadata_repair_test.go;
+// what this test counts is the budget diagnostics alone.
 func TestParse_parameterCount_countsRawOccurrences(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -202,8 +207,8 @@ func TestParse_parameterCount_countsRawOccurrences(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Parse() = %v", err)
 			}
-			if d := session.Diagnostics(); d != nil {
-				t.Errorf("a budget of %d: Diagnostics() = %v, want none", at, codesOfDiags(d))
+			if d := limitDiags(session.Diagnostics()); d != nil {
+				t.Errorf("a budget of %d: Diagnostics() = %v, want no budget diagnostic", at, codesOfDiags(d))
 			}
 
 			// One below it, the field is refused — where "one below" is a budget
@@ -215,7 +220,7 @@ func TestParse_parameterCount_countsRawOccurrences(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Parse() = %v", err)
 			}
-			if got := codesOfDiags(session.Diagnostics()); !reflect.DeepEqual(got, []Code{CodeLimitParameterCount}) {
+			if got := codesOfDiags(limitDiags(session.Diagnostics())); !reflect.DeepEqual(got, []Code{CodeLimitParameterCount}) {
 				t.Errorf("a budget of %d: Diagnostics() = %v, want the count budget", tc.want-1, got)
 			}
 		})
@@ -717,4 +722,15 @@ func TestRetainedParameters(t *testing.T) {
 			}
 		})
 	}
+}
+
+// limitDiags returns the budget diagnostics of diags, in order, or nil.
+func limitDiags(diags []Diagnostic) []Diagnostic {
+	var out []Diagnostic
+	for _, d := range diags {
+		if strings.HasPrefix(string(d.Code), "limit.") {
+			out = append(out, d)
+		}
+	}
+	return out
 }

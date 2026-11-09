@@ -118,7 +118,18 @@ func CreateReader(r io.Reader) (*Reader, error) {
 // continues with the part after it. Every other error is returned with a nil
 // Part. That includes a message.FatalError, even one wrapping either warning:
 // on an entity from message.Parse it is a resource budget or a DiagnosticSink
-// stop, and later calls report it again rather than continue.
+// stop, and later calls report it again rather than continue. The one
+// FatalError that ends less is the refusal of one part under
+// message.ProfileStrict, when its Content-Type or Content-Disposition has a
+// valid base but malformed parameters: that part is not returned, the parse is
+// not stopped (Entity.ParseStop stays nil), and the next call continues with
+// the part after it.
+//
+// Under every other profile such a field is repaired by the parse — its valid
+// base and well-formed parameters kept, the defect recorded as a diagnostic —
+// and the part is returned and classified by the repaired metadata with no
+// error, even though its raw header, which is unchanged, still fails the
+// standalone Header accessors.
 //
 // A part is an attachment or inline text according to the metadata it was
 // constructed with: message.Entity.EffectiveContentType and
@@ -167,14 +178,26 @@ func (r *Reader) NextPart() (*Part, error) {
 		} else {
 			// This is a non-multipart part, return a mail part
 			mp := &Part{Body: p.Body}
-			t, _, _ := p.EffectiveContentType()
-			disp, _, _ := p.EffectiveContentDisposition()
+			t, _, typeErr := p.EffectiveContentType()
+			disp, _, dispErr := p.EffectiveContentDisposition()
 			// Reading the disposition may have recorded a diagnostic, and a
 			// sink told about it may have stopped the parse. The stop is the
 			// caller ending the parse, so it outranks the part, and any warning
 			// the part came with, exactly as it does everywhere else.
 			if stop := p.ParseStop(); stop != nil {
 				return nil, stop
+			}
+			// Under message.ProfileStrict a field whose parameters would need
+			// repair is not interpreted, and the refusal is a FatalError scoped
+			// to this one entity: there is nothing to classify it by. It is
+			// returned without a part, but it ends nothing else, so the next
+			// call continues with the part after it. A field that was
+			// repaired, or that failed as it always has, carries no such error
+			// and is classified as before.
+			for _, local := range []error{typeErr, dispErr} {
+				if message.IsFatal(local) {
+					return nil, local
+				}
 			}
 			if disp == "inline" || (disp != "attachment" && strings.HasPrefix(t, "text/")) {
 				mp.Header = &InlineHeader{p.Header}

@@ -90,7 +90,8 @@ type ParseOptions struct {
 //   - The session is never nil, including when the header could not be read at
 //     all, so there is always somewhere to look. What it holds, though, is what
 //     some producer has been implemented to record, which today is the two
-//     decoding warnings below and the eight enforced resource budgets. A framing
+//     decoding warnings below, the eight enforced resource budgets, and the
+//     repair of a valid media type or disposition with malformed parameters. A framing
 //     failure that nothing diagnoses yet is carried by err alone and leaves the
 //     session empty, so read both rather than treating an empty session as a
 //     clean parse. Later releases add diagnostics for the remaining resource
@@ -183,6 +184,34 @@ type ParseOptions struct {
 // entity, so no nested-message transition exists to count. Such a part is one
 // ordinary part of MaxPartCount, and the structure inside its body costs
 // neither budget.
+//
+// A Content-Type or Content-Disposition whose base is valid — type/subtype, or
+// a disposition token — but whose parameters are malformed, stray empty items
+// between semicolons included, is read item by item from what the parameter
+// budgets retained (ROB-050-001; see metadata_repair.go). Under the default
+// ProfileTolerant, and ProfileForensic,
+// the base and every well-formed, unambiguous parameter are kept, a conflicting
+// or damaged repeat of a parameter is dropped rather than chosen, the raw field
+// is left as it was, and one mime.content_type_invalid or
+// mime.disposition_invalid and, for a conflict, one mime.parameter_duplicate
+// diagnostic of SeverityRecovered say what was kept. So "multipart/mixed;
+// boundary=B; broken" is still a multipart with boundary B. A repaired multipart
+// left with no boundary it may use — "boundary=B; boundary=C" — chooses none:
+// its body is one opaque part with the input's bytes, MultipartReader returns
+// nil, the siblings after it are read as usual, and its diagnostics are
+// SeverityInvalidMetadata, saying the parts inside were not read. Under
+// ProfileStrict the field is not interpreted and the entity is refused with an
+// entity-scoped FatalError carrying that diagnostic, while the parse continues —
+// its parent and siblings are unaffected and ParseStop stays nil. What the
+// refusal does to the body depends on when it is known. A refused Content-Type
+// is known during construction, so the body is exactly as it was read: no
+// decoder and no part iteration. A Content-Disposition is read lazily: refused
+// by the charset stage under SkipTextAttachmentDecoding, it keeps that stage
+// from running, though transfer decoding is already set up; refused later, by
+// a caller, it refuses the entity without undoing decoding already chosen or
+// bytes already read. A base that is not valid on its own is
+// ROB-050-002's and is reported as before. Every Compatibility value behaves the
+// same here.
 //
 // If a DiagnosticSink stops the parse, err is a FatalError wrapping the sink's
 // own error and the entity is the usable prefix recovered before the stop. No

@@ -288,12 +288,15 @@ func TestReader_issue15Child(t *testing.T) {
 	}
 }
 
-// TestReader_withoutBudgetsKeepsLegacyClassification pins what is not part of
-// this item. Read and CreateReader have no budgets, so the duplicate parameter
-// is a parse error there, as it is for Header.ContentDisposition, and the part
-// stays inline text: healing a duplicate parameter is #22 / ROB-050-005, not a
-// side effect of classification. Parse with budgets that the field fits
-// within reads the whole field and gets the same error, and the same verdict.
+// TestReader_withoutBudgetsKeepsLegacyClassification pins the legacy path and
+// how Parse differs from it. Read and CreateReader have no budgets and no
+// repair, so the duplicate parameter is a parse error there, as it is for
+// Header.ContentDisposition, and the part stays inline text. Under Parse with
+// budgets the field fits within, the whole field fails to parse and is then
+// repaired by ROB-050-001 (#22): its valid base "attachment" is kept, the
+// conflicting duplicate a is dropped rather than chosen, one
+// mime.parameter_duplicate is recorded, and the part is the attachment its base
+// declares. Precedence between the conflicting values is ROB-050-005's.
 func TestReader_withoutBudgetsKeepsLegacyClassification(t *testing.T) {
 	t.Run("CreateReader", func(t *testing.T) {
 		mr, err := mail.CreateReader(strings.NewReader(issue15Root))
@@ -313,15 +316,18 @@ func TestReader_withoutBudgetsKeepsLegacyClassification(t *testing.T) {
 			t.Fatalf("Parse() = %v", err)
 		}
 		disp, params, dispErr := e.EffectiveContentDisposition()
-		if dispErr == nil || disp != "attachment; a=1; a=2" || params != nil {
-			t.Errorf("EffectiveContentDisposition() = (%q, %v, %v), want the unparsed field and its error", disp, params, dispErr)
+		if dispErr != nil || disp != "attachment" || len(params) != 0 {
+			t.Errorf("EffectiveContentDisposition() = (%q, %v, %v), want the repaired attachment without the conflicting a", disp, params, dispErr)
 		}
 		parts, err := classifyAll(t, mail.NewReader(e))
-		if err != nil || len(parts) != 1 || parts[0].attachment || parts[0].body != "body" {
-			t.Errorf("parts = %+v, %v; want the one inline part", parts, err)
+		if err != nil || len(parts) != 1 || !parts[0].attachment || parts[0].body != "body" {
+			t.Errorf("parts = %+v, %v; want the one attachment", parts, err)
 		}
-		if d := session.Diagnostics(); d != nil {
-			t.Errorf("Diagnostics() = %v, want none: no budget was exceeded", codes(d))
+		if got := codes(session.Diagnostics()); !reflect.DeepEqual(got, []message.Code{message.CodeMIMEParameterDuplicate}) {
+			t.Errorf("Diagnostics() = %v, want one mime.parameter_duplicate and no budget diagnostic", got)
+		}
+		if _, _, err := e.Header.ContentDisposition(); err == nil {
+			t.Error("Header.ContentDisposition() = nil error, want the legacy unbudgeted parse error")
 		}
 	})
 }

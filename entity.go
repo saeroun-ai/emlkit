@@ -29,6 +29,12 @@ type Entity struct {
 	mediaParams map[string]string
 	mediaErr    error
 
+	// unframed reports that the Content-Type was repaired into a multipart
+	// media type with no boundary that may be used (ROB-050-001). The body is
+	// then one opaque part: MultipartReader returns nil rather than an
+	// iterator that could not find a single delimiter. See metadata_repair.go.
+	unframed bool
+
 	// disposition is the Content-Disposition this entity was constructed with,
 	// interpreted at most once. It is nil only for an Entity that no constructor
 	// built — a struct literal — and that is how such an entity is recognized.
@@ -128,7 +134,8 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// one of them refuses part of the field, so that what is kept is recorded
 	// rather than quietly dropped. It is Header.ContentType for a parse with no
 	// budgets, which is every entry point but Parse.
-	mediaType, mediaParams, mediaErr := ctx.contentType(header)
+	ct := ctx.contentType(header)
+	mediaType, mediaParams, mediaErr := ct.value, ct.params, ct.err
 
 	// The disposition is captured now, as it is, and interpreted only if
 	// something asks: the charset stage below when it has to know whether this
@@ -146,6 +153,19 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// the body as it appeared in the input — is returned with the fatal error.
 	fatal := ctx.fatalErr()
 
+	// Under ProfileStrict a Content-Type whose parameters would need repair is
+	// not interpreted, and the refusal is this entity's alone: a FatalError
+	// scoped to the entity, which leaves the parse, the parent and the siblings
+	// running. It stops interpretation here just as a stop of the whole parse
+	// does — no decoder is set up and the body is what the input held — but it
+	// is returned only when the parse itself has not been stopped, since a stop
+	// the caller asked for describes more than one entity does. See
+	// metadata_repair.go.
+	var local error
+	if IsFatal(mediaErr) {
+		local = mediaErr
+	}
+
 	// QUIRK: RFC 2045 section 6.4 specifies that multipart messages can't have
 	// a Content-Transfer-Encoding other than "7bit", "8bit" or "binary".
 	// However some messages in the wild are non-conformant and have it set to
@@ -153,7 +173,7 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// See https://github.com/emersion/go-message/issues/48
 	if !strings.HasPrefix(mediaType, "multipart/") {
 		encoding = header.Get("Content-Transfer-Encoding")
-		if fatal == nil {
+		if fatal == nil && local == nil {
 			// A line-framed encoding is watched as it is read, so that an
 			// encoded line past Limits.MaxLineBytes is refused while the body
 			// streams rather than after it has been accumulated. The monitor
@@ -195,8 +215,14 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 				// after it.
 				skip = disposition.isAttachment()
 				fatal = ctx.fatalErr()
+				// A Content-Disposition that ProfileStrict refused to repair
+				// leaves it unknown whether this is an attachment, so the
+				// charset stage, which depends on that, does not run either.
+				if _, _, dispErr := disposition.get(); IsFatal(dispErr) {
+					local = dispErr
+				}
 			}
-			if fatal == nil && !skip {
+			if fatal == nil && local == nil && !skip {
 				if converted, charsetErr := charsetReader(charset, body); charsetErr != nil {
 					warning := UnknownCharsetError{charsetErr}
 					err = warning
@@ -221,6 +247,7 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 		mediaType:                  mediaType,
 		mediaParams:                mediaParams,
 		mediaErr:                   mediaErr,
+		unframed:                   ct.unframed,
 		disposition:                disposition,
 		originalBody:               originalBody,
 		decodedBody:                body,
@@ -236,6 +263,9 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// the warning would have pointed at has already been delivered.
 	if fatal != nil {
 		return e, fatal
+	}
+	if local != nil {
+		return e, local
 	}
 	return e, err
 }
@@ -425,8 +455,17 @@ func Read(r io.Reader) (*Entity, error) {
 
 // MultipartReader returns a MultipartReader that reads parts from this entity's
 // body. If this entity is not multipart, it returns nil.
+//
+// It also returns nil for an entity from Parse whose multipart Content-Type had
+// to be repaired and kept no boundary that may be used — a conflicting or
+// damaged boundary parameter, or one an unterminated quote swallowed. Such a
+// body cannot be framed without choosing or inventing a boundary, so it is kept
+// as one opaque part: Body yields its bytes as they were read, and the media
+// type EffectiveContentType reports is still the multipart one the field
+// declares. A diagnostic of SeverityInvalidMetadata was recorded for it. See
+// metadata_repair.go.
 func (e *Entity) MultipartReader() MultipartReader {
-	if !strings.HasPrefix(e.mediaType, "multipart/") {
+	if !strings.HasPrefix(e.mediaType, "multipart/") || e.unframed {
 		return nil
 	}
 	if mb, ok := e.Body.(*multipartBody); ok {
@@ -543,8 +582,27 @@ type WalkFunc func(path []int, entity *Entity, err error) error
 // An entity that was not parsed with a session, which is every entity but one
 // from Parse, has no parse that could be stopped, and Walk behaves exactly as
 // it always has.
+//
+// Under ProfileStrict an entity refused for a valid base with malformed
+// parameters ends the walk with its entity-scoped FatalError, before walkFunc
+// is given it: a child whose iterator returns the refusal, the root itself when
+// its Content-Type was refused, and any entity whose Content-Disposition was
+// refused when it was read — by the charset stage, by a caller before the walk,
+// or by walkFunc during it, in which case the walk ends after walkFunc returns.
+// Walk asks only about what has been observed and reads no field for the
+// purpose. A stop of the whole parse outranks the refusal. The parse is not
+// stopped by it: the refused entity and its raw body stay the caller's, and a
+// caller that wants the siblings after a refused part iterates MultipartReader
+// directly, where the next call continues with them.
 func (e *Entity) Walk(walkFunc WalkFunc) error {
 	var multipartReaders []MultipartReader
+	// containers holds the entity whose parts each reader yields, so that a
+	// refusal observed for one of them after the walk descended into it — a
+	// walkFunc reading the disposition of an ancestor it captured — ends the
+	// walk before another of its parts is read. Only a strict parse can refuse
+	// anything, so only a strict parse keeps them.
+	var containers []*Entity
+	strict := e.parse.session != nil && e.parse.session.Profile() == ProfileStrict
 	var path []int
 	part := e
 	for {
@@ -556,6 +614,14 @@ func (e *Entity) Walk(walkFunc WalkFunc) error {
 		// already in hand would otherwise be delivered.
 		if err := e.parse.fatalErr(); err != nil {
 			return err
+		}
+		// Asking each container costs one look at what has been observed, so a
+		// strict walk pays the depth of the tree per part, which
+		// Limits.MaxMIMEDepth bounds; nothing is read for the purpose.
+		for _, c := range containers {
+			if fail := c.localFailure(); fail != nil {
+				return fail
+			}
 		}
 
 		var err error
@@ -569,6 +635,9 @@ func (e *Entity) Walk(walkFunc WalkFunc) error {
 			part, err = mr.NextPart()
 			if err == io.EOF {
 				multipartReaders = multipartReaders[:len(multipartReaders)-1]
+				if strict {
+					containers = containers[:len(containers)-1]
+				}
 				path = path[:len(path)-1]
 				continue
 			} else if part != nil && (IsUnknownEncoding(err) || IsUnknownCharset(err)) {
@@ -610,12 +679,37 @@ func (e *Entity) Walk(walkFunc WalkFunc) error {
 			copy(pathCopy, path)
 		}
 
+		// An entity whose own metadata was refused under ProfileStrict ends the
+		// walk with that refusal, as a refused child already does when its
+		// iterator returns it. The root has no iterator to return it, so it is
+		// asked here, and so is a part whose disposition was refused when it was
+		// first read: by the charset stage, or by any caller before the walk got
+		// to it. Only what has been observed is asked about — nothing is read for
+		// the purpose — and the walk is all that ends: the parse is not stopped,
+		// and the entity, its raw body included, stays the caller's.
+		if fail := part.localFailure(); fail != nil {
+			return fail
+		}
+
 		if err := walkFunc(pathCopy, part, err); err != nil {
 			return err
 		}
 
+		// walkFunc may have read the disposition for the first time, and so
+		// learned of a refusal, or had a sink stop the parse while it was told
+		// about one. The stop outranks the refusal, as everywhere else.
+		if stop := e.parse.fatalErr(); stop != nil {
+			return stop
+		}
+		if fail := part.localFailure(); fail != nil {
+			return fail
+		}
+
 		if mr := part.MultipartReader(); mr != nil {
 			multipartReaders = append(multipartReaders, mr)
+			if strict {
+				containers = append(containers, part)
+			}
 			path = append(path, -1)
 		}
 

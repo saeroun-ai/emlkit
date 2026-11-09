@@ -128,7 +128,11 @@ The source audit also identified concrete baseline gaps. These are observations
 at the start of the roadmap, not claims that every existing path is defective:
 
 - `newWithOptions` discards `Header.ContentType` errors, so malformed MIME
-  metadata can silently change entity classification (`ROB-050-001`).
+  metadata can silently change entity classification (`ROB-050-001`). Under
+  `Parse`, a valid base with malformed parameters is now repaired or (Strict)
+  refused with a diagnostic (`ROB-050-001`). An invalid base is still reported
+  as the raw value with the error and no diagnostic (`ROB-050-002`). `Read`,
+  `ReadWithOptions` and `New` are unchanged by design.
 - ~~The top-level header has a default size limit, but child-part headers do not
   receive an equivalent per-entity budget~~ — closed by `ROB-001-002`, which
   applies `MaxHeaderBytes` per entity at every depth under `Parse`. The legacy
@@ -885,7 +889,7 @@ trade a recoverable value for no saving.
 
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
-| ROB-050-001 | Planned | Parse and retain the base media type even when parameters are malformed. | Invalid-tail matrix; no silent multipart misclassification. |
+| ROB-050-001 | Done | Parse and retain the base media type even when parameters are malformed. | Invalid-tail matrix; no silent multipart misclassification. |
 | ROB-050-002 | Planned | Recover missing type/subtype/slash using conservative defaults and diagnostics. | Strict/tolerant behavior tests. |
 | ROB-050-003 | Planned | Parse loose unquoted parameter values up to the next semicolon. | Angus/MimeKit-compatible fixtures. |
 | ROB-050-004 | Planned | Recover unclosed quotes, bad escapes, and Windows filename backslashes. | Apple/Windows fixtures. |
@@ -895,6 +899,180 @@ trade a recoverable value for no saving.
 | ROB-050-008 | Planned | Support nonstandard RFC 2047 and raw UTF-8 filenames in tolerant mode. | Common client fixtures. |
 | ROB-050-009 | Planned | Resolve filename/name/filename* conflicts without discarding candidates. | Candidate API and precedence tests. |
 | ROB-050-010 | Planned | Separate original filename from an optional filesystem-safe display/storage name. | Traversal, NUL, separators, reserved names. |
+
+`ROB-050-001` ([issue #22](https://github.com/saeroun-ai/emlkit/issues/22))
+keeps a valid base type or disposition when its parameters are malformed.
+Before it, `Content-Type: multipart/mixed; boundary=B; broken` went through
+`Parse` with no error and no diagnostic. The whole-field parser rejected the
+field over one item, the raw value became the "media type", and the multipart
+iterator then failed with an empty boundary. The contract is:
+
+- **Scope.** Only `Parse`, only a field whose bounded whole-field parse fails,
+  and only when its base is valid on its own: `type "/" subtype` for
+  `Content-Type` (RFC 2045 §5.1; there is no default subtype), one token for
+  `Content-Disposition`. A missing or invalid base keeps the old result — raw
+  value, no parameters, the error, no diagnostic — for `ROB-050-002`. A
+  conformant field parses exactly as before under every profile. `Read`,
+  `ReadWithOptions`, `New` and the standalone `Header` accessors repair
+  nothing.
+- **What is kept.** The normalized base, plus every item that parses on its own
+  (before or after the damage, with name case-folded and value case kept, so a
+  boundary stays case-sensitive per RFC 2046 §5.1.1). Items are split by the
+  existing quote-aware scan, so a quoted or escaped semicolon never separates
+  items. An unterminated quote is the damaged suffix: what precedes it is kept,
+  and nothing it swallowed is guessed at. A parameter repeated with one value
+  is kept silently, as `mime.ParseMediaType` already keeps it.
+- **Stray empty items.** `mime.ParseMediaType` rejects an empty item between
+  semicolons (`multipart/mixed;; boundary=B`, `; ;`, `boundary=B;;`,
+  `boundary=B; ;`), accepting only one trailing semicolon followed by
+  whitespace. Such empty items are repaired like malformed ones: they declare
+  nothing, the parameters around them are kept, and they are reported in the
+  field-level diagnostic. They are still not parameter occurrences: no budget
+  charges them, and the scan only counts them, with no allocation. The single
+  trailing semicolon `mime` accepts stays a conformant field and is unchanged.
+  Under a budget cut, the retained prefix is rebuilt without empty items, so a
+  stray one before the cut sends the field to the repair rather than vanishing
+  unreported.
+- **What is dropped.** A parameter is dropped entirely, so that no framing
+  boundary is chosen arbitrarily (precedence is `ROB-050-005`), when it is
+  repeated with conflicting values, or repeated by an occurrence whose value
+  is unknown: a damaged item that still names it, or an RFC 2231 extended
+  value whose charset has no decoder. Every parameter with an RFC 2231
+  continuation segment among the retained occurrences is also dropped
+  entirely, including its well-formed segments and any whole parameter of
+  the same name, as the budgets already drop one (`ROB-050-006`,
+  `ROB-050-007`). Well-formed segments and undecodable extended values are
+  well-formed syntax: they are not counted or reported as malformed, only
+  dropped under this deferred policy, and the Action says which.
+- **A repaired multipart without a usable boundary.** If a repair leaves a
+  multipart `Content-Type` with no boundary it may use — a conflicting or
+  damaged repeat, or one hidden by an unterminated quote — no boundary is
+  chosen or invented. The entity is *unframed*:
+  - `EffectiveContentType` still reports the declared multipart type;
+  - `MultipartReader` returns nil;
+  - the body is one opaque, uninterpreted part holding the input's bytes;
+  - the iterator, `Walk` and `mail.Reader` hand that part out and go on to the
+    siblings after it.
+
+  Its diagnostics are `SeverityInvalidMetadata`, and their Action says the
+  parts inside were not read, so nothing claims the multipart was rebuilt. A
+  valid multipart with no boundary that no repair touched keeps its existing
+  behavior; boundary inference is `ROB-060-002`.
+- **Bounded.** Repair reads only the occurrences the existing count and segment
+  budgets retained, so an over-budget field is never parsed whole a second
+  time. With both budgets disabled the field is scanned once, and its size is
+  bounded only by the header budgets. Each item is parsed once, names are
+  tracked in map sets, and diagnostic lists keep first-occurrence order rather
+  than being sorted. The work is therefore linear in the retained bytes (a
+  structural argument; the timing and allocation test only checks it).
+- **Diagnostics.** At most one `mime.content_type_invalid` or
+  `mime.disposition_invalid` (malformed items, including an unterminated quote)
+  and one `mime.parameter_duplicate` (conflicting or unreadable repeats) per
+  field, after any budget diagnostic. They carry the field, path and header
+  position. Their Action names the base, the kept and dropped parameters in
+  first-occurrence order, whether only budgeted occurrences were read, and
+  whether the body was left uninterpreted. They are recorded once at
+  construction, or once at the first lazy disposition read. A sink stop wins,
+  is sticky, and leaves no decoder and no later diagnostic behind it.
+- **Profiles (local decision table for this producer).** Tolerant (the
+  default) and Forensic repair identically, with `SeverityRecovered`
+  (`SeverityInvalidMetadata` for an unframed multipart). Strict records the
+  same codes as `SeverityInvalidMetadata` and refuses only this entity, with an
+  entity-scoped `FatalError` carrying that diagnostic and an empty effective
+  type or disposition. What a refusal still prevents depends on when it is
+  known, and nothing is rewound or read early:
+  - **`Content-Type`** is read at construction, so its refusal leaves the body
+    exactly as read: no decoder, no part iteration.
+  - **`Content-Disposition`** is read lazily. If the charset stage reads it
+    (under `SkipTextAttachmentDecoding`), the refusal keeps that stage from
+    running, although transfer decoding is already set up. If it is read later
+    by `EffectiveContentDisposition`, `mail.Reader` or a walk callback, it only
+    refuses the entity: decoders already chosen stay and bytes already read
+    stay read.
+
+  The parse is not stopped (`ParseStop` stays nil), and the parent iterator
+  continues with the next sibling. `mail.Reader` returns the refusal without a
+  part and then continues. `Walk` ends with a refusal as soon as one is
+  observed:
+  - before the callback, for the root's `Content-Type`, a child's refusal from
+    its iterator, or a disposition already read by the charset stage or an
+    earlier caller;
+  - after the callback, if the callback itself read it, before any of the
+    entity's children;
+  - before reading another part of a container that a callback has meanwhile
+    found refused.
+
+  It reads no field to find out, a session stop outranks the refusal, and the
+  container check costs the tree depth per part, bounded by `MaxMIMEDepth`,
+  for strict parses only. Every `Compatibility` value behaves the same. Forensic adds nothing
+  here: the raw field is already byte-exact in the header for every profile,
+  and Forensic's raw spans in general are `ROB-110`. This is not #17's general
+  profile activation.
+- **Views.** `EffectiveContentType` and `EffectiveContentDisposition` return the
+  repaired interpretation with a nil error, and they drive the decoders,
+  `MultipartReader`, the `SkipTextAttachmentDecoding` charset decision and
+  `mail.Reader` classification, so a repaired attachment stays an attachment.
+  `Header.ContentType`/`ContentDisposition`, and `mail` accessors built on them
+  such as `AttachmentHeader.Filename`, still report the legacy failure for the
+  unchanged raw field. Filename policy is `ROB-050-009`.
+- **Known defect outside this item.** `Entity.WriteTo` panics ("assignment to
+  entry in nil map") for any entity whose raw multipart `Content-Type` fails the
+  legacy parse. The writer reparses the header with `Header.ContentType` and
+  writes into the nil map it gets back. This happens through `Read` as well as
+  `Parse` and predates this item. It is registered as
+  [issue #58](https://github.com/saeroun-ai/emlkit/issues/58) (proposed
+  `ROB-120-008`) for its own reviewed execution after this item, and is not
+  part of it; the tests here check raw header and body bytes instead.
+- **Evidence.**
+  - `metadata_repair_test.go`:
+    - a 22-row invalid-tail matrix: broken item before/after the boundary,
+      mixed case and whitespace, quoted semicolon, escaped quote, unterminated
+      quote before and hiding a boundary, conflicting/case-variant/damaged/
+      identical duplicates, missing name or value, empty items, RFC 2231
+      extended and continued, and invalid bases left alone. Each row runs at
+      the root and as a child between two siblings, under all three profiles,
+      with raw header writeback and repeat-accessor checks;
+    - the conformant happy path unchanged under every profile;
+    - disposition repair with the charset decision (skip on/off, Strict);
+    - budget interactions: count, segments, both disabled, one disabled;
+    - sink stop under every profile;
+    - every split point and one-byte input;
+    - a nested path;
+    - legacy `Read`/`New`/accessor regression;
+    - returned-map copies;
+    - a linear-cost check;
+    - a focused fuzz target `FuzzParseContentTypeRepair`: conformant input
+      unchanged, a valid kept base, no invented parameter names, and Strict
+      refusing exactly where Tolerant repairs.
+  - `metadata_repair_unframed_test.go`:
+    - the unframed fallback for conflicting, damaged and hidden boundaries and
+      for a budget cut behind a broken item, at the root and as a child: exact
+      body bytes, raw header, the following sibling, `Walk` leaves, and
+      unchanged behavior for an unrepaired missing boundary and for Strict;
+    - Strict refusals seen by `Walk`: root `Content-Type`, an `Entity` copy, a
+      disposition read before, during and by the charset stage, a disposition
+      nobody read (no diagnostic forced), sink-stop precedence, and a child
+      refusal that ends only the walk while the iterator reaches both siblings;
+    - accurate RFC 2231 labels: a well-formed series, a lone later segment, a
+      damaged segment family, an undecodable extended value alone and
+      repeating a plain one, and first-occurrence order.
+  - `mail/reader_repair_test.go`: the repaired root, a repaired attachment
+    with exact bytes and the charset decision, a Strict
+    child/disposition/root refused and continued, a sink stop on a lazy
+    repair, and the opaque part with its following sibling, flat and nested.
+
+  The fuzz target does not advance `ROB-130`.
+
+  Reference behavior: during review, Codex ran Mime4j 0.8.15 (DEFAULT,
+  PERMISSIVE and STRICT) and Python 3.14.10 on nine synthetic values. The
+  evidence is recorded in the review notes and an issue #22 comment; the
+  executor did not run the references. Both engines keep the boundary and the
+  body for standalone malformed items, for unrelated unclosed tails, and for
+  all four stray-empty-separator forms; Python reports the last as "parameter
+  entry with no content". On a `B`/`C` boundary conflict, Python keeps the
+  first value and Mime4j the last; this item deliberately keeps neither. This
+  is a small synthetic sample, not a differential harness, and no parity with
+  any engine is claimed.
 
 ### ROB-060 — Multipart recovery
 
@@ -1219,6 +1397,20 @@ malformed-MIME recovery (#22), filename policy or error-graph work that is not
 yet built. It does not advance, start or complete `ROB-050`, `ROB-100-001`
 through `ROB-100-005`, `ROB-120-007` or any other item.
 
+**Exception — `ROB-050-001`.** It was taken ahead of `ROB-010` through
+`ROB-020` at the user's request, after `ROB-100-007` was Done, as the first
+item of [issue #22](https://github.com/saeroun-ai/emlkit/issues/22). It
+depends on nothing those items introduce: the field value, the quote-aware
+parameter scan and the budgets already exist. Issue #22 lists
+[#17](https://github.com/saeroun-ai/emlkit/issues/17) (activating profiles and
+compatibility policies) as a prerequisite. That was reviewed as a dependency
+exception: this item implements and documents the profile decision table for
+its own producer only — Tolerant and Forensic repair alike, Strict refuses
+locally, every Compatibility value takes the same conservative choices — and
+does not claim #17, any other producer's profile behavior, or parity with any
+reference engine. It does not advance, start or complete `ROB-050-002`
+through `ROB-050-010`, `ROB-060-002` or any other item.
+
 ## 9. Per-item implementation protocol
 
 Each Claude Code execution receives exactly one ledger ID and must:
@@ -1277,3 +1469,5 @@ Codex reviewed `ROB-080-011` for issue #1, independently checked the fixed CP949
 Codex reviewed `ROB-040-003` for [issue #9](https://github.com/saeroun-ai/emlkit/issues/9), inspected the scanner and both test files, and independently measured 16 cumulative allocated bytes at each 4/8/16/32 KiB comment size. A separate 38,227-case public-API comparison retained the exact pre-change result digest. The full race suite, build, 386-target comment/address tests, formatting and whitespace checks pass; the executor also passed the full standard suite and 30/45-second focused fuzz runs. No new comment-depth rejection was introduced. This closes the resource item, not the separate partial-address and damaged-trailing-comment recovery requirements.
 
 Codex reviewed `ROB-100-007` for [issue #15](https://github.com/saeroun-ai/emlkit/issues/15), independently passed 36 root/child/nested/chunked CP949 classification-and-body scenarios, and found and returned a same-entity diagnostic-callback deadlock for correction. After the cache-publication/delivery split, the independent reentry probe, callback-stop/concurrency regressions and full fresh race suite pass. Build, standard tests, formatting and whitespace checks pass; vet passes with only the pre-existing `composites` and `stdmethods` categories excluded. The construction-snapshot mutation change for `New`/`Read` as well as `Parse` was reviewed as deliberate: edited headers do not silently change the interpretation of an already-created decoder. Normal vet retains the documented baseline warnings.
+
+Codex reviewed `ROB-050-001` for [issue #22](https://github.com/saeroun-ai/emlkit/issues/22) and returned three gaps for correction: an ambiguous multipart losing later siblings, a known Strict refusal appearing successful through `Walk`, and empty-only parameter separators escaping repair. The corrected implementation independently passes 240 root/nested/chunked tolerant/forensic recovery scenarios, 288 opaque-body/Walk/mail scenarios with exact bytes and following siblings, the previous 36 attachment/charset scenarios, and the reentrant accessor probe. A fresh full race suite, build, formatting, whitespace checks and vet with the two documented baseline categories excluded pass. The executor also passed the full standard suite and the final 60-second focused fuzz run; no permission denials occurred. Nine identical synthetic inputs were actually exercised with Python 3.14.10 and Mime4j 0.8.15; conflicting boundaries intentionally differ, and broad reference parity is not claimed. `ROB-050-002` and the other recovery items remain Planned. The writer panic found during this review is tracked separately in #58.

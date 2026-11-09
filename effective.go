@@ -145,15 +145,46 @@ func (d *dispositionSnapshot) get() (string, map[string]string, error) {
 		d.mu.Unlock()
 		return disp, params, err
 	}
-	disp, params, refused, err := d.ctx.interpretDisposition(d.raw)
-	d.disp, d.params, d.err, d.done = disp, params, err, true
+	r := d.ctx.interpretDisposition(d.raw)
+	d.disp, d.params, d.err, d.done = r.value, r.params, r.err, true
 	d.mu.Unlock()
 
 	// No lock of this entity is held from here on, so a sink that reads the
 	// entity back while it is told about the refusal gets the value just
 	// published.
-	d.ctx.recordParameterDiagnostic(refused)
-	return disp, params, err
+	d.ctx.recordParameterDiagnostics(r.owed)
+	return r.value, r.params, r.err
+}
+
+// observedErr returns the error of the interpretation if one has been made,
+// and nil if the disposition has not been interpreted yet. Unlike get it never
+// interprets anything, so a caller that only needs to know about a failure
+// already observed — Entity.Walk — does not cause a reading, or the diagnostic
+// a reading may record, that nothing asked for.
+func (d *dispositionSnapshot) observedErr() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.done {
+		return nil
+	}
+	return d.err
+}
+
+// localFailure returns the entity-scoped FatalError this entity's own metadata
+// was refused with under ProfileStrict — its Content-Type, or a
+// Content-Disposition that has already been interpreted — or nil. It is a
+// failure of this entity alone and never a stop of the parse; see
+// metadata_repair.go. A struct-literal Entity has none.
+func (e *Entity) localFailure() error {
+	if IsFatal(e.mediaErr) {
+		return e.mediaErr
+	}
+	if e.disposition != nil {
+		if err := e.disposition.observedErr(); IsFatal(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // isAttachment reports whether the captured disposition is "attachment". It is
@@ -179,6 +210,18 @@ func (d *dispositionSnapshot) isAttachment() bool {
 // at construction. A missing Content-Type is "text/plain" with no parameters,
 // as there. A field that did not parse is returned as Header.ContentType returns
 // one: the raw value as the media type, no parameters, and the error.
+//
+// Under Parse, a field with a valid base but malformed parameters is the
+// exception (ROB-050-001; see metadata_repair.go). Under ProfileTolerant and
+// ProfileForensic it is repaired: the normalized base and the well-formed,
+// unambiguous parameters are returned with a nil error, because they are the
+// interpretation the entity was built from, and the defect is reported by the
+// diagnostics recorded at construction, not by this error. Header.ContentType
+// still returns the legacy failure for the same raw field. Under ProfileStrict
+// it is not interpreted: the media type is empty, the parameters nil, and the
+// error the entity-scoped FatalError that construction returned, which does not
+// stop the parse. Because the Content-Type is read before any decoder is
+// chosen, such an entity's body is exactly the bytes of the input.
 //
 // The result is a snapshot from construction rather than a reading of the
 // current header: an edit to Entity.Header after construction does not change
@@ -209,7 +252,19 @@ func (e *Entity) EffectiveContentType() (mediaType string, params map[string]str
 // Header.ContentDisposition returned for the header as it was at construction.
 // A missing or unparseable field is returned as Header.ContentDisposition
 // returns one: the raw value, which is empty for a missing field, no
-// parameters, and the error.
+// parameters, and the error. A field with a valid disposition but malformed
+// parameters is repaired, or under ProfileStrict refused, on the terms
+// EffectiveContentType describes; a repaired "attachment" is an attachment to
+// the charset stage and to mail.Reader alike. Its diagnostics are recorded once,
+// by the first reading.
+//
+// A strict refusal of the disposition differs from one of the Content-Type in
+// what it can still prevent, because it is known only when the field is first
+// read. Read by the charset stage during construction, it keeps that stage from
+// running; transfer decoding, which does not depend on it, is already set up.
+// Read later, by this method, it refuses the entity — mail.Reader and Walk
+// report it — but the decoders chosen at construction stay, and bytes already
+// read from Body stay read. Nothing reads the field early to avoid that.
 //
 // Like EffectiveContentType it is a construction snapshot rather than a reading
 // of the current header, and the parameter map is a fresh copy on every call.

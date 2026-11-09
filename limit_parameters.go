@@ -98,24 +98,55 @@ type parameterRefusal struct {
 	kept int
 }
 
+// A parameterScan is what one scan of a parameterized field found: where the
+// media type or disposition ends, the occurrences within the budgets, the
+// first budget refused if any, and the stray empty items crossed on the way.
+type parameterScan struct {
+	head        int
+	occurrences []parameterOccurrence
+	refusal     *parameterRefusal
+
+	// strayEmpty counts the empty items — nothing but whitespace between two
+	// top-level semicolons — that the whole-field parser rejects: every empty
+	// item but a final one, since mime.ParseMediaType accepts exactly one
+	// trailing semicolon followed by nothing but whitespace. When a budget cut
+	// the scan short, the field goes on past every empty item counted, so none
+	// of them is final. An empty item declares no parameter and is never
+	// charged to a budget; counting it costs a counter, not an allocation.
+	strayEmpty int
+}
+
 // boundParameters scans the raw value of a parameterized header field and
 // reports the first parameter budget it exceeds, if any, together with the
-// occurrences that fit.
+// occurrences that fit. It is scanParameters without the count of empty items.
+func boundParameters(raw string, maxCount, maxSegments int64) (head int, occurrences []parameterOccurrence, refusal *parameterRefusal) {
+	s := scanParameters(raw, maxCount, maxSegments)
+	return s.head, s.occurrences, s.refusal
+}
+
+// scanParameters scans the raw value of a parameterized header field and
+// reports the first parameter budget it exceeds, if any, together with the
+// occurrences that fit and the stray empty items it crossed.
 //
 // The scan is single-pass and stops at the first occurrence past a budget, so
-// what it costs is bounded by the budgets themselves rather than by the field:
-// it records at most one occurrence more than the larger of the two budgets
-// allows, and it reads no further.
+// what it records is bounded by the budgets themselves rather than by the
+// field: at most one occurrence more than the larger of the two budgets allows,
+// and it reads no further. Empty items are not occurrences and are not charged,
+// so the bytes it reads before stopping are bounded by the field, which the
+// header budgets bound.
 //
 // A budget of zero or below is off, which is what a resolved LimitDisabled is.
 //
 // The two budgets are checked in a fixed order for each occurrence — the count
 // of the field first, then the segments of that occurrence's parameter — so that
 // a field that exceeds both at once is reported the same way every time.
-func boundParameters(raw string, maxCount, maxSegments int64) (head int, occurrences []parameterOccurrence, refusal *parameterRefusal) {
+func scanParameters(raw string, maxCount, maxSegments int64) parameterScan {
 	var (
-		count    int64
-		segments map[string]int64
+		count     int64
+		segments  map[string]int64
+		out       parameterScan
+		empty     int
+		lastEmpty bool
 	)
 
 	s := newParameterScanner(raw)
@@ -129,18 +160,23 @@ func boundParameters(raw string, maxCount, maxSegments int64) (head int, occurre
 		if strings.TrimSpace(item) == "" {
 			// A stray or trailing semicolon declares no parameter. It is not an
 			// occurrence, so it is not charged as one.
+			empty++
+			lastEmpty = true
 			continue
 		}
+		lastEmpty = false
 
 		base, segment := parameterName(item)
 
 		count++
 		if maxCount > 0 && count > maxCount {
-			return s.head, occurrences, &parameterRefusal{
+			out.head, out.strayEmpty = s.head, empty
+			out.refusal = &parameterRefusal{
 				code:  CodeLimitParameterCount,
 				limit: maxCount,
-				kept:  len(occurrences),
+				kept:  len(out.occurrences),
 			}
+			return out
 		}
 
 		if segment {
@@ -149,16 +185,18 @@ func boundParameters(raw string, maxCount, maxSegments int64) (head int, occurre
 			}
 			segments[base]++
 			if maxSegments > 0 && segments[base] > maxSegments {
-				return s.head, occurrences, &parameterRefusal{
+				out.head, out.strayEmpty = s.head, empty
+				out.refusal = &parameterRefusal{
 					code:  CodeLimitParameterSegments,
 					limit: maxSegments,
 					base:  base,
-					kept:  len(occurrences),
+					kept:  len(out.occurrences),
 				}
+				return out
 			}
 		}
 
-		occurrences = append(occurrences, parameterOccurrence{
+		out.occurrences = append(out.occurrences, parameterOccurrence{
 			start:   start,
 			end:     end,
 			base:    base,
@@ -166,7 +204,13 @@ func boundParameters(raw string, maxCount, maxSegments int64) (head int, occurre
 		})
 	}
 
-	return s.head, occurrences, nil
+	if lastEmpty {
+		// The field ends in one empty item, which the whole-field parser
+		// accepts as a trailing semicolon.
+		empty--
+	}
+	out.head, out.strayEmpty = s.head, empty
+	return out
 }
 
 // A parameterScanner walks the semicolon-separated parameter items of a
@@ -344,97 +388,131 @@ func parameterDiagnostic(field string, ref *parameterRefusal) Diagnostic {
 	return d
 }
 
-// contentType parses the entity's Content-Type under this parse's parameter
-// budgets. It is what the parse engine uses in place of Header.ContentType,
-// whose behavior is unchanged and unbudgeted; see there.
-func (c parseContext) contentType(h Header) (string, map[string]string, error) {
+// contentType reads the entity's Content-Type under this parse's parameter
+// budgets, and records the diagnostics that reading is owed. It is what the
+// parse engine uses in place of Header.ContentType, whose behavior is unchanged
+// and unbudgeted; see there.
+//
+// A parse with no session — which is every entry point but Parse — reads the
+// field exactly as the public accessors do, so nothing about those paths
+// changes: no budget, no repair, no diagnostic.
+func (c parseContext) contentType(h Header) fieldReading {
 	v := h.Get("Content-Type")
 	if v == "" {
-		return "text/plain", nil, nil
+		return fieldReading{value: "text/plain"}
 	}
-	return c.parseParameterized("Content-Type", v)
+	r := c.interpretParameterized("Content-Type", v)
+	c.recordParameterDiagnostics(r.owed)
+	return r
 }
 
 // interpretDisposition interprets a Content-Disposition value under this
 // parse's parameter budgets, on the same terms as contentType, but leaves the
-// diagnostic a refusal is owed to the caller instead of recording it. It takes
-// the raw value rather than a Header because the engine reads the value an
-// entity was constructed with, which it captures then and interprets at most
-// once; see dispositionSnapshot for why the recording is separate.
-func (c parseContext) interpretDisposition(raw string) (string, map[string]string, *Diagnostic, error) {
+// diagnostics it is owed to the caller instead of recording them. It takes the
+// raw value rather than a Header because the engine reads the value an entity
+// was constructed with, which it captures then and interprets at most once; see
+// dispositionSnapshot for why the recording is separate.
+func (c parseContext) interpretDisposition(raw string) fieldReading {
 	return c.interpretParameterized("Content-Disposition", raw)
 }
 
-// parseParameterized parses one parameterized header field under this parse's
-// parameter budgets.
+// interpretParameterized reads one parameterized header field under this
+// parse's parameter budgets, and returns the interpretation together with the
+// diagnostics it is owed — a budget refusal first, then any repair — for the
+// caller to record.
 //
-// A parse that budgets nothing — which is every entry point but Parse — parses
-// the field exactly as the public accessors do, so nothing about those paths
-// changes.
+// Under Parse the raw value is scanned first and parsed second, and when a
+// budget refused it what is parsed is the retained prefix rather than the whole
+// field. The whole value is never parsed as a second attempt — reaching for the
+// assembler this scan exists to bound would give back the work it saved.
 //
-// Otherwise the raw value is scanned first and parsed second, and when a budget
-// refused it what is parsed is the retained prefix rather than the whole field.
-// The diagnostic is recorded after the bounded interpretation, whether or not
-// what remains turns out to be parseable at all.
-//
-// A field whose retained prefix does not parse is reported exactly as an
-// unparseable field has always been reported: the raw value as the media type,
-// no parameters, and the error. The whole value is deliberately not parsed as a
-// second attempt — reaching for the assembler this scan exists to bound would
-// give back the work it saved.
-func (c parseContext) parseParameterized(field, raw string) (string, map[string]string, error) {
-	f, params, refused, err := c.interpretParameterized(field, raw)
-	c.recordParameterDiagnostic(refused)
-	return f, params, err
-}
-
-// interpretParameterized is parseParameterized without the recording: it
-// returns the bounded interpretation of the field and, when a budget refused
-// part of it, the diagnostic that refusal is owed, for the caller to record.
+// A field whose bounded parse fails is read again item by item, from the
+// occurrences the scan retained, when its base is valid on its own; see
+// metadata_repair.go. Otherwise it is reported exactly as an unparseable field
+// has always been reported: the raw value as the media type, no parameters, and
+// the error of the parse. Under ProfileStrict a field that would need repair is
+// not interpreted: the error is an entity-scoped FatalError and the value is
+// empty.
 //
 // It does not deliver diagnostics; encoded-word decoding can still call the
 // configured CharsetReader. A caller may cache this interpretation and record
-// its diagnostic afterwards, once its cache lock is released. That split is what lets
-// an entity publish its interpretation before the diagnostic reaches a
+// its diagnostics afterwards, once its cache lock is released. That split is
+// what lets an entity publish its interpretation before a diagnostic reaches a
 // DiagnosticSink, which may read it back; see dispositionSnapshot.
-func (c parseContext) interpretParameterized(field, raw string) (f string, params map[string]string, refused *Diagnostic, err error) {
+func (c parseContext) interpretParameterized(field, raw string) fieldReading {
 	limits, ok := c.limits()
-	if !ok || (limits.MaxParameterCount <= 0 && limits.MaxParameterSegments <= 0) {
-		// Nothing to bound, so nothing is scanned: a scan that can refuse
-		// nothing would only walk the field to reach the same answer.
-		f, params, err = parseHeaderWithParams(raw)
-		return f, params, nil, err
+	if !ok {
+		// No parse, so nothing to bound and nothing to repair.
+		f, params, err := parseHeaderWithParams(raw)
+		return fieldReading{value: f, params: params, err: err}
 	}
 
-	head, occurrences, refusal := boundParameters(raw, limits.MaxParameterCount, limits.MaxParameterSegments)
+	var (
+		f      string
+		params map[string]string
+		err    error
+		owed   []Diagnostic
+	)
+	budgeted := limits.MaxParameterCount > 0 || limits.MaxParameterSegments > 0
+	if !budgeted {
+		// Nothing to bound, so nothing is scanned unless the field turns out to
+		// need repair: a scan that can refuse nothing would only walk the field
+		// to reach the same answer.
+		if f, params, err = parseHeaderWithParams(raw); err == nil {
+			return fieldReading{value: f, params: params}
+		}
+	}
+
+	scan := scanParameters(raw, limits.MaxParameterCount, limits.MaxParameterSegments)
+	head, occurrences, refusal := scan.head, scan.occurrences, scan.refusal
 	if refusal == nil {
-		f, params, err = parseHeaderWithParams(raw)
-		return f, params, nil, err
+		if budgeted {
+			f, params, err = parseHeaderWithParams(raw)
+		}
+		if err == nil {
+			return fieldReading{value: f, params: params}
+		}
+	} else {
+		// The diagnostic is owed whether or not what remains turns out to be
+		// parseable at all.
+		owed = append(owed, parameterDiagnostic(field, refusal))
+		// The retained prefix is rebuilt without empty items, so a stray one
+		// before the cut would vanish from it unreported; such a field is read
+		// by the repair instead, which reports it.
+		if f, params, err = parseHeaderWithParams(retainedParameters(raw, head, occurrences)); err == nil && scan.strayEmpty == 0 {
+			return fieldReading{value: f, params: params, owed: owed}
+		}
 	}
 
-	// The diagnostic is owed whether or not what remains turns out to be
-	// parseable at all.
-	d := parameterDiagnostic(field, refusal)
-
-	kept := retainedParameters(raw, head, occurrences)
-	f, params, err = parseHeaderWithParams(kept)
-	if err != nil {
-		return raw, nil, &d, err
+	repaired, ok := c.repairParameterized(field, raw, scan)
+	if !ok {
+		if err == nil {
+			// The retained prefix parsed, and only its stray empty items sent
+			// it here, but its base is not one this repair may keep: the
+			// budget's own reading stands, as it did before.
+			return fieldReading{value: f, params: params, owed: owed}
+		}
+		return fieldReading{value: raw, owed: owed, err: err}
 	}
-	return f, params, &d, nil
+	repaired.owed = append(owed, repaired.owed...)
+	return repaired
 }
 
-// recordParameterDiagnostic records the diagnostic interpretParameterized
-// returned, if there is one.
+// recordParameterDiagnostics records the diagnostics interpretParameterized
+// returned, in order.
 //
 // A parse a sink already stopped records nothing further: the budget still
 // bounded the work, because the work is what it is for, but a diagnostic about a
-// parse that has ended is not what the caller asked to be told. The failure of a
-// sink here is picked up by the scope that called this, which reads it from the
-// session as it reads every other stop.
-func (c parseContext) recordParameterDiagnostic(d *Diagnostic) {
-	if d == nil || c.fatalErr() != nil {
-		return
+// parse that has ended is not what the caller asked to be told. That holds
+// between two of these diagnostics too, so a sink that stops on the first is
+// not told about the second. The failure of a sink here is picked up by the
+// scope that called this, which reads it from the session as it reads every
+// other stop.
+func (c parseContext) recordParameterDiagnostics(owed []Diagnostic) {
+	for _, d := range owed {
+		if c.fatalErr() != nil {
+			return
+		}
+		_ = c.recordHeader(d)
 	}
-	_ = c.recordHeader(*d)
 }

@@ -77,6 +77,11 @@ func HeaderFromMap(m map[string][]string) Header {
 // It reads the header as it is now. Entity.EffectiveContentType is the other
 // answer: the Content-Type an entity was constructed with, as its parse
 // interpreted it, which is what the entity's body was decoded by.
+//
+// It also repairs nothing. A field with a valid media type but a malformed
+// parameter fails here as it always has — the raw value, no parameters, and the
+// error — even where Parse kept that media type and its well-formed parameters
+// for the entity; see metadata_repair.go.
 func (h *Header) ContentType() (t string, params map[string]string, err error) {
 	v := h.Get("Content-Type")
 	if v == "" {
