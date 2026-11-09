@@ -21,15 +21,84 @@ type MultipartReader interface {
 type multipartReader struct {
 	r                          *textproto.MultipartReader
 	skipTextAttachmentDecoding bool
+
+	// parent is the parse context of the entity whose body is being iterated:
+	// the session the parts belong to, and the origin they extend. The origin
+	// is the zero value when that body is not known to be the parsed input's
+	// bytes; the session travels down either way.
+	parent parseContext
+
+	// next is the zero-based index, within this multipart, of the part the
+	// next successful NextPart will return.
+	next int
+
+	// fatal is the sticky failure of this iterator, or nil while it may
+	// continue. Its scope is this multipart and nothing wider: the parts
+	// already returned stay valid, and so does the entity whose body this is.
+	// It is returned unchanged by every later call, so that a caller that asks
+	// again is told the same thing rather than handed a second interpretation
+	// of an input the reader can no longer place itself in.
+	fatal error
 }
 
 // NextPart implements MultipartReader.
 func (r *multipartReader) NextPart() (*Entity, error) {
-	p, err := r.r.NextPart()
-	if err != nil {
+	// Iterating to the next part is a scope of this parse, so it does not begin
+	// on a session that has already been stopped. Nothing is recovered here:
+	// the parts already returned stay valid, and this iterator ends with the
+	// same sticky error every other scope of the parse reports.
+	if err := r.parent.fatalErr(); err != nil {
 		return nil, err
 	}
-	return newWithOptions(Header{p.Header}, p, r.skipTextAttachmentDecoding)
+
+	// This iterator's own failure is sticky for the same reason and on the same
+	// terms, but its scope is this multipart alone. It is checked after the
+	// session's, because a stop the caller asked for describes more of the
+	// parse than a defect of one part does.
+	if r.fatal != nil {
+		return nil, r.fatal
+	}
+
+	p, err := r.r.NextPart()
+	if err != nil {
+		// A part header past one of its budgets, or a framing line past the
+		// line budget, is a defect of the message, so it is recorded and
+		// reported as one. Either ends this iterator: the reader is standing
+		// inside a part whose extent it never learned, or on a line it could not
+		// finish, and there is nothing safe to resume from.
+		//
+		// textproto.HeaderLimit and textproto.LineLimit are what decide that,
+		// rather than the shape of the error: a value shaped like a refusal is
+		// something the message's own bytes can put here, and one of the shapes
+		// it can put here is a typed nil that would be dereferenced below.
+		if limit, refused := textproto.HeaderLimit(err); refused {
+			return nil, r.headerLimitFailure(limit)
+		}
+		if limit, refused := textproto.LineLimit(err); refused {
+			return nil, r.lineLimitFailure(limit)
+		}
+		return nil, err
+	}
+
+	// The part reports its position within the multipart body; child turns
+	// that into a position in the original input, extends the parent's path
+	// with this part's index, carries the parent's session down to it, and
+	// counts it one level deeper than the entity whose body this is.
+	ctx := r.parent.child(r.next, p.HeaderOffset(), p.BodyOffset())
+
+	// The budgets on the shape of the tree are charged here, where a child has
+	// been framed and nothing but its header block has been read yet. A refused
+	// child is not returned and nothing further about it is touched: no body,
+	// no decoder, no entity, and none of its own parts. See limit_tree.go for
+	// why the check waits until a child is known to exist, and for the
+	// difference between the two failures.
+	if err := r.admitPart(ctx); err != nil {
+		return nil, err
+	}
+
+	r.next++
+
+	return newWithOptions(Header{p.Header}, p, r.skipTextAttachmentDecoding, ctx)
 }
 
 // Close implements io.Closer.

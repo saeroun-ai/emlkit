@@ -142,9 +142,141 @@ These are deliberate boundaries, each with a reason.
   `Walk`) exhausts the entity. There is no random-access / buffered message type.
   ([`entity.go`](../entity.go) · `Walk`)
 - **Encoded-words are written as `Q` only**, never `B`. ([`charset.go`](../charset.go) · `encodeHeader`)
-- **Header size is bounded.** The header block defaults to a 1 MiB cap
-  (`MaxHeaderBytes`; set it to `-1` to disable). There is no per-line length limit
-  on read. ([`entity.go`](../entity.go) · `withDefaults`)
+- **Header size is bounded.** Every header block defaults to a 1 MiB cap
+  (`Limits.MaxHeaderBytes`, or the same budget spelled
+  `ReadOptions.MaxHeaderBytes`; set either to `-1` to disable). The budget is per
+  entity and never cumulative: it counts one block as it appears on the wire,
+  through the empty line that ends it, so a block of exactly the budget is read
+  and one byte more is refused. A refused block yields **no header at all**,
+  never the fields that happened to fit, and only a budget this parser enforced
+  counts as one. A refusal is identified with `textproto.HeaderLimit`, so an
+  `io.Reader` that fails with `textproto.ErrHeaderTooBig`, or hands back a
+  `HeaderLimitError` value of its own, stays an ordinary input error rather than
+  a diagnosed budget.
+  Under `Parse` it applies to the message header **and to the header of every
+  part at any depth**; a refused block records one `limit.header_bytes`
+  diagnostic and ends that scope with a `FatalError`, leaving the entities and
+  siblings already returned valid. `Read` and `ReadWithOptions` keep their older
+  behavior unchanged: the budget applies to the message header only, part headers
+  are unbounded, and a refused message header is the ordinary error it always
+  was, with nothing recorded.
+  ([`limit_header.go`](../limit_header.go), [`textproto/header.go`](../textproto/header.go) · `ReadHeaderLimit`)
+- **A header block is bounded four ways, not one.** Alongside `MaxHeaderBytes`,
+  `Parse` enforces `MaxHeaderFieldBytes` (64 KiB), `MaxHeaderCount` (1 024) and
+  `MaxLineBytes` (64 KiB) on the header block of every entity at any depth. Each
+  counts a different thing, and each counts it as it appears on the wire:
+  `MaxHeaderFieldBytes` counts one **logical** field — its first physical line,
+  every continuation line, and the line terminators of each; `MaxHeaderCount`
+  counts logical field **candidates**, including one later skipped for an empty
+  name, so a block of nothing but colons cannot buy extra fields;
+  `MaxLineBytes` counts one **physical** line **excluding** its terminator. The
+  empty line that ends a block belongs to the block and to no field in it:
+  `MaxHeaderBytes` counts its bytes and `MaxLineBytes` sees a line of empty
+  content, while `MaxHeaderFieldBytes` and `MaxHeaderCount` charge it nothing, so
+  a header that is nothing but that empty line is read under any budget down to
+  one byte. Every one is per entity and never cumulative. Exceeding any is all-or-nothing:
+  the block yields no header, records exactly one `limit.header_field_bytes`,
+  `limit.header_count` or `limit.line_bytes` diagnostic at `LimitExceeded`
+  severity, and ends that scope with a `FatalError`, because a block that overran
+  leaves the input somewhere the parser cannot resynchronize to. When one block
+  exceeds several at once, the budget bounding the **smallest scope** is the one
+  reported, in the order line, field, block, count.
+  ([`limit_header.go`](../limit_header.go), [`textproto/header.go`](../textproto/header.go) · `headerScan`)
+- **`MaxLineBytes` bounds syntax lines, never body content.** Its scope is
+  deliberately narrow: header physical lines, multipart framing lines (preamble,
+  delimiters, and the empty line before one), and the line-oriented framing of
+  the `base64` and `quoted-printable` transfer encodings. An opaque `7bit`,
+  `8bit`, `binary` or unencoded body containing no line terminator is **not**
+  treated as one enormous line — it is streamed, never accumulated into a line
+  buffer, and never refused for its length alone. Even for the framed encodings
+  the check is a streaming monitor that holds no bytes and refuses only once a
+  terminator **proves** the line it ended was over budget, so an encoded body
+  that never terminates a line costs fixed memory and is not refused. What bounds
+  opaque bodies is `MaxEncodedBodyBytes` / `MaxDecodedBodyBytes`, which a later
+  item enforces. ([`limit_line_bytes.go`](../limit_line_bytes.go) · `cteLineMonitor`)
+- **Parameter lists are bounded, and losing them does not cost the entity.**
+  `MaxParameterCount` (256) bounds the raw semicolon-separated parameter
+  occurrences of one `Content-Type` or `Content-Disposition`, and
+  `MaxParameterSegments` (256) bounds the RFC 2231 continuation segments per
+  case-insensitive base parameter. Both are counted by a quote-aware scan that
+  runs **before** `mime.ParseMediaType`, so a semicolon inside a quoted string
+  separates nothing, duplicates and segments each count as occurrences, and the
+  work is bounded by the budget rather than by the field. Unlike the header
+  budgets this is **not fatal**: there is a safe fallback, so the media type and
+  the parameters within the budget are kept, the remainder is ignored, one
+  `limit.parameter_count` or `limit.parameter_segments` diagnostic records what
+  was kept, and parsing continues into the body — a `boundary` parameter that
+  arrived before the cut still yields the multipart children it introduces. One
+  deliberate loss: a parameter with any RFC 2231 segment among the retained
+  occurrences is dropped whole rather than reported from a series the scan
+  stopped reading. ([`limit_parameters.go`](../limit_parameters.go))
+- **The parameter budgets reach the parse engine, not the public accessors.**
+  `Header.ContentType` and `Header.ContentDisposition` parse whatever they are
+  given under no budget, exactly as they always have: a `Header` may never have
+  come from a parse, so there is no configuration to hold it to. The budgets
+  apply where the engine itself interprets those fields on the entities `Parse`
+  produces. A caller parsing a field of unknown provenance bounds it itself, or
+  reaches it through `Parse`. ([`header.go`](../header.go) · `ContentType`)
+- **The MIME tree is bounded two ways: how deep it goes and how many parts it
+  has.** `Parse` enforces `MaxMIMEDepth` (100) and `MaxPartCount` (10 000), and
+  each counts a different thing. **Depth**: the message itself is depth **zero**,
+  whatever its media type, and every child a multipart body yields is exactly one
+  deeper than the entity whose body it came out of, so a budget of N admits every
+  entity at depth N or less. **Count**: the root is **not** counted — nothing
+  discovered it — while every child a multipart iterator does discover counts
+  one, a leaf, a container holding further parts and a headerless empty part
+  alike. `MaxPartCount` is **one budget for the whole tree**, shared by every
+  iterator and never reset on entering a container, so many small containers are
+  bounded exactly as one wide container is; there is deliberately **no**
+  per-container part budget. A tree exactly as deep or as wide as its budget is
+  read whole and ends with an ordinary `io.EOF`. Both are charged lazily, where a
+  child is discovered and not before: a container sitting at the depth budget may
+  hold nothing, so refusing it in advance would turn an ordinary end of input
+  into a defect. The cost of that is a look-ahead of exactly **one over-limit
+  child header** — it has to be read to learn the child exists, it is bounded by
+  the header budgets like any other, and nothing else about that child is touched
+  (no body, no decoder, no entity, none of its own parts). **The two failures
+  differ in scope**: `limit.mime_depth` ends only the multipart iterator that hit
+  it — the parent, the earlier siblings and every shallower part stay valid and
+  the parent's iteration continues — while `limit.part_count` ends the **whole
+  parse**, so every later scope of it, including iterators built earlier for
+  other containers and `Entity.Walk`, reports the identical `FatalError` and one
+  diagnostic is recorded for the message. A child exceeding both at once reports
+  `limit.part_count`, which is charged first; a child whose header block exceeds
+  a header budget never frames at all and reports only that. ([`limit_tree.go`](../limit_tree.go))
+- **A session's failure is published once and never replaced.** Whatever ends a
+  whole parse — a `DiagnosticSink` that refuses to continue, or `MaxPartCount` —
+  every scope of that parse reports the **same error value**, so two errors a
+  caller holds from two scopes can be compared. Deciding which of the two a parse
+  ends with needs the `limit.part_count` diagnostic delivered to the sink first,
+  and delivery calls caller code, which never happens under the session lock; so
+  the overflow is published as a two-phase transition. One caller claims it and
+  nothing is published, that caller delivers the diagnostic with no lock held, and
+  it then publishes exactly one failure — the budget's if the sink took the
+  diagnostic, the sink's if the sink stopped the parse — before releasing anyone
+  else. Anything asking about the failure in between waits for that publication
+  rather than seeing a provisional answer, which is safe because the synchronous
+  sink contract already blocks the parse for as long as the sink blocks. A sink
+  may still read the session it is delivering for: `Diagnostics`, `Len`, `Profile`
+  and `Compatibility` take no part in the transition. Exactly one caller ever
+  claims an overflow, so the diagnostic is recorded once and delivered once
+  however many scopes race into it.
+  ([`session.go`](../session.go) · `publishStop`, [`limit_tree.go`](../limit_tree.go) · `chargePart`/`resolvePart`)
+- **`MaxMessageDepth` is reserved until nested messages exist.** It counts nested
+  `message/rfc822` and `message/global` entities, and this engine treats such a
+  body as an opaque leaf rather than as a nested entity, so there is no
+  nested-message transition to count. The field is validated, resolved and
+  reported by `ParseSession.Limits`, and `limit.message_depth` is reserved but
+  never emitted, until `ROB-090-001` introduces that model and `ROB-090-002`
+  activates the budget. A `message/rfc822` part is meanwhile one ordinary part of
+  `MaxPartCount`, and the structure inside its opaque body costs neither tree
+  budget. ([`limits.go`](../limits.go))
+- **The remaining budgets in `Limits` are still resolved but not consulted.**
+  Everything outside the eight enforced ones — `MaxHeaderBytes`,
+  `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`, `MaxParameterCount`,
+  `MaxParameterSegments`, `MaxMIMEDepth` and `MaxPartCount` — is validated and
+  reported by `ParseSession.Limits`, and their `limit.*` codes are reserved but
+  not yet emitted. ([`limits.go`](../limits.go))
 
 ## Behavioral guarantees
 

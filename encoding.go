@@ -27,9 +27,18 @@ func IsUnknownEncoding(err error) bool {
 	return errors.As(err, new(UnknownEncodingError))
 }
 
+// normalizeEncodingName returns the transfer encoding name in the one form
+// every switch on it uses.
+//
+// It exists so that the decoder chosen for a body and the budget applied to it
+// can never disagree about which encoding was declared; see framedEncoding.
+func normalizeEncodingName(enc string) string {
+	return strings.ToLower(enc)
+}
+
 func encodingReader(enc string, r io.Reader) (io.Reader, error) {
 	var dec io.Reader
-	switch strings.ToLower(enc) {
+	switch normalizeEncodingName(enc) {
 	case "quoted-printable":
 		dec = quotedprintable.NewReader(&lenientQPReader{br: bufio.NewReader(r)})
 	case "base64":

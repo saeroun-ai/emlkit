@@ -11,10 +11,12 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net/textproto"
 	"reflect"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 func TestBoundaryLine(t *testing.T) {
@@ -974,6 +976,237 @@ func TestNextPart_stickyAfterMissingBoundary(t *testing.T) {
 		if _, err := r.NextPart(); !errors.Is(err, io.EOF) {
 			t.Fatalf("NextPart call %d: errors.Is(err, io.EOF) = false; err = %v", i, err)
 		}
+	}
+}
+
+// chunkReader hands out at most n bytes per Read, so that a test can vary how
+// the input is delivered without varying the input itself.
+type chunkReader struct {
+	s string
+	n int
+}
+
+func (c *chunkReader) Read(p []byte) (int, error) {
+	if len(c.s) == 0 {
+		return 0, io.EOF
+	}
+	n := c.n
+	if n > len(p) {
+		n = len(p)
+	}
+	if n > len(c.s) {
+		n = len(c.s)
+	}
+	n = copy(p[:n], c.s[:n])
+	c.s = c.s[n:]
+	return n, nil
+}
+
+// randomChunkReader hands out between 1 and max bytes per Read, choosing how
+// many from a seeded generator so that a run that fails can be repeated
+// exactly.
+type randomChunkReader struct {
+	s   string
+	max int
+	rnd *rand.Rand
+}
+
+func newRandomChunkReader(s string, max int, seed int64) *randomChunkReader {
+	return &randomChunkReader{s: s, max: max, rnd: rand.New(rand.NewSource(seed))}
+}
+
+func (c *randomChunkReader) Read(p []byte) (int, error) {
+	if len(c.s) == 0 {
+		return 0, io.EOF
+	}
+	n := 1 + c.rnd.Intn(c.max)
+	if n > len(p) {
+		n = len(p)
+	}
+	if n > len(c.s) {
+		n = len(c.s)
+	}
+	n = copy(p[:n], c.s[:n])
+	c.s = c.s[n:]
+	return n, nil
+}
+
+// offsetFixture is a multipart body assembled from labelled segments, so that
+// every expected byte offset is derived from the fixture rather than counted
+// out by hand.
+type offsetFixture struct {
+	body string
+	at   map[string]int64
+}
+
+func newOffsetFixture(segments ...[2]string) offsetFixture {
+	f := offsetFixture{at: make(map[string]int64)}
+	var b strings.Builder
+	for _, s := range segments {
+		if s[0] != "" {
+			f.at[s[0]] = int64(b.Len())
+		}
+		b.WriteString(s[1])
+	}
+	f.body = b.String()
+	return f
+}
+
+// partOffsetFixture covers the positions a part can start at: after a
+// preamble, after an ordinary header block, with no header block at all (two
+// delimiter lines in a row), and with an empty body.
+func partOffsetFixture() offsetFixture {
+	return partOffsetFixtureEOL("\r\n")
+}
+
+// partOffsetFixtureEOL is partOffsetFixture with every line ending given
+// explicitly, so that the same body can be presented with the CRLF the RFCs
+// require and with the bare LF this reader also accepts. Offsets are derived
+// from the segments either way.
+func partOffsetFixtureEOL(eol string) offsetFixture {
+	return newOffsetFixture(
+		[2]string{"", "preamble, ignored" + eol},
+		[2]string{"", "--A" + eol},
+		[2]string{"p0.header", "Content-Type: text/plain" + eol},
+		[2]string{"", eol},
+		[2]string{"p0.body", "one" + eol},
+		[2]string{"", "--A" + eol},
+		[2]string{"p1.header", ""}, // no header block: the next line is a delimiter
+		[2]string{"p1.body", ""},
+		[2]string{"", "--A" + eol},
+		[2]string{"p2.header", eol}, // an empty header block
+		[2]string{"p2.body", "three" + eol},
+		[2]string{"", "--A--" + eol},
+	)
+}
+
+// partOffsetLabels names the parts of partOffsetFixture in the order they are
+// read.
+var partOffsetLabels = []struct{ header, body string }{
+	{"p0.header", "p0.body"},
+	{"p1.header", "p1.body"},
+	{"p2.header", "p2.body"},
+}
+
+// TestPart_offsets checks that a part reports where its header block and its
+// body begin, counted from the first byte the reader was given, with the line
+// endings the RFCs require and with the bare LF found in the wild.
+func TestPart_offsets(t *testing.T) {
+	for _, tc := range []struct{ name, eol string }{
+		{"crlf", "\r\n"},
+		{"lf", "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := partOffsetFixtureEOL(tc.eol)
+			r := NewMultipartReader(strings.NewReader(f.body), "A")
+
+			for i, want := range partOffsetLabels {
+				p, err := r.NextPart()
+				if err != nil {
+					t.Fatalf("part %d: NextPart: %v", i, err)
+				}
+				if got := p.HeaderOffset(); got != f.at[want.header] {
+					t.Errorf("part %d: HeaderOffset() = %d, want %d", i, got, f.at[want.header])
+				}
+				if got := p.BodyOffset(); got != f.at[want.body] {
+					t.Errorf("part %d: BodyOffset() = %d, want %d", i, got, f.at[want.body])
+				}
+				if _, err := io.Copy(io.Discard, p); err != nil {
+					t.Fatalf("part %d: reading body: %v", i, err)
+				}
+			}
+
+			if _, err := r.NextPart(); err != io.EOF {
+				t.Errorf("NextPart() after the last part = %v, want io.EOF", err)
+			}
+		})
+	}
+}
+
+// TestPart_offsets_withoutReadingBodies checks that the offsets do not depend
+// on the caller having consumed anything: calling NextPart again without
+// reading the part it was just given, so that the reader discards that body
+// itself, must not move where the next part is reported to be.
+func TestPart_offsets_withoutReadingBodies(t *testing.T) {
+	f := partOffsetFixture()
+	r := NewMultipartReader(strings.NewReader(f.body), "A")
+
+	for i, want := range partOffsetLabels {
+		p, err := r.NextPart()
+		if err != nil {
+			t.Fatalf("part %d: NextPart: %v", i, err)
+		}
+		if got := p.HeaderOffset(); got != f.at[want.header] {
+			t.Errorf("part %d: HeaderOffset() = %d, want %d", i, got, f.at[want.header])
+		}
+		if got := p.BodyOffset(); got != f.at[want.body] {
+			t.Errorf("part %d: BodyOffset() = %d, want %d", i, got, f.at[want.body])
+		}
+	}
+
+	if _, err := r.NextPart(); err != io.EOF {
+		t.Errorf("NextPart() after the last part = %v, want io.EOF", err)
+	}
+}
+
+// TestPart_offsets_chunkInvariant checks that the offsets describe the parse
+// cursor and not the read-ahead: an input delivered one byte at a time must
+// produce the same offsets as one delivered whole.
+func TestPart_offsets_chunkInvariant(t *testing.T) {
+	f := partOffsetFixture()
+
+	type partOffsets struct{ header, body int64 }
+	read := func(src io.Reader) []partOffsets {
+		var got []partOffsets
+		r := NewMultipartReader(src, "A")
+		for {
+			p, err := r.NextPart()
+			if err == io.EOF {
+				return got
+			}
+			if err != nil {
+				t.Fatalf("NextPart: %v", err)
+			}
+			got = append(got, partOffsets{p.HeaderOffset(), p.BodyOffset()})
+			if _, err := io.Copy(io.Discard, p); err != nil {
+				t.Fatalf("reading body: %v", err)
+			}
+		}
+	}
+
+	want := read(strings.NewReader(f.body))
+	if len(want) != 3 {
+		t.Fatalf("read %d parts, want 3", len(want))
+	}
+
+	sources := map[string]func() io.Reader{
+		"slow": func() io.Reader { return &slowReader{strings.NewReader(f.body)} },
+		// A reader that hands back its last bytes together with io.EOF: those
+		// bytes are input like any other and must be counted.
+		"data or err": func() io.Reader { return iotest.DataErrReader(strings.NewReader(f.body)) },
+	}
+	for _, n := range []int{1, 2, 3, 7, 64, peekBufferSize - 1, peekBufferSize} {
+		sources[fmt.Sprintf("chunks of %d", n)] = func() io.Reader {
+			return &chunkReader{s: f.body, n: n}
+		}
+	}
+	// Fixed chunk sizes always split the body in the same places. Varying them
+	// reaches splits inside a delimiter line and inside a header field that no
+	// single fixed size does, and seeding the generator keeps a failure
+	// reproducible.
+	for _, seed := range []int64{1, 2, 3, 1234567} {
+		for _, max := range []int{5, 71, peekBufferSize + 100} {
+			sources[fmt.Sprintf("random chunks up to %d seed %d", max, seed)] = func() io.Reader {
+				return newRandomChunkReader(f.body, max, seed)
+			}
+		}
+	}
+	for name, src := range sources {
+		t.Run(name, func(t *testing.T) {
+			if got := read(src()); !reflect.DeepEqual(got, want) {
+				t.Errorf("offsets = %v, want %v", got, want)
+			}
+		})
 	}
 }
 

@@ -1,0 +1,1072 @@
+# EML Parser Robustness Roadmap
+
+This document is the implementation ledger for evolving `emlkit` into a
+production-grade, best-effort EML parser whose robustness meets or exceeds
+Eclipse Angus Mail and other widely deployed MIME engines.
+
+It is intentionally more specific than a feature list. Every item has a stable
+ID, an observable behavior, and a verification contract. Work is performed one
+item at a time. An item is complete only after its implementation, focused
+tests, full regression tests, formatting check, and this ledger have all been
+reviewed.
+
+The list is meant to be extensible, not frozen. A newly discovered malformed
+message must first become a minimized regression fixture and a requirement or
+diagnostic entry here before its parser repair is accepted.
+
+## 1. Objective
+
+For every finite input and configured resource budget, the parser must do all
+of the following:
+
+1. Never panic, deadlock, spin forever, recurse without a bound, or allocate
+   without a bound because of input bytes.
+2. Return every entity, header, and body byte that can be recovered
+   unambiguously or by an explicitly documented deterministic repair.
+3. Preserve original bytes independently of decoded or repaired views.
+4. Report every observed defect and every applied repair; recovery must never
+   silently change the interpretation of a message.
+5. Isolate local damage. A broken child part must not discard already parsed
+   siblings or the containing message.
+6. Produce the same result regardless of input `Read` chunking.
+7. Retain the existing streaming and DKIM-friendly behavior for conformant
+   input.
+
+“Accept everything” is not the objective. When multiple interpretations are
+plausible, the parser must preserve raw data, choose only according to a named
+policy, and emit a diagnostic describing the ambiguity.
+
+## 2. Reference behavior
+
+Compatibility is evaluated against several independent references rather than
+one implementation:
+
+- RFC 5322, RFC 6532: Internet Message Format and internationalized headers.
+- RFC 2045–2047, RFC 2183, RFC 2231: MIME, encoded words, dispositions, and
+  extended parameters.
+- RFC 3464, RFC 3798, RFC 8098: delivery, disposition, and feedback reports.
+- Eclipse Angus Mail: real-world JavaMail compatibility and repair switches.
+- Apache James Mime4j: tolerant streaming parsing and explicit resource limits.
+- MimeKit: loose/strict structured-header parsing, nesting limits, and a broad
+  interoperability corpus.
+- Python `email`: per-entity defect collection and partial-result semantics.
+- Go standard library behavior where `emlkit` delegates parsing or decoding.
+
+Differing reference results are not automatically bugs. They must be recorded
+in the differential corpus with the chosen `emlkit` behavior and rationale.
+
+### 2.1 Pinned Angus source baseline
+
+The initial compatibility audit was performed on 2026-08-12 against immutable
+upstream revisions, not only generated API documentation:
+
+- Eclipse Angus Mail 2.0.5, commit
+  [`a7a4a37844717d3967418b1640456e49153a7e7c`](https://github.com/eclipse-ee4j/angus-mail/tree/a7a4a37844717d3967418b1640456e49153a7e7c).
+- Jakarta Mail API 2.1.5, commit
+  [`e1873219fe587d5c2b5bb4196e859ae71319a45c`](https://github.com/jakartaee/mail-api/tree/e1873219fe587d5c2b5bb4196e859ae71319a45c).
+
+This split matters. The `MimeMessage`, `MimeMultipart`, `MimeBodyPart`, header,
+address, date, and parameter parsers are implemented in Jakarta Mail API;
+Angus supplies the runtime provider, line reader, transfer decoders, MIME data
+handlers, and DSN support. “Angus-compatible” in this ledger refers to the
+combined behavior of those two pinned releases unless an item names a different
+baseline.
+
+### 2.2 Source-to-ledger traceability
+
+| Upstream source inspected | Behavior used by this roadmap | Primary ledger coverage |
+|---|---|---|
+| [`MimeMessage.java`](https://github.com/jakartaee/mail-api/blob/e1873219fe587d5c2b5bb4196e859ae71319a45c/api/src/main/java/jakarta/mail/internet/MimeMessage.java), [`MimeBodyPart.java`](https://github.com/jakartaee/mail-api/blob/e1873219fe587d5c2b5bb4196e859ae71319a45c/api/src/main/java/jakarta/mail/internet/MimeBodyPart.java) | Lazy body/content handling, filename decoding policy, illegal multipart/message CTE handling, nested message handling, and cached multipart content. | `ROB-000`, `ROB-070`, `ROB-090`, `ROB-100`, `ROB-110` |
+| [`MimeMultipart.java`](https://github.com/jakartaee/mail-api/blob/e1873219fe587d5c2b5bb4196e859ae71319a45c/api/src/main/java/jakarta/mail/internet/MimeMultipart.java) | Boundary inference, declared-boundary policy, missing closing boundary recovery, empty multipart policy, delimiter validation, preamble preservation, and completion state. | `ROB-060` |
+| [`InternetHeaders.java`](https://github.com/jakartaee/mail-api/blob/e1873219fe587d5c2b5bb4196e859ae71319a45c/api/src/main/java/jakarta/mail/internet/InternetHeaders.java), [`HeaderTokenizer.java`](https://github.com/jakartaee/mail-api/blob/e1873219fe587d5c2b5bb4196e859ae71319a45c/api/src/main/java/jakarta/mail/internet/HeaderTokenizer.java) | Continuations, malformed fields, whitespace-only separators, comments, quoted strings, and raw header retention. | `ROB-010`, `ROB-020`, `ROB-040`, `ROB-050` |
+| [`ParameterList.java`](https://github.com/jakartaee/mail-api/blob/e1873219fe587d5c2b5bb4196e859ae71319a45c/api/src/main/java/jakarta/mail/internet/ParameterList.java), [`ContentType.java`](https://github.com/jakartaee/mail-api/blob/e1873219fe587d5c2b5bb4196e859ae71319a45c/api/src/main/java/jakarta/mail/internet/ContentType.java), [`ContentDisposition.java`](https://github.com/jakartaee/mail-api/blob/e1873219fe587d5c2b5bb4196e859ae71319a45c/api/src/main/java/jakarta/mail/internet/ContentDisposition.java) | Loose parameter parsing, Apple/Windows filename cases, RFC 2231 continuations, partial decode fallback, and disposition strictness. | `ROB-050` |
+| [`MimeUtility.java`](https://github.com/jakartaee/mail-api/blob/e1873219fe587d5c2b5bb4196e859ae71319a45c/api/src/main/java/jakarta/mail/internet/MimeUtility.java), [`InternetAddress.java`](https://github.com/jakartaee/mail-api/blob/e1873219fe587d5c2b5bb4196e859ae71319a45c/api/src/main/java/jakarta/mail/internet/InternetAddress.java), [`MailDateFormat.java`](https://github.com/jakartaee/mail-api/blob/e1873219fe587d5c2b5bb4196e859ae71319a45c/api/src/main/java/jakarta/mail/internet/MailDateFormat.java) | Encoded-word strictness, unknown encoding policy, UTF-8 policy, address recovery, groups/comments, and obsolete date recovery. | `ROB-030`, `ROB-040`, `ROB-070`, `ROB-080` |
+| [`LineInputStream.java`](https://github.com/eclipse-ee4j/angus-mail/blob/a7a4a37844717d3967418b1640456e49153a7e7c/core/src/main/java/org/eclipse/angus/mail/util/LineInputStream.java) | CRLF, LF, CR, pushback/reset, EOF, and split-read line behavior. | `ROB-001`, `ROB-010`, `ROB-020` |
+| [`BASE64DecoderStream.java`](https://github.com/eclipse-ee4j/angus-mail/blob/a7a4a37844717d3967418b1640456e49153a7e7c/core/src/main/java/org/eclipse/angus/mail/util/BASE64DecoderStream.java), [`QPDecoderStream.java`](https://github.com/eclipse-ee4j/angus-mail/blob/a7a4a37844717d3967418b1640456e49153a7e7c/core/src/main/java/org/eclipse/angus/mail/util/QPDecoderStream.java), [`QDecoderStream.java`](https://github.com/eclipse-ee4j/angus-mail/blob/a7a4a37844717d3967418b1640456e49153a7e7c/core/src/main/java/org/eclipse/angus/mail/util/QDecoderStream.java), [`UUDecoderStream.java`](https://github.com/eclipse-ee4j/angus-mail/blob/a7a4a37844717d3967418b1640456e49153a7e7c/core/src/main/java/org/eclipse/angus/mail/util/UUDecoderStream.java) | Decoder error tolerance, whitespace/junk handling, truncation, padding, and uuencode recovery switches. | `ROB-070` |
+| [`message_rfc822.java`](https://github.com/eclipse-ee4j/angus-mail/blob/a7a4a37844717d3967418b1640456e49153a7e7c/core/src/main/java/org/eclipse/angus/mail/handlers/message_rfc822.java), [`multipart_mixed.java`](https://github.com/eclipse-ee4j/angus-mail/blob/a7a4a37844717d3967418b1640456e49153a7e7c/core/src/main/java/org/eclipse/angus/mail/handlers/multipart_mixed.java), [DSN module](https://github.com/eclipse-ee4j/angus-mail/tree/a7a4a37844717d3967418b1640456e49153a7e7c/dsn/src/main/java/org/eclipse/angus/mail/dsn) | Nested messages, multipart materialization, delivery-status structures, and raw fallback. | `ROB-090`, `ROB-100` |
+| [Jakarta Mail MIME tests](https://github.com/jakartaee/mail-api/tree/e1873219fe587d5c2b5bb4196e859ae71319a45c/api/src/test/java/jakarta/mail/internet), [Angus provider tests](https://github.com/eclipse-ee4j/angus-mail/tree/a7a4a37844717d3967418b1640456e49153a7e7c/providers/angus-mail/src/test) | Regression examples and expected compatibility behavior. These are inputs to, not substitutes for, emlkit's own minimized corpus. | `ROB-130` |
+
+### 2.3 Parse-facing Angus compatibility switches
+
+These upstream properties expose behaviors that emlkit must represent through
+typed profiles or policies. emlkit must not copy Java process-global system
+properties into its API.
+
+| Angus/Jakarta property | Pinned default | Required emlkit coverage |
+|---|---:|---|
+| `mail.mime.multipart.ignoremissingendboundary` | `true` | Recover the final part to EOF, mark the container incomplete, and diagnose the missing close (`ROB-060-005`). |
+| `mail.mime.multipart.ignoremissingboundaryparameter` | `true` | Infer the first credible delimiter while rejecting all-dash false candidates (`ROB-060-002`, `ROB-060-004`). |
+| `mail.mime.multipart.ignoreexistingboundaryparameter` | `false` | Prefer the declared boundary unless an explicit compatibility policy permits replacement (`ROB-060-003`). |
+| `mail.mime.multipart.allowempty` | `false` | Make empty-container handling profile-controlled (`ROB-060-009`). |
+| `mail.mime.ignorewhitespacelines` | `false` | Make whitespace-only header separators explicit and diagnosable (`ROB-020-004`). |
+| `mail.mime.decodeparameters` / `mail.mime.encodeparameters` | `true` / `true` | Decode RFC 2231 while retaining original parameter occurrences (`ROB-050-006`, `ROB-050-007`). |
+| `mail.mime.decodeparameters.strict` | `false` | On decode failure, preserve and expose raw/partial values (`ROB-050-007`). |
+| `mail.mime.parameters.strict` | `true` | Offer a named loose-policy path for broken parameter tails (`ROB-050-003`). |
+| `mail.mime.applefilenames` / `mail.mime.windowsfilenames` | `false` / `false` | Cover client-specific filename repairs explicitly (`ROB-050-004`). |
+| `mail.mime.splitlongparameters` | `true` | Accept continuation segments without assuming arrival order (`ROB-050-006`). |
+| `mail.mime.contentdisposition.strict` | `true` | Preserve invalid disposition metadata and expose a tolerant typed view (`ROB-050-001`–`ROB-050-005`). |
+| `mail.mime.decodetext.strict` | `true` | Make embedded encoded-word recovery profile-controlled (`ROB-030-002`). |
+| `mail.mime.ignoreunknownencoding` | `false` | Preserve raw body and make strict/tolerant behavior explicit at every API layer (`ROB-070-002`). |
+| `mail.mime.allowutf8` | scope-dependent | Support RFC 6532 deliberately; do not inherit inconsistent class-local defaults (`ROB-030-004`, `ROB-040-005`, `ROB-080`). |
+| `mail.mime.decodefilename` | `false` | Decode nonstandard RFC 2047 filenames only under tolerant policy (`ROB-050-008`). |
+| `mail.mime.ignoremultipartencoding` | `true` | Diagnose and policy-control illegal multipart CTE (`ROB-060-012`). |
+| `mail.mime.allowencodedmessages` | `false` | Diagnose and policy-control illegal encoded `message/*` containers (`ROB-090-001`). |
+| `mail.mime.base64.ignoreerrors` | `false` | Supply explicit strict and recovering Base64 modes with prefix/raw fallback (`ROB-070-004`–`ROB-070-007`). |
+| `mail.mime.uudecode.ignoreerrors` / `mail.mime.uudecode.ignoremissingbeginend` | `false` / `false` | Support compatible uuencode aliases and opt-in repairs (`ROB-070-009`). |
+| `mail.mime.address.ignorebogusgroupname` | `true` | Recover common bogus group-name forms without losing valid neighbors (`ROB-040-001`–`ROB-040-004`). |
+
+Additional parse-relevant switches tracked by the corpus include
+`mail.mime.address.strict`, `mail.mime.address.usecanonicalhostname`,
+`mail.mime.foldencodedwords`, `mail.mime.foldtext`, and
+`mail.mime.contenttypehandler`. Write-only formatting and host-name resolution
+must stay outside the core parse-recovery policy unless a ledger item explicitly
+requires them.
+
+### 2.4 Current emlkit gap snapshot
+
+The source audit also identified concrete baseline gaps. These are observations
+at the start of the roadmap, not claims that every existing path is defective:
+
+- `newWithOptions` discards `Header.ContentType` errors, so malformed MIME
+  metadata can silently change entity classification (`ROB-050-001`).
+- ~~The top-level header has a default size limit, but child-part headers do not
+  receive an equivalent per-entity budget~~ — closed by `ROB-001-002`, which
+  applies `MaxHeaderBytes` per entity at every depth under `Parse`. The legacy
+  `Read`/`ReadWithOptions` paths keep the older behavior by design.
+- A missing multipart boundary parameter is not inferred (`ROB-060-002`).
+- A missing closing boundary exposes recovered data but returns a generic
+  unexpected-EOF error instead of a structured incomplete result
+  (`ROB-000-003`, `ROB-060-005`).
+- Existing quoted-printable and Base64 repairs are not surfaced as structured
+  diagnostics (`ROB-000`, `ROB-070`).
+- Unknown charset and unknown transfer encoding warnings are not accumulated
+  independently, and the `mail` convenience layer does not treat both
+  consistently (`ROB-000-005`, `ROB-100-006`).
+- Limits are not yet unified across field count/size, line size, nesting, part
+  count, decoded expansion, and diagnostics (`ROB-001`).
+- Cancellation and repeated `(0, nil)` reader progress handling are not yet a
+  single parser-wide contract (`ROB-001-006`, `ROB-001-007`).
+- There is no checked-in native fuzz/differential corpus proving behavior
+  against Angus and other references (`ROB-130`).
+
+### 2.5 Evidence maintenance rule
+
+Every compatibility item must add a minimized fixture and record the exact
+reference version, profile/switches, result tree, recovered bytes, diagnostics,
+and intentional differences. Upstream source changes are reviewed by diffing a
+new pinned revision; a moving branch or undocumented memory of JavaMail behavior
+is never sufficient evidence. Large-provider parser internals and corpora are
+generally proprietary, so “provider-grade” is an engineering target established
+by public standards, measured corpora, fuzzing, differential tests, and explicit
+resource guarantees—not a claim of unseen implementation parity.
+
+## 3. Status vocabulary
+
+| Status | Meaning |
+|---|---|
+| `Planned` | Requirement is specified but implementation has not started. |
+| `Implementing` | Exactly one executor currently owns the item. |
+| `Review` | Implementation exists; independent diff and test review is pending. |
+| `Done` | Acceptance criteria and all verification gates passed. |
+| `Blocked` | A documented external or architectural dependency prevents work. |
+
+Only the reviewing orchestrator moves an item to `Done`. An implementation
+executor may move its assigned item only as far as `Review`.
+
+## 4. Parser profiles
+
+### 4.1 Strict
+
+- RFC violations that affect framing or semantics stop the current entity.
+- Already parsed parent/sibling results remain available.
+- Unsupported but syntactically valid features are not RFC violations; their
+  raw form remains usable.
+
+### 4.2 Tolerant
+
+- This is the recommended production profile.
+- Known deterministic repairs are applied and reported.
+- Truncated entities return usable partial data and an `Incomplete` diagnostic.
+- Ambiguous repairs use stable precedence rules documented by their diagnostic.
+
+### 4.3 Forensic
+
+- Includes all tolerant results and diagnostics.
+- Preserves raw spans for message, headers, fields, preamble, epilogue, parts,
+  transfer-encoded bodies, and uninterpreted damaged regions.
+- Does not discard bytes merely because they cannot be assigned a semantic
+  meaning.
+
+### 4.4 Compatibility
+
+Named compatibility policies may tune individual choices without creating
+separate parsers:
+
+- `AngusCompatible`
+- `MimeKitCompatible`
+- `PythonEmailCompatible`
+- `Conservative` (prefer raw/incomplete over speculative structure)
+
+The default remains `Tolerant + Conservative` unless a later compatibility
+study justifies another choice.
+
+## 5. Result and diagnostic contract
+
+### 5.1 Required result model
+
+The target API needs a parse session because body and multipart diagnostics can
+be discovered lazily:
+
+```go
+session, entity, err := Parse(r, options)
+// Consume Entity.Body, MultipartReader, or session.Walk(...).
+diagnostics := session.Diagnostics()
+```
+
+Existing `Read`, `ReadWithOptions`, `Entity.Walk`, and `mail.Reader` APIs remain
+source compatible. They may wrap the new engine. New APIs must not force the
+entire body into memory.
+
+### 5.2 Diagnostic fields
+
+Every diagnostic must be a structured value with at least:
+
+- stable `Code`;
+- `Severity`;
+- human-readable `Message` that is not used for program logic;
+- MIME `Path` using zero-based part indices;
+- absolute byte `Offset` when known;
+- optional `EndOffset`, `Line`, and `Column`;
+- affected header field name when applicable;
+- `Action` describing the repair or fallback;
+- wrapped low-level `Cause` when applicable.
+
+Diagnostics must be append-only, safe to read after parsing, and ordered by
+discovery. Implementations must cap their count using the configured budget.
+
+### 5.3 Severity classes
+
+| Severity | Meaning |
+|---|---|
+| `Info` | Nonstandard but harmless representation was observed. |
+| `Recovered` | A deterministic repair was applied and parsing continued. |
+| `Incomplete` | EOF/truncation lost syntax, but partial data is usable. |
+| `Unsupported` | Syntax is recognized but no semantic decoder is available. |
+| `InvalidMetadata` | Raw content is usable but typed metadata could not be parsed. |
+| `LimitExceeded` | A configured safety budget was reached. |
+| `Fatal` | The parser cannot make safe forward progress for the current scope. |
+
+### 5.4 Stable diagnostic registry
+
+Codes below are reserved from the beginning. An implementation may add more
+specific codes, but must not reuse an existing code for another meaning.
+
+#### Input and limits
+
+- `input.empty`
+- `input.bom`
+- `input.read_error`
+- `input.no_progress`
+- `input.cancelled`
+- `input.trailing_messages`
+- `limit.input_bytes`
+- `limit.header_bytes`
+- `limit.header_field_bytes`
+- `limit.header_count`
+- `limit.line_bytes`
+- `limit.parameter_count`
+- `limit.parameter_segments`
+- `limit.mime_depth`
+- `limit.message_depth`
+- `limit.part_count`
+- `limit.preamble_bytes`
+- `limit.epilogue_bytes`
+- `limit.encoded_body_bytes`
+- `limit.decoded_body_bytes`
+- `limit.total_decoded_bytes`
+- `limit.diagnostic_count`
+- `limit.memory_spool_bytes`
+- `limit.disk_spool_bytes`
+
+#### Header framing and fields
+
+- `header.first_line_continuation`
+- `header.orphan_continuation`
+- `header.missing_body_separator`
+- `header.whitespace_body_separator`
+- `header.missing_colon`
+- `header.semicolon_separator`
+- `header.empty_name`
+- `header.invalid_name`
+- `header.name_whitespace`
+- `header.invalid_utf8`
+- `header.nul`
+- `header.bare_lf`
+- `header.bare_cr`
+- `header.mixed_line_endings`
+- `header.truncated_line`
+- `header.duplicate_singleton`
+- `header.mbox_envelope`
+- `header.misplaced_mbox_envelope`
+
+#### MIME metadata and parameters
+
+- `mime.content_type_invalid`
+- `mime.content_type_missing_type`
+- `mime.content_type_missing_subtype`
+- `mime.content_type_missing_slash`
+- `mime.disposition_invalid`
+- `mime.parameter_missing_name`
+- `mime.parameter_missing_equals`
+- `mime.parameter_missing_value`
+- `mime.parameter_unquoted_value`
+- `mime.parameter_unclosed_quote`
+- `mime.parameter_invalid_escape`
+- `mime.parameter_duplicate`
+- `mime.parameter_raw_utf8`
+- `mime.parameter_rfc2047`
+- `mime.parameter_bad_percent_escape`
+- `mime.parameter_segment_missing`
+- `mime.parameter_segment_duplicate`
+- `mime.parameter_segment_mixed_encoding`
+- `mime.parameter_unknown_charset`
+- `mime.filename_conflict`
+
+#### Multipart
+
+- `multipart.boundary_missing`
+- `multipart.boundary_empty`
+- `multipart.boundary_invalid`
+- `multipart.boundary_too_long`
+- `multipart.boundary_inferred`
+- `multipart.boundary_mismatch`
+- `multipart.boundary_ambiguous`
+- `multipart.start_not_found`
+- `multipart.close_not_found`
+- `multipart.close_truncated`
+- `multipart.invalid_delimiter_suffix`
+- `multipart.mixed_line_endings`
+- `multipart.empty`
+- `multipart.empty_part`
+- `multipart.part_header_missing`
+- `multipart.part_separator_missing`
+- `multipart.nested_boundary_reused`
+- `multipart.false_boundary_candidate`
+- `multipart.trailing_junk`
+- `multipart.illegal_transfer_encoding`
+
+#### Transfer encodings
+
+- `cte.unknown`
+- `cte.invalid_token`
+- `cte.illegal_for_multipart`
+- `cte.illegal_for_message`
+- `cte.seven_bit_violation`
+- `cte.base64_junk`
+- `cte.base64_padding_missing`
+- `cte.base64_padding_invalid`
+- `cte.base64_data_after_padding`
+- `cte.base64_length_invalid`
+- `cte.base64_truncated`
+- `cte.base64_url_alphabet`
+- `cte.qp_invalid_hex`
+- `cte.qp_trailing_equals`
+- `cte.qp_invalid_soft_break`
+- `cte.qp_control_byte`
+- `cte.qp_overlong_line`
+- `cte.uuencode_invalid`
+- `cte.uuencode_missing_begin`
+- `cte.uuencode_missing_end`
+
+#### Charset and encoded words
+
+- `charset.missing`
+- `charset.empty`
+- `charset.unknown`
+- `charset.alias_recovered`
+- `charset.bom_mismatch`
+- `charset.invalid_sequence`
+- `charset.decode_truncated`
+- `charset.declaration_suspect`
+- `rfc2047.invalid_word`
+- `rfc2047.unknown_charset`
+- `rfc2047.unknown_encoding`
+- `rfc2047.invalid_base64`
+- `rfc2047.invalid_q`
+- `rfc2047.illegal_location`
+- `rfc2047.embedded_word`
+- `rfc2047.raw_utf8`
+- `rfc2047.header_injection`
+
+#### Structured metadata
+
+- `address.invalid`
+- `address.partial_list`
+- `address.unquoted_comma`
+- `address.local_only`
+- `address.group_depth`
+- `address.comment_depth`
+- `address.raw_utf8`
+- `date.invalid`
+- `date.obsolete_zone`
+- `date.missing_zone`
+- `date.weekday_mismatch`
+- `message_id.invalid`
+- `message_id.partial_list`
+- `received.invalid`
+- `list_header.invalid`
+
+#### Nested and special entities
+
+- `message.embedded_invalid`
+- `message.embedded_truncated`
+- `message.illegal_transfer_encoding`
+- `report.invalid`
+- `signed.structure_invalid`
+- `encrypted.structure_invalid`
+- `feature.unsupported_media_type`
+
+### 5.5 Resource budgets and defaults
+
+Every budget in the `limit.*` registry above is a field of the public `Limits`
+value, is an `int64`, and obeys one rule: `0` selects the documented default,
+`LimitDisabled` (`-1`) turns that budget off, any other positive value is the
+budget itself, and anything below `-1` is a configuration error. `math.MaxInt64`
+is a finite budget, not a synonym for disabled. `DefaultLimits()` returns the
+table below fully resolved.
+
+These defaults are finite operational starting points that balance
+interoperability against denial-of-service resistance. They are **not** a
+conformance boundary. RFC 5322 section 2.1.1 requires each physical line to be
+no more than 998 characters excluding CRLF and recommends no more than 78. That
+line rule does not itself establish overall message, header-block, or logical-
+field budgets, and MIME subformats can impose additional constraints. The
+defaults are **not** measurements of, nor claims about, the caps of any mail
+provider either. Every deployment is expected to tune them from the corpus it
+actually handles.
+
+| Field | Default | Unit | Reserved diagnostic code |
+|---|---:|---|---|
+| `MaxInputBytes` | 256 MiB | bytes of one message | `limit.input_bytes` |
+| `MaxHeaderBytes` | 1 MiB | bytes of one header block | `limit.header_bytes` |
+| `MaxHeaderFieldBytes` | 64 KiB | bytes of one logical field | `limit.header_field_bytes` |
+| `MaxHeaderCount` | 1 024 | fields per header block | `limit.header_count` |
+| `MaxLineBytes` | 64 KiB | bytes of one physical syntax line | `limit.line_bytes` |
+| `MaxParameterCount` | 256 | parameters per header field | `limit.parameter_count` |
+| `MaxParameterSegments` | 256 | RFC 2231 segments per parameter | `limit.parameter_segments` |
+| `MaxMIMEDepth` | 100 | nested multipart containers | `limit.mime_depth` |
+| `MaxMessageDepth` | 32 | nested `message/*` entities | `limit.message_depth` |
+| `MaxPartCount` | 10 000 | parts in the whole tree | `limit.part_count` |
+| `MaxPreambleBytes` | 1 MiB | bytes before the first delimiter | `limit.preamble_bytes` |
+| `MaxEpilogueBytes` | 1 MiB | bytes after the closing delimiter | `limit.epilogue_bytes` |
+| `MaxEncodedBodyBytes` | 128 MiB | wire bytes of one body | `limit.encoded_body_bytes` |
+| `MaxDecodedBodyBytes` | 128 MiB | decoded bytes of one body | `limit.decoded_body_bytes` |
+| `MaxTotalDecodedBytes` | 512 MiB | decoded bytes of all entities | `limit.total_decoded_bytes` |
+| `MaxDiagnosticCount` | 1 000 | diagnostics per parse | `limit.diagnostic_count` |
+| `MaxMemorySpoolBytes` | 8 MiB | in-memory retained raw content | `limit.memory_spool_bytes` |
+| `MaxDiskSpoolBytes` | 1 GiB | temporary-file bytes per message | `limit.disk_spool_bytes` |
+
+`MaxHeaderBytes` has a second, older spelling, `ReadOptions.MaxHeaderBytes`, with
+the same units and the same meaning for `0` and `-1`. `Parse` resolves both
+through one resolver: either alone is honored, both together are accepted only
+while they resolve to the same budget, and a disagreement is a configuration
+error rather than a silent choice between them. `Read` and `ReadWithOptions`
+resolve nothing and keep their documented legacy behavior, in which any negative
+value means no limit.
+
+`MaxLineBytes` has a deliberately narrow scope, fixed here before anything
+enforces it. It bounds a *physical syntax line* — one that a parser component
+must materialize or interpret as a line, which is principally header and MIME
+framing syntax: header field lines and continuations, multipart delimiters, and
+the line-oriented framing of the transfer encodings. Its 64 KiB default is
+deliberately much higher than RFC 5322's 998-character limit: it is a tolerant
+operational ceiling that permits bounded recovery of malformed or extension-
+generated syntax, not a conformance threshold. It must never turn an opaque
+text, binary or encoded body containing no newline into one giant line
+allocation, and must never reject such a body for its length alone. Opaque
+bodies are streamed and are governed by `MaxEncodedBodyBytes` and
+`MaxDecodedBodyBytes`. `ROB-001-003` implemented the budget within that scope.
+
+A configuration error is the caller's, not the message's: `Parse` reports it
+before reading a byte, returns no entity and records no diagnostic, and still
+returns a session carrying the requested profile and policy.
+
+`ROB-001-001` centralized configuration only and enforced nothing new.
+`ROB-001-002` added the first enforcement, `MaxHeaderBytes`. `ROB-001-003` added
+five more — `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`,
+`MaxParameterCount` and `MaxParameterSegments`. `ROB-001-004` added the two tree
+budgets, `MaxMIMEDepth` and `MaxPartCount`, so **eight** budgets are enforced,
+all of them under `Parse` alone.
+
+Under `Parse` it bounds one header block per entity — the message's own and
+every part's, at any nesting depth — counted as the block appears on the wire
+through the empty line that ends it, so a block of exactly the budget is read and
+one byte over is refused. The budget is never cumulative across blocks.
+`LimitDisabled` turns it off at every depth. A refused block records exactly one
+`limit.header_bytes` diagnostic with `LimitExceeded` severity, naming the
+entity's path and the offset its header block began at, and ends the scope
+reading it with a `FatalError` carrying that diagnostic: the whole parse for the
+message header, the iteration over one multipart for a part. Nothing is recovered
+from the refused block, and everything already returned stays valid.
+
+Two properties of the refusal are part of the contract. It is all or nothing: a
+refused block yields no header, never the fields that fit before the budget ran
+out, which no caller could tell apart from a message that lacked the rest. And it
+has an identity an input cannot claim. A refusal is identified by
+`textproto.HeaderLimit`, which reports only a `*HeaderLimitError` this parser
+built, carrying an unexported mark. Neither the public `ErrHeaderTooBig`
+sentinel, nor an error answering `Is` for every target, nor a `HeaderLimitError`
+value another package wrote — including a typed nil — is accepted as one, so an
+`io.Reader` presenting any of them yields an ordinary input error that is not
+diagnosed, not fatal, and not dereferenced. Internally the same rule holds by
+exact identity rather than by `errors.Is` traversal. The one indistinguishable
+case is a genuine refusal captured from the parser and handed back to it; that
+is documented on the type as the boundary rather than papered over.
+
+`Read` and `ReadWithOptions` are unchanged: the budget reaches the message's own
+header block and no other, it is enforced by bounding the reads under the header
+parser as it always was, the failure is the error it has always returned, and no
+diagnostic is recorded. A part's header is unbudgeted on those paths.
+
+The five budgets `ROB-001-003` added divide into two groups by what a failure
+costs, and the division is part of the contract.
+
+The three remaining header-block budgets behave exactly as `MaxHeaderBytes`
+does, per entity and never cumulative, each counted as the block appears on the
+wire: `MaxHeaderFieldBytes` counts one logical field — its first physical line,
+every continuation line, and the line terminators of each; `MaxHeaderCount`
+counts logical field candidates, a candidate later skipped for an empty name
+included, so that repeating an empty-name field cannot evade it; `MaxLineBytes`
+counts one physical line excluding its terminator.
+
+The empty line that ends a block belongs to the block and to no field in it.
+`MaxHeaderBytes` counts its bytes and `MaxLineBytes` sees a line whose content is
+empty, while `MaxHeaderFieldBytes` and `MaxHeaderCount` do not charge it at all —
+a block holding no field spends neither, so a header that is nothing but that
+empty line is read under any budget down to one byte. The distinction is settled
+before the line's bytes are charged, from at most two bytes that are looked at
+and not consumed, because a refusal is returned rather than taken back and a
+field longer than a budget must still be refused while it is read. Exceeding any is all or
+nothing, records exactly one diagnostic at `LimitExceeded`, and ends that scope
+with a `FatalError`. A block that exceeds several at once reports the budget
+bounding the smallest scope — line, then field, then block, then count — a
+precedence fixed in the scanner so that it cannot depend on how the input chunks
+its reads.
+
+`MaxLineBytes` also reaches the two places outside a header block where the
+parser must read a line as a line: a multipart body's framing lines, and the
+line-oriented framing of `base64` and `quoted-printable`. Neither bounds opaque
+body content. The transfer-encoding side is a streaming monitor that holds no
+bytes and refuses only once a terminator proves the line it ended was over
+budget, so a body that never terminates a line is streamed at fixed memory cost
+and is never refused for its length.
+
+`MaxParameterCount` and `MaxParameterSegments` are the exception to the fatal
+rule, because they are the one place with a safe fallback. Both are counted by a
+quote-aware scan that runs before `mime.ParseMediaType`, so the work is bounded
+by the budget rather than by the field, a semicolon inside a quoted string is not
+a separator, and duplicates and RFC 2231 segments each count as occurrences. A
+field past either keeps its media type and the parameters within the budget,
+ignores the remainder, records one diagnostic whose `Action` says what was kept,
+and the parse continues — so a `boundary` obtained before the cut still yields
+its children. A parameter with any RFC 2231 segment among the retained
+occurrences is dropped whole rather than reported from a series the scan stopped
+reading; `ROB-050` owns the wider recovery question. The budgets are per field
+and never cumulative across fields or entities, and they reach only the parse
+engine's own reading of those fields — `Header.ContentType` and
+`Header.ContentDisposition` are unchanged and unbudgeted on every path.
+
+`ROB-001-003` was reopened for two corrections
+([issue #1](https://github.com/saeroun-ai/emlkit/issues/1)). First, a multipart
+framing line read under `MaxLineBytes` charged a `'\r'` that ended a full
+4 096-byte buffer as content before the next read could show it began the
+`"\r\n"`, so a line of exactly the budget was refused whenever its terminator
+straddled a buffer edge. The framing reader now holds that `'\r'` back and
+charges it only when what follows is not `'\n'` or is the end of input, the rule
+`headerScan` already applied to header lines (`textproto`
+`TestMultipartReader_lineBytesCRAtBufferEdge*`: first/second buffer, after a
+short line and after a part, CRLF/LF, `'\r'` as content, every chunking, at
+`limit-1/limit/limit+1`). Second, with `SkipTextAttachmentDecoding`, the
+`Content-Disposition` read that decides the charset stage could record a
+parameter diagnostic whose sink stopped the parse, and the stop was dropped:
+the entity came back with a nil error and the charset stage still ran. The stop
+is now taken up there, returned with the usable entity as the session's
+identical `FatalError`, and no charset decoder follows it
+(`TestParse_dispositionBudget*`: root and child, inline and attachment, a sink
+error that is or wraps a decoding warning, earlier warnings kept in order, and
+the unstopped paths unchanged).
+
+Every other budget is validated, resolved and reported by `ParseSession.Limits`,
+and nothing consults it yet; their `limit.*` codes in the table are reserved, not
+yet emitted. `ROB-001-004` through `ROB-001-008` add the enforcement that the
+current entity model can exercise, and the diagnostics, behind these same fields
+without changing the shape of `Limits`, so a configuration written against this
+table keeps its meaning.
+
+There is one explicit dependency exception. `MaxMessageDepth` cannot be enforced
+until `ROB-090-001` makes `message/rfc822` and `message/global` into nested
+entities: today those bodies are opaque leaves, so no nested-message transition
+exists to count. `ROB-090-002` therefore owns activating the already-reserved
+budget and `limit.message_depth` diagnostic immediately after that model exists.
+`ROB-001-004` owns `MaxMIMEDepth` and `MaxPartCount` only. `MaxPartCount` is the
+one public part-count budget and is total across the tree; there is no separate
+per-container setting. A total bound necessarily bounds one wide container too,
+so its tests cover both one container with many children and many containers
+whose individually small child sets exceed the same shared total.
+
+`ROB-001-004` settled the two tree budgets as follows.
+
+`MaxMIMEDepth` counts descent. The root entity of a message is at depth zero
+whatever its media type is, and every child a multipart body yields is exactly
+one deeper than the entity whose body it came out of, so a positive budget `N`
+admits every entity at depth `N` or less and the first child it can refuse is one
+at depth `N+1`. `MaxPartCount` counts discovery. The root is not counted —
+nothing discovered it, it is the message — while every child a multipart iterator
+does discover counts exactly one, a leaf, a container that holds further parts
+and a part with no header block at all alike. That count is one budget the whole
+tree shares, never reset when the parser enters a container.
+
+Both are exact at the boundary and charged lazily. A tree exactly as deep, or as
+wide, as its budget is parsed whole, and the end of a container that spent
+precisely the budget is an ordinary `io.EOF` rather than a refusal. Nothing is
+scanned ahead and nothing is materialized: the check happens where a child has
+just been framed, because a container sitting at the depth budget may hold
+nothing at all and a budget spent before the parser knows there is something to
+spend it on would diagnose children a message never had. The cost of that is a
+bounded look-ahead of exactly one over-limit child header block, which has to be
+read to learn the child exists; it is bounded by the header budgets like any
+other block, and nothing else about that child is touched — no body, no decoder,
+no `Entity`, and none of its own parts.
+
+The two failures differ in scope, and that difference follows from what each
+budget describes. A `limit.mime_depth` refusal is local to the multipart iterator
+that hit it: what ran out is the room to descend below one container, so that
+iterator ends with a sticky `FatalError` while the entity holding it, the
+siblings already returned, every shallower part, and the parent's own continued
+iteration are unaffected. A `limit.part_count` refusal belongs to the whole
+parse, because the budget does: the failure is installed on the session, exactly
+one diagnostic is recorded for the message, and every later scope — the iterator
+that hit it, iterators built earlier for other containers, and `Entity.Walk` —
+reports the identical `FatalError` and recovers nothing further. Everything
+already returned stays valid either way.
+
+Order is fixed rather than incidental. A failure of the underlying reader — a
+part header past a header budget, a framing line past `MaxLineBytes`, an I/O
+error — comes first and is reported as itself, since no part was framed and
+neither tree budget is consulted. `MaxPartCount` is charged next, and
+`MaxMIMEDepth` is judged only for a child that fit within it, so a child
+exceeding both at once deterministically reports `limit.part_count`. A
+`DiagnosticSink` that stops the parse while it is being told about either
+outranks both.
+
+That last clause is where the review of `ROB-001-004` found a defect, and the
+requirement it produced is now part of the contract rather than a property of one
+implementation. A session's failure is **published once and never replaced**: the
+error one scope reports and the error another scope reports are the same value,
+for the whole life of the session. That is not free, because deciding *which* of
+the two failures a parse ends with requires delivering the `limit.part_count`
+diagnostic to the sink first, and delivering to a sink means calling caller code,
+which must not happen under the session lock. Publishing the budget's failure
+before the sink answers makes a value observable that a sink stop would then have
+to replace, which is exactly the identity change the contract forbids.
+
+So the overflow is published as an explicit two-phase transition. One caller
+claims the overflow and **nothing is published**; that caller delivers the
+diagnostic with no session lock held; it then publishes exactly one failure — the
+budget's if the sink took the diagnostic, the sink's if the sink refused to
+continue — and only then releases the other callers. Anything that asks the
+session about its failure in between waits for that publication rather than being
+shown a provisional answer. Waiting is safe under the existing synchronous sink
+contract, which already blocks the parse for as long as the sink blocks; the
+caller finishing the transition never waits on it itself, and the accessors a
+sink is documented to call — `Diagnostics`, `Len`, `Profile`, `Compatibility` —
+take no part in it, so a sink may still read the session it is delivering for.
+Exactly one caller is ever told it claimed the overflow, which is what makes
+"recorded once, delivered once" true however many scopes race into the same
+overflow.
+
+The accepted path pays for none of this. Charging a part that fits is the whole
+cost — no diagnostic, no message naming the budget, no copy of the part's path —
+and that is pinned by an allocation test rather than by a timing one.
+
+A second review of `ROB-001-004` found one more defect, in `Entity.Walk` rather
+than in the budgets themselves. Both tree budgets refuse a child by returning no
+part, and a `DiagnosticSink` that stops the parse while it is told about the
+refusal makes the returned error the session's stop: a `FatalError` wrapping the
+sink's own error, which the caller chose and which may wrap an
+`UnknownEncodingError` or `UnknownCharsetError`. `Walk` forwarded every error
+answering to those two predicates to `walkFunc` together with the nil part and
+then descended into it, so a `walkFunc` that continues past warnings made `Walk`
+dereference nil instead of returning the identical stop. `Walk` now forwards a
+warning only together with the part it describes, and an error that arrives
+with no part ends the walk as itself. A refused part header or framing line
+leaves `NextPart` the same way and is covered by the same guard.
+
+The same precedence had a second gap. A child whose unknown transfer encoding or
+charset made the sink stop the parse comes back usable, together with the
+session's stop, and a sink that returns or wraps the diagnostic's `Cause` makes
+that stop answer to the warning predicates too; `Walk` then handed the stopped
+child to `walkFunc`. `Walk` now asks the session after every `NextPart` and
+returns its stop, the identical value, before forwarding anything, so a stopped
+child is never delivered while an unstopped parse forwards its warnings exactly
+as before.
+
+## 6. Cross-cutting verification matrix
+
+Every parser defect item must cover the applicable dimensions below. Handwritten
+tests cover semantic expectations; generators cover the Cartesian product.
+
+### 6.1 Input delivery
+
+- complete buffer;
+- one byte per `Read`;
+- fixed chunks of 2, 3, 7, 64, 4,095, and 4,096 bytes;
+- random deterministic chunks;
+- readers returning `(n > 0, io.EOF)`;
+- every possible truncation point;
+- injected non-EOF error after every significant grammar token;
+- cancellation before parse and during header/body reads;
+- a guarded misbehaving reader that returns repeated `(0, nil)`.
+
+### 6.2 Placement
+
+- top-level message;
+- first, middle, and last multipart child;
+- nested multipart child;
+- embedded `message/rfc822`;
+- signed/encrypted container where raw bytes are especially important.
+
+### 6.3 Representation
+
+- CRLF, LF, CR, and mixed line endings;
+- no CTE, Base64, quoted-printable, 7bit, 8bit, binary, and unknown CTE;
+- seekable and non-seekable sources;
+- strict, tolerant, and forensic profiles.
+
+### 6.4 Assertions
+
+Each applicable test asserts:
+
+1. no panic, hang, goroutine leak, file leak, or unbounded allocation;
+2. exact entity tree and part paths;
+3. exact raw body and decoded body independently;
+4. exact diagnostic codes, severities, paths, and repair actions;
+5. deterministic output across chunking variants;
+6. strict and tolerant behavior differ only as specified;
+7. byte-exact serialization of untouched raw content;
+8. resource limit behavior at `limit-1`, `limit`, and `limit+1`;
+9. a minimized corpus seed exists for every real-world regression.
+
+## 7. Implementation ledger
+
+### ROB-000 — Parse session, profiles, and diagnostics
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-000-001 | Done | Add public parse profile, diagnostic severity/code/value, and append-only parse session types without breaking existing APIs. | Type/API tests; race-safe ordered collection; documentation examples. |
+| ROB-000-002 | Done | Add diagnostic sink/callback support so streaming callers need not retain every diagnostic. | Sink ordering and sink-error policy tests. |
+| ROB-000-003 | Done | Define partial-result fatal error semantics and error unwrapping. | `errors.Is/As` tests and usable-result tests. |
+| ROB-000-004 | Done | Thread part path and best-known byte offsets through lazy multipart traversal. | Nested-path and chunk-invariance tests. |
+| ROB-000-005 | Done | Bridge legacy `IsUnknownCharset`/`IsUnknownEncoding` behavior to structured diagnostics. | Existing API compatibility plus new-session tests. |
+
+### ROB-001 — Budgets, cancellation, and progress
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-001-001 | Done | Centralize all configurable resource budgets and defaults. | Default/disable/overflow configuration tests. |
+| ROB-001-002 | Done | Apply message and per-entity header byte limits, including child part headers. | Top/child/deep child boundary tests. |
+| ROB-001-003 | Done | Limit header fields, physical line bytes, logical field bytes, parameters, and RFC 2231 segments. | `limit-1/limit/limit+1` tests. |
+| ROB-001-004 | Done | Limit multipart MIME depth and total part count without recursive stack growth; nested-message depth is deferred to ROB-090-002. | Deep multipart and single-/multi-container wide generated messages. |
+| ROB-001-005 | Planned | Limit encoded/decoded body bytes and total decoding expansion. | Streaming overflow with recoverable raw body. |
+| ROB-001-006 | Planned | Add context cancellation and deadline checks to long scans/decoders. | Cancellation latency and partial-result tests. |
+| ROB-001-007 | Planned | Detect repeated no-progress reads while allowing legal transient behavior. | Adversarial reader tests. |
+| ROB-001-008 | Planned | Cap diagnostics and emit one terminal `limit.diagnostic_count` entry. | Diagnostic storm test. |
+
+### ROB-010 — Input and message framing
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-010-001 | Planned | Treat empty input and header-only input deterministically. | All profiles and round-trip tests. |
+| ROB-010-002 | Planned | Handle CRLF, bare LF, bare CR, mixed endings, and a missing final newline. | Chunk boundary matrix. |
+| ROB-010-003 | Planned | Detect and preserve BOMs without letting them corrupt a field name. | UTF-8/16/32 BOM fixtures. |
+| ROB-010-004 | Planned | Optionally recognize a leading mbox envelope line and preserve it separately. | Valid/invalid/mid-header `From ` fixtures. |
+| ROB-010-005 | Planned | Detect concatenated messages or trailing unassigned bytes in forensic mode. | Two-message and trailing-junk fixtures. |
+| ROB-010-006 | Planned | Preserve bytes returned with EOF and partial bytes before injected I/O errors. | Custom-reader tests. |
+
+### ROB-020 — Raw header framing and preservation
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-020-001 | Planned | Recover a first-line continuation as a raw malformed field/body candidate with policy-based interpretation. | Angus/Python/Mime4j compatibility fixtures. |
+| ROB-020-002 | Planned | Recover orphan continuation lines after malformed fields. | Raw preservation and diagnostic tests. |
+| ROB-020-003 | Planned | Support policy choices for a colonless line: raw malformed header, semicolon separator, or start of body. | Ambiguity and deterministic-precedence tests. |
+| ROB-020-004 | Planned | Recognize whitespace-only header/body separators when enabled. | Spaces/tabs/mixed fixtures. |
+| ROB-020-005 | Planned | Recover missing header/body separator without losing the first body line. | Plain and multipart part fixtures. |
+| ROB-020-006 | Planned | Preserve invalid/empty field names and raw 8-bit values while exposing only safe canonical lookup keys. | Control/NUL/non-ASCII key tests. |
+| ROB-020-007 | Planned | Preserve original field case, order, folding, whitespace, and physical line endings. | Byte-exact write tests. |
+| ROB-020-008 | Planned | Diagnose duplicate singleton fields without deleting them. | MIME-Version, Content-Type, From, Date fixtures. |
+| ROB-020-009 | Planned | Make every header parser path panic-free for arbitrary bytes and pathological lengths. | Native fuzz target and allocation bound. |
+
+### ROB-030 — RFC 2047 and unstructured text
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-030-001 | Planned | Decode conformant B/Q words and adjacent-word whitespace correctly. | RFC examples and round-trip tests. |
+| ROB-030-002 | Planned | Recover embedded encoded words in tolerant mode. | Strict/tolerant differential fixtures. |
+| ROB-030-003 | Planned | Preserve malformed/unknown encoded words while decoding valid neighbors. | Partial decode tests. |
+| ROB-030-004 | Planned | Diagnose raw UTF-8/8-bit header text and apply configured fallback charset. | Valid/invalid UTF-8 fixtures. |
+| ROB-030-005 | Planned | Reject or neutralize decoded CR/LF/NUL header injection. | Security tests. |
+| ROB-030-006 | Planned | Limit encoded-word count, nesting-like work, and decode expansion. | Adversarial complexity tests. |
+
+### ROB-040 — Structured RFC 5322 headers
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-040-001 | Planned | Return partial address lists with per-address diagnostics. | Valid-invalid-valid sequences. |
+| ROB-040-002 | Planned | Support configurable loose parsing for unquoted commas and local-only addresses. | MimeKit-compatible fixtures. |
+| ROB-040-003 | Planned | Bound nested comments and address groups. | Deep nesting tests. |
+| ROB-040-004 | Planned | Tolerate obsolete route syntax, empty groups, repeated separators, and broken angle brackets without panic. | Corpus table tests. |
+| ROB-040-005 | Planned | Parse internationalized addresses and preserve undecodable originals. | RFC 6532 and IDN cases. |
+| ROB-040-006 | Planned | Parse common obsolete dates, report invalid dates, and retain raw values. | Zone/year/comment/weekday table. |
+| ROB-040-007 | Planned | Return partial Message-ID/References lists. | CFWS, truncation, invalid ID tests. |
+| ROB-040-008 | Planned | Add tolerant Received parsing with clause-level preservation. | Real provider fixtures. |
+| ROB-040-009 | Planned | Harden List-* parsing and preserve multiple URLs/NO values. | RFC 2369/2919 fixtures and fuzz. |
+
+### ROB-050 — MIME media types, dispositions, and parameters
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-050-001 | Planned | Parse and retain the base media type even when parameters are malformed. | Invalid-tail matrix; no silent multipart misclassification. |
+| ROB-050-002 | Planned | Recover missing type/subtype/slash using conservative defaults and diagnostics. | Strict/tolerant behavior tests. |
+| ROB-050-003 | Planned | Parse loose unquoted parameter values up to the next semicolon. | Angus/MimeKit-compatible fixtures. |
+| ROB-050-004 | Planned | Recover unclosed quotes, bad escapes, and Windows filename backslashes. | Apple/Windows fixtures. |
+| ROB-050-005 | Planned | Define deterministic duplicate-parameter precedence while preserving all raw occurrences. | First/last/conflicting values. |
+| ROB-050-006 | Planned | Fully support RFC 2231 extended and continuation parameters in any segment order. | Encoded/unencoded/mixed tables. |
+| ROB-050-007 | Planned | Preserve partial RFC 2231 values when segments, percent escapes, or charsets are invalid. | Partial decode diagnostics. |
+| ROB-050-008 | Planned | Support nonstandard RFC 2047 and raw UTF-8 filenames in tolerant mode. | Common client fixtures. |
+| ROB-050-009 | Planned | Resolve filename/name/filename* conflicts without discarding candidates. | Candidate API and precedence tests. |
+| ROB-050-010 | Planned | Separate original filename from an optional filesystem-safe display/storage name. | Traversal, NUL, separators, reserved names. |
+
+### ROB-060 — Multipart recovery
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-060-001 | Planned | Preserve preamble and epilogue with raw spans. | Empty/nonempty/limited fixtures. |
+| ROB-060-002 | Planned | Infer a missing boundary parameter from credible delimiter lines. | Angus-compatible positive/negative fixtures. |
+| ROB-060-003 | Planned | Detect declared/actual boundary mismatch and optionally adopt the actual boundary. | Antivirus-rewrite fixtures. |
+| ROB-060-004 | Planned | Rank multiple boundary candidates deterministically and diagnose ambiguity. | Preamble dashes and nested candidates. |
+| ROB-060-005 | Planned | Recover missing start and closing delimiters while returning partial parts. | Python defect-compatible tests. |
+| ROB-060-006 | Planned | Accept truncated final delimiter and missing terminal line ending where unambiguous. | Every truncation point. |
+| ROB-060-007 | Planned | Handle boundary LWSP, invalid suffixes, mixed endings, and buffer splits. | Exhaustive split-position tests. |
+| ROB-060-008 | Planned | Avoid false positives for boundary prefixes embedded in content. | Adversarial body corpus. |
+| ROB-060-009 | Planned | Support empty multipart, consecutive delimiters, and headerless empty parts according to profile. | Strict/tolerant fixtures. |
+| ROB-060-010 | Planned | Recover missing child header/body separators without losing sibling synchronization. | Broken-middle-child tests. |
+| ROB-060-011 | Planned | Handle reused/prefix-related inner and outer boundaries. | Deep nested fixtures. |
+| ROB-060-012 | Planned | Ignore or decode illegal multipart CTE according to explicit policy. | Outlook/broken-gateway fixtures. |
+| ROB-060-013 | Planned | Guarantee linear-time boundary scanning under repeated near-matches. | Complexity benchmark. |
+
+### ROB-070 — Content-Transfer-Encoding
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-070-001 | Planned | Normalize CTE tokens with comments, whitespace, and common trailing junk. | Header token tables. |
+| ROB-070-002 | Planned | Preserve raw body and continue for unknown CTE at every API layer. | Root/mail/session compatibility tests. |
+| ROB-070-003 | Planned | Diagnose 7bit violations without discarding bytes. | High-bit/NUL/long-line fixtures. |
+| ROB-070-004 | Planned | Ignore Base64 whitespace and configured nonalphabet junk with diagnostics. | Angus/Python-compatible fixtures. |
+| ROB-070-005 | Planned | Repair missing/invalid Base64 padding and truncated final quanta when possible. | Length modulo 4 matrix. |
+| ROB-070-006 | Planned | Handle data after Base64 padding and URL-safe alphabet policy. | Strict/tolerant tables. |
+| ROB-070-007 | Planned | Return decoded Base64 prefixes and raw fallback for unrecoverable length cases. | Prefix/fallback assertions. |
+| ROB-070-008 | Planned | Complete malformed quoted-printable recovery, including CR-only soft breaks. | Invalid-hex/truncation/control tables. |
+| ROB-070-009 | Planned | Support uuencode aliases and configurable missing begin/end recovery. | Angus-compatible uuencode fixtures. |
+| ROB-070-010 | Planned | Apply decoded-size budgets during streaming, not after allocation. | Expansion and cancellation tests. |
+
+### ROB-080 — Charset decoding
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-080-001 | Planned | Maintain a tested alias/quirk registry for common mail charset labels. | Provider corpus and IANA aliases. |
+| ROB-080-002 | Planned | Expose raw bytes and decoded UTF-8 view simultaneously. | Read-order independence tests. |
+| ROB-080-003 | Planned | Define strict/replace/raw policies for invalid byte sequences and midstream errors. | Prefix preservation tests. |
+| ROB-080-004 | Planned | Detect BOM/declaration conflicts without silently overriding metadata. | UTF-8/16/32 matrix. |
+| ROB-080-005 | Planned | Support important legacy mail charsets through the optional plugin. | Japanese/Korean/Chinese/Cyrillic fixtures. |
+| ROB-080-006 | Planned | Keep standard UTF-7 and IMAP modified UTF-7 behavior separate and explicit. | Cross-codec negative tests. |
+| ROB-080-007 | Planned | Add opt-in declaration-suspicion heuristics without making guessing the default. | False-positive/negative corpus. |
+| ROB-080-008 | Planned | Bound charset decode expansion and state-machine work. | Adversarial charset tests. |
+
+### ROB-090 — Nested messages and special MIME structures
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-090-001 | Planned | Parse `message/rfc822` and `message/global` as nested entities with independent diagnostics. | Plain/encoded/truncated fixtures. |
+| ROB-090-002 | Planned | Activate the reserved `MaxMessageDepth` budget for the nested entities introduced by ROB-090-001. | Deep message chain. |
+| ROB-090-003 | Planned | Support `multipart/digest` default child type semantics. | Missing child Content-Type fixtures. |
+| ROB-090-004 | Planned | Preserve `multipart/related` root/start/type relationships. | CID/root-selection fixtures. |
+| ROB-090-005 | Planned | Model `multipart/report` and common delivery/disposition/feedback reports. | RFC samples and malformed blocks. |
+| ROB-090-006 | Planned | Validate `multipart/signed` and `multipart/encrypted` shape without modifying signed raw bytes. | Signature hash invariants. |
+| ROB-090-007 | Planned | Support `text/rfc822-headers` as a header block entity. | Valid/malformed header fixtures. |
+| ROB-090-008 | Planned | Preserve unsupported `message/partial` and `message/external-body` metadata safely. | No external fetch, raw preservation. |
+
+### ROB-100 — Message body and attachment view
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-100-001 | Planned | Preserve the complete MIME tree before producing any flattened convenience view. | Hierarchy round-trip tests. |
+| ROB-100-002 | Planned | Classify attachments using disposition, filename candidates, media type, and related references with explainable reasons. | Cross-client corpus. |
+| ROB-100-003 | Planned | Select `multipart/alternative` bodies by caller capability without discarding alternatives. | Nested alternative fixtures. |
+| ROB-100-004 | Planned | Resolve `multipart/related` inline resources by normalized Content-ID/Location. | HTML CID cases. |
+| ROB-100-005 | Planned | Represent embedded messages, calendars, zero-byte files, duplicates, and unknown media types. | Typed-view tests. |
+| ROB-100-006 | Planned | Make unknown charset/CTE nonfatal in `mail.Reader` while retaining diagnostics. | Existing inconsistency regression tests. |
+
+### ROB-110 — Raw storage, replay, and spooling
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-110-001 | Planned | Define raw span/source abstraction for seekable and non-seekable inputs. | Equivalent-result tests. |
+| ROB-110-002 | Planned | Add configurable memory-to-temp-file spooling with deterministic cleanup. | Threshold, close, failure, cancellation tests. |
+| ROB-110-003 | Planned | Support caller-provided blob storage and quotas. | Fake-store contract tests. |
+| ROB-110-004 | Planned | Permit repeatable raw/decoded reads in indexed mode while retaining one-shot streaming mode. | Read-order and concurrent-read policy tests. |
+| ROB-110-005 | Planned | Preserve untouched message/header/body bytes after semantic reads. | Parse-read-write DKIM body/header hash tests. |
+| ROB-110-006 | Planned | Compute optional hashes during streaming without extra passes. | Known digest and partial-read tests. |
+| ROB-110-007 | Planned | Ensure no temp files, descriptors, or goroutines leak on any error path. | Stress tests with leak assertions. |
+
+### ROB-120 — Security hardening
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-120-001 | Planned | Audit all input-derived slice bounds, integer arithmetic, and allocation sizes. | Fuzz/32-bit-oriented boundary tests. |
+| ROB-120-002 | Planned | Make parsing and decoding complexity linear or explicitly budgeted. | Near-match and nesting benchmarks. |
+| ROB-120-003 | Planned | Prevent header injection in all decoded/setter/serialization paths. | CR/LF/NUL tests. |
+| ROB-120-004 | Planned | Keep filename sanitization, HTML safety, archive expansion, and executable handling outside core parsing. | API boundary/documentation tests. |
+| ROB-120-005 | Planned | Never perform network fetches for Content-Location/external-body while parsing. | Hostile URI tests. |
+| ROB-120-006 | Planned | Preserve cryptographic raw representations and clearly mark repaired signed content as unverifiable. | DKIM/S-MIME/PGP invariants. |
+| ROB-120-007 | Planned | Make every parser-wide error classification cycle-safe and non-forgeable over input-derived error graphs. | Hostile-graph tests at each predicate: no hang, no panic, no nil dereference, no misclassification. |
+
+`ROB-120-007` owns two parser-wide issues found while reviewing `ROB-001-002`,
+where they were fixed for the header byte budget alone and left standing
+everywhere else.
+
+An error the parser classifies may have come from the caller's `io.Reader`, so
+its shape, its methods and its graph are input. Two consequences were
+demonstrated:
+
+- `errors.Is` and `errors.As` ask the error under test whether it matches. An
+  error whose `Is(error) bool` or `As(any) bool` returns true for everything
+  claims every identity, including identities it could not otherwise obtain, and
+  every predicate built on those functions believes it. `IsFatal`,
+  `IsUnknownCharset` and `IsUnknownEncoding` are such predicates, as is the
+  EOF-class classification in `textproto.MultipartReader.NextPart`. A concrete
+  consequence: a `(nil, err)` from `NextPart` whose `err` claims to be an
+  unknown-encoding warning reached `Entity.Walk`, which then dereferenced the nil
+  part. The review of `ROB-001-004` made `Walk` forward a warning only together
+  with a part, which closes that dereference; the misclassification itself, and
+  every other predicate, remain this item's.
+- Neither `errors.Is` nor `errors.As` bounds its walk. An error that unwraps to
+  itself, or a ring of them, does not terminate; `errors.Join` and
+  `Unwrap() []error` widen the same graph.
+
+The item must give every input-facing classification the properties
+`textproto.HeaderLimit` now has: match by exact dynamic type and by provenance
+the parser alone can set, never invoke a custom `Is` or `As`, bound both nodes
+examined and children held pending, follow `Unwrap() error` and
+`Unwrap() []error` alike, and skip nil and typed-nil nodes before calling their
+methods. Predicates that are documented as `errors.As` semantics and must stay
+that way for compatibility should say so, and the parser's own decisions should
+stop depending on them.
+
+### ROB-130 — Corpus, fuzzing, differential testing, and performance
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-130-001 | Planned | Add native Go fuzz targets for raw headers, MIME parameters, multipart, Base64, QP, charset, and full message walk. | Seed corpus runs without panic/hang. |
+| ROB-130-002 | Planned | Define fuzz invariants: progress, chunk invariance, bounded resources, stable diagnostics, raw preservation. | Automated property assertions. |
+| ROB-130-003 | Planned | Maintain sanitized conformant, malformed, truncated, adversarial, and provider-generated corpora. | Fixture manifest with provenance and expected diagnostics. |
+| ROB-130-004 | Planned | Build differential harnesses for Angus, Python `email`, MimeKit, and optionally Mime4j. | Machine-readable result comparison. |
+| ROB-130-005 | Planned | Record intentional parser differences with rationale instead of forcing equality. | Reviewed compatibility exceptions file. |
+| ROB-130-006 | Planned | Add parser/decoder benchmarks for small mail, huge attachments, deep/wide MIME, and near-boundary attacks. | Baselines and regression thresholds. |
+| ROB-130-007 | Planned | Add long-running randomized soak tests with leak and memory ceilings. | Repeatable seeded job. |
+| ROB-130-008 | Planned | Run `go test`, race tests, fuzz smoke tests, formatting, vet/static analysis, and benchmarks in CI. | Required green checks. |
+
+### ROB-140 — Optional interoperability extensions
+
+These do not block the core robustness target but are tracked to avoid treating
+common provider artifacts as unknown forever.
+
+| ID | Status | Requirement | Acceptance |
+|---|---|---|---|
+| ROB-140-001 | Planned | Optional TNEF (`winmail.dat`) extraction module with strict budgets. | Outlook fixtures and no core dependency. |
+| ROB-140-002 | Planned | Optional AppleDouble metadata/resource-fork handling. | Apple Mail fixtures. |
+| ROB-140-003 | Planned | Optional iCalendar convenience parser with raw fallback. | Invite/update/cancel fixtures. |
+| ROB-140-004 | Planned | Optional S/MIME structure/decrypt/verify integration. | Cryptographic test vectors. |
+| ROB-140-005 | Planned | Optional PGP/MIME structure/decrypt/verify integration. | Cryptographic test vectors. |
+| ROB-140-006 | Planned | Evaluate BinHex and yEnc only from measured corpus demand. | Design decision and fixtures before implementation. |
+
+## 8. Execution order
+
+Items are implemented in this dependency order:
+
+1. `ROB-000`: diagnostics and parse contract.
+2. `ROB-001`: budgets, cancellation, and progress.
+3. `ROB-010` and `ROB-020`: input/header framing.
+4. `ROB-050`: MIME metadata, needed before correct multipart classification.
+5. `ROB-060`: multipart recovery.
+6. `ROB-070` and `ROB-080`: transfer and charset decoding.
+7. `ROB-030` and `ROB-040`: encoded and structured headers.
+8. `ROB-090`: nested and special MIME.
+9. `ROB-110`: replay/spooling once spans and diagnostics are stable.
+10. `ROB-100`: convenience body/attachment view on top of the complete tree.
+11. `ROB-120` and `ROB-130` run throughout; final audit closes them.
+12. `ROB-140` is demand-driven after the core target.
+
+Within a milestone, use ascending item order unless a reviewed dependency note
+is added to this document.
+
+## 9. Per-item implementation protocol
+
+Each Claude Code execution receives exactly one ledger ID and must:
+
+1. Read `CLAUDE.md`, this roadmap, the affected implementation, and related
+   tests before editing.
+2. Confirm the item does not require an unapproved public API break.
+3. Add focused tests that demonstrate failure before or alongside the repair.
+4. Make the smallest coherent implementation for only that item.
+5. Preserve existing raw round-trip and streaming behavior.
+6. Run focused tests, `go test ./...`, and `gofmt -l .`.
+7. Move the assigned row from `Planned` to `Review`, never directly to `Done`.
+8. Report changed files, semantic decisions, tests run, and remaining risks.
+9. Avoid commits, pushes, destructive Git operations, dependency upgrades, and
+   unrelated cleanup unless the item explicitly requires them.
+
+The reviewing orchestrator then independently:
+
+1. inspects the complete diff;
+2. checks public API and compatibility risk;
+3. runs focused and full verification;
+4. adds missing adversarial tests if necessary;
+5. marks the row `Done`, or returns the same item for correction.
+
+No subsequent ledger item starts while the current one remains
+`Implementing`, `Review`, or has unresolved review findings.
+
+## 10. Global release gates
+
+The parser may be described as “Angus-grade or better” only after:
+
+- all non-optional `ROB-000` through `ROB-130` items are `Done`;
+- every accepted recovery produces a stable diagnostic;
+- the Angus differential corpus has no unexplained loss of recoverable parts or
+  bytes;
+- fuzzing has no known panic, hang, unbounded allocation, or chunk-dependent
+  result;
+- child headers and decoded output are protected by budgets;
+- raw message and signed-content preservation are verified;
+- large-message streaming/spooling tests stay within documented memory and disk
+  ceilings;
+- all intentional differences from reference parsers are reviewed and recorded.
+
+Until those gates pass, documentation should say that `emlkit` is designed for
+robust production parsing but should not claim complete parity with proprietary
+large-provider parsers, whose behavior and corpora are not public.
+
+Codex reviewed the `ROB-001-004` corrections for [issue #1](https://github.com/saeroun-ai/emlkit/issues/1), inspected the actual diff, and independently passed the refused-child, stopped-child, and session-stop precedence regression tests before marking the item Done.
+
+Codex independently reviewed the `ROB-001-003` correction diff and regression fixtures for issue #1, reproduced the corrected 4095-byte framing boundary and Content-Disposition sink stop, and passed the full race suite, build, and formatting checks. The remaining vet analyzers also pass with the two pre-existing warning categories (`composites` and `stdmethods`) excluded; the ordinary vet command still reports those baseline findings. The item is Done.

@@ -65,6 +65,14 @@ func HeaderFromMap(m map[string][]string) Header {
 // ContentType parses the Content-Type header field.
 //
 // If no Content-Type is specified, it returns "text/plain".
+//
+// It parses whatever the field holds, under no budget. A Header belongs to
+// whoever holds it and may never have come from a parse at all, so there is no
+// configuration here to hold it to; Limits.MaxParameterCount and
+// Limits.MaxParameterSegments bound the parse engine's own reading of this
+// field, on the entities Parse produces, and are documented there. A caller
+// parsing a field of unknown provenance bounds it itself, or reaches it through
+// Parse.
 func (h *Header) ContentType() (t string, params map[string]string, err error) {
 	v := h.Get("Content-Type")
 	if v == "" {
@@ -80,6 +88,8 @@ func (h *Header) SetContentType(t string, params map[string]string) {
 
 // ContentDisposition parses the Content-Disposition header field, as defined in
 // RFC 2183.
+//
+// Like ContentType, it parses under no budget; see there.
 func (h *Header) ContentDisposition() (disp string, params map[string]string, err error) {
 	return parseHeaderWithParams(h.Get("Content-Disposition"))
 }

@@ -42,6 +42,44 @@ type Part struct {
 	total   int64 // total data bytes read already
 	err     error // error to return when n == 0
 	readErr error // read error observed from mr.bufReader
+
+	headerOffset int64 // offset of the part's header block in mr's input
+	bodyOffset   int64 // offset of the part's body in mr's input
+}
+
+// HeaderOffset returns the offset of the first byte of this part's header
+// block, relative to the first byte of the exact input this part's
+// MultipartReader was given.
+//
+// The reference point is that input and nothing wider. A multipart body is
+// usually a slice of some larger message, and this offset says nothing about
+// where that body sits in it; a caller that wants a position in the whole
+// message adds the position of the body itself.
+//
+// It is the position of the part itself: the first byte after the boundary
+// delimiter line that introduced it. A part with no header block at all — two
+// delimiter lines in a row — starts its body there too, so HeaderOffset and
+// BodyOffset are equal for it.
+//
+// The offset is always a real position. A Part exists only because the reader
+// parsed it out of that input, so there is no state in which its position is
+// unavailable and no returned value that means "unknown".
+//
+// The offset is the parser's own position, not how far ahead the reader has
+// buffered, so it does not depend on how the input chunks its reads.
+func (p *Part) HeaderOffset() int64 {
+	return p.headerOffset
+}
+
+// BodyOffset returns the offset of the first byte of this part's body,
+// relative to the first byte of the exact input this part's MultipartReader
+// was given, on the same terms as HeaderOffset.
+//
+// The offset describes that input as it was given to the reader. Nothing at
+// this layer decodes a transfer encoding, so it is the position of the part's
+// undecoded bytes, whatever Content-Transfer-Encoding its header declares.
+func (p *Part) BodyOffset() int64 {
+	return p.bodyOffset
 }
 
 // NewMultipartReader creates a new multipart reader reading from r using the
@@ -52,8 +90,10 @@ type Part struct {
 // parse such headers.
 func NewMultipartReader(r io.Reader, boundary string) *MultipartReader {
 	b := []byte("\r\n--" + boundary + "--")
+	src := &stickyErrorReader{r: r}
 	return &MultipartReader{
-		bufReader:        bufio.NewReaderSize(&stickyErrorReader{r: r}, peekBufferSize),
+		src:              src,
+		bufReader:        bufio.NewReaderSize(src, peekBufferSize),
 		nl:               b[:2],
 		nlDashBoundary:   b[:len(b)-2],
 		dashBoundaryDash: b[2:],
@@ -66,8 +106,12 @@ func NewMultipartReader(r io.Reader, boundary string) *MultipartReader {
 // interface's contract promises nothing about the return values of
 // Read calls after an error, yet this package does do multiple Reads
 // after error)
+//
+// It also counts the bytes it has delivered, which is how the reader above it
+// knows where in the input it is; see MultipartReader.offset.
 type stickyErrorReader struct {
 	r   io.Reader
+	n   int64 // bytes read from r so far
 	err error
 }
 
@@ -76,19 +120,48 @@ func (r *stickyErrorReader) Read(p []byte) (n int, _ error) {
 		return 0, r.err
 	}
 	n, r.err = r.r.Read(p)
+	r.n += int64(n)
 	return n, r.err
 }
 
+// offset returns how many bytes of its input the reader has consumed: what it
+// has pulled from the source, less what the buffered reader still holds ahead
+// of the parse cursor.
+//
+// Counting at the source and subtracting the buffer, rather than counting at
+// the cursor, is what makes the result the parser's own position: a reader
+// that hands out one byte at a time and one that hands out the whole message
+// at once fill the buffer differently but reach the same offset.
+func (r *MultipartReader) offset() int64 {
+	return r.src.n - int64(r.bufReader.Buffered())
+}
+
 func newPart(mr *MultipartReader) (*Part, error) {
-	bp := &Part{mr: mr}
-	if err := bp.populateHeaders(); err != nil {
+	// The delimiter line that introduced this part has already been consumed,
+	// so the reader is standing on the first byte of the part's header block.
+	bp := &Part{mr: mr, headerOffset: mr.offset()}
+	scan := &headerScan{lim: mr.limits}
+	if err := bp.populateHeaders(scan); err != nil {
+		// Only this reader's own budgets make a HeaderLimitError. The test is
+		// against the sentinel no reader can present, not against the ones it
+		// can, so an input that fails with ErrHeaderTooBig of its own stays the
+		// read failure it is.
+		if isBudgetExhausted(err) {
+			// The part is gone, so the position it had is reported with the
+			// failure rather than lost with it. The refused line or field is
+			// placed the same way: its offset within the block plus where the
+			// block itself began.
+			ref := scan.refusal
+			return nil, newHeaderLimitError(ref.kind, ref.limit, bp.headerOffset, bp.headerOffset+ref.offset)
+		}
 		return nil, err
 	}
+	bp.bodyOffset = mr.offset()
 	bp.r = partReader{bp}
 	return bp, nil
 }
 
-func (bp *Part) populateHeaders() error {
+func (bp *Part) populateHeaders(scan *headerScan) error {
 	// Two boundary lines in a row mean an empty part with no header block. If
 	// the next bytes already form a boundary, return an empty header instead
 	// of trying to parse the boundary line as a header.
@@ -97,7 +170,11 @@ func (bp *Part) populateHeaders() error {
 		return nil
 	}
 
-	header, err := ReadHeader(bp.mr.bufReader)
+	// readHeader rather than ReadHeaderLimits: the budget failure is caught by
+	// newPart, which knows where this part began and can say so. Converting it
+	// here would produce a HeaderLimitError with no position and then have to be
+	// unpicked.
+	header, err := readHeader(bp.mr.bufReader, scan)
 	if err == nil {
 		bp.Header = header
 	}
@@ -254,16 +331,86 @@ func (p *Part) Close() error {
 // MultipartReader's underlying parser consumes its input as needed. Seeking
 // isn't supported.
 type MultipartReader struct {
+	// src is the input, counting what it has delivered so that the reader can
+	// report where in it the parse cursor stands.
+	src       *stickyErrorReader
 	bufReader *bufio.Reader
 
 	currentPart *Part
 	partsRead   int
 	done        bool
 
+	// limits are the budgets of each part's header block, and of the framing
+	// lines between parts, or the zero value for no budget at all. See
+	// SetHeaderLimits.
+	limits HeaderLimits
+
+	// lineBuf accumulates one framing line while it is read under a line
+	// budget. It is reused across lines, so a reader holds one line at a time
+	// and nothing grows with the number of lines. It stays nil while no line
+	// budget is set, which is when framing lines are read the way they always
+	// were.
+	lineBuf []byte
+
 	nl               []byte // "\r\n" or "\n" (set after seeing first boundary line)
 	nlDashBoundary   []byte // nl + "--boundary"
 	dashBoundaryDash []byte // "--boundary--"
 	dashBoundary     []byte // "--boundary"
+}
+
+// SetMaxHeaderBytes limits the header block of every part this reader returns
+// to n bytes, counted as ReadHeaderLimit counts them: the block as it appears
+// in the input, through the empty line that ends it.
+//
+// The budget is per part and is never cumulative. Each part's header block is
+// read under the whole of n, so a message of many parts is not refused for the
+// headers its earlier parts already spent.
+//
+// A part whose header block exceeds n ends the iteration: NextPart returns a
+// *HeaderLimitError, and every later call returns io.EOF, because a block that
+// overran its budget leaves the input somewhere inside a part that this reader
+// cannot resynchronize to. The parts already returned stay valid and readable.
+//
+// n of zero or below is no budget, which is what a reader does by default.
+// SetMaxHeaderBytes must be called before the first NextPart; calling it later
+// has no effect on a part that has already been read.
+//
+// It sets one budget and leaves the others alone; SetHeaderLimits sets them all
+// at once.
+func (r *MultipartReader) SetMaxHeaderBytes(n int64) {
+	r.limits.MaxBytes = n
+}
+
+// SetHeaderLimits applies limits to every part this reader returns, and to the
+// framing lines it reads between them.
+//
+// The header budgets are per part and are never cumulative, on the terms
+// SetMaxHeaderBytes describes and HeaderLimits states: each part's header block
+// is read under the whole of every budget. A part whose header block exceeds one
+// ends the iteration, with a *HeaderLimitError naming the budget and the
+// position, and every later call returns io.EOF, because a block that overran
+// its budget leaves the input somewhere inside a part this reader cannot
+// resynchronize to. The parts already returned stay valid and readable.
+//
+// HeaderLimits.MaxLineBytes reaches further than the header blocks. It also
+// bounds the framing lines this reader has to materialize as lines: the
+// preamble lines before the first delimiter, the delimiter lines themselves, and
+// the empty line that separates a part's body from the delimiter that follows
+// it. A framing line past the budget ends the iteration the same way, with a
+// *LineLimitError saying where the line began. It does not bound a part's body,
+// which is opaque content this reader streams and never accumulates as a line.
+//
+// The framing line budget is also what decides how such a line is read at all.
+// With no line budget — the default, and what every caller had before this
+// existed — a framing line is read from one of the reader's buffers, so a line
+// longer than that buffer fails as it always has. With one, a framing line is
+// accumulated across buffers up to the budget, which is what makes the budget
+// the thing that decides, rather than a buffer size that was never meant to.
+//
+// SetHeaderLimits must be called before the first NextPart; calling it later has
+// no effect on a part that has already been read.
+func (r *MultipartReader) SetHeaderLimits(limits HeaderLimits) {
+	r.limits = limits
 }
 
 // NextPart returns the next part in the multipart or an error.
@@ -273,16 +420,104 @@ type MultipartReader struct {
 // errors.Is(err, io.EOF) or errors.Is(err, io.ErrUnexpectedEOF)), subsequent
 // calls return io.EOF immediately. This guards callers against infinite loops
 // on a body that ends without its closing boundary, whose underlying reader
-// stays errored.
+// stays errored. A header block that exceeded the budget set by
+// SetMaxHeaderBytes ends the iteration the same way, for the same reason: the
+// reader is standing inside a part whose extent it never learned. An ordinary
+// read failure does not end it, whatever that failure carries.
 func (r *MultipartReader) NextPart() (*Part, error) {
 	if r.done {
 		return nil, io.EOF
 	}
 	p, err := r.nextPart()
-	if err != nil && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
-		r.done = true
+	if err != nil {
+		if _, refused := HeaderLimit(err); refused {
+			r.done = true
+		} else if _, refused := LineLimit(err); refused {
+			r.done = true
+		} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			r.done = true
+		}
 	}
 	return p, err
+}
+
+// readFramingLine reads the next line of multipart framing — a preamble line, a
+// delimiter line, or the empty line before one — and returns it exactly as
+// bufio.Reader.ReadSlice would, terminator included.
+//
+// With no line budget it is ReadSlice, unchanged, down to which inputs it turns
+// away and with which error: a line longer than the reader's buffer fails with
+// bufio.ErrBufferFull, as it always has. That is deliberate. A budget is what
+// should decide how long a line may be, and where there is no budget there is
+// nothing to change the long-standing answer to.
+//
+// With one, the line is accumulated across buffers into lineBuf until it ends or
+// until it passes the budget, and passing it returns a *LineLimitError saying
+// where the line began. Nothing beyond the budget is ever retained: the check
+// happens as each buffer arrives, so what is held is at most one buffer past it.
+//
+// The returned slice is valid until the next call, which is the same contract
+// ReadSlice's result carries.
+func (r *MultipartReader) readFramingLine() ([]byte, error) {
+	if r.limits.MaxLineBytes <= 0 {
+		return r.bufReader.ReadSlice('\n')
+	}
+
+	// Where this line begins, so that a refusal reports a real position in the
+	// reader's input rather than where the failure was noticed.
+	start := r.offset()
+
+	line := r.lineBuf[:0]
+	// data is the bytes of this line that are not its terminator, counted the
+	// way headerScan counts them, including a '\r' that turns out not to have
+	// been the start of one.
+	var data int64
+	// pendingCR records a '\r' that ended a full buffer. It may be the first
+	// byte of a "\r\n" whose '\n' is in the next read, or an ordinary byte of
+	// the line, and only that next read can say which, so it is held back
+	// uncharged until then. Charging it early would refuse a line whose content
+	// is exactly the budget because its terminator straddled a buffer edge.
+	// This is headerScan.classify's rule, applied to framing lines.
+	var pendingCR bool
+	for {
+		l, err := r.bufReader.ReadSlice('\n')
+
+		n := int64(len(l))
+		if pendingCR {
+			pendingCR = false
+			if len(l) == 0 || l[0] != '\n' {
+				// Followed by something other than '\n', or by nothing at
+				// all: it was content.
+				n++
+			}
+		}
+		switch {
+		case err == nil:
+			n--
+			if len(l) >= 2 && l[len(l)-2] == '\r' {
+				n--
+			}
+		case err == bufio.ErrBufferFull:
+			// No terminator yet. A trailing '\r' may begin one, so it is held
+			// back rather than charged.
+			if len(l) > 0 && l[len(l)-1] == '\r' {
+				pendingCR = true
+				n--
+			}
+		}
+		if n > r.limits.MaxLineBytes-data {
+			r.lineBuf = line
+			return nil, newLineLimitError(r.limits.MaxLineBytes, start)
+		}
+		data += n
+
+		line = append(line, l...)
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		r.lineBuf = line
+		return line, err
+	}
 }
 
 func (r *MultipartReader) nextPart() (*Part, error) {
@@ -294,7 +529,19 @@ func (r *MultipartReader) nextPart() (*Part, error) {
 	}
 	expectNewPart := false
 	for {
-		line, err := r.bufReader.ReadSlice('\n')
+		line, err := r.readFramingLine()
+
+		// A framing line past its budget is this reader's own refusal, and is
+		// returned as itself rather than wrapped: it is not a failure of the
+		// input, and nothing below it should be asked to explain it. The exact
+		// dynamic type and this package's own mark are what identify it, so an
+		// input that fails with ErrLineTooBig, or with a LineLimitError of its
+		// own, is the ordinary read failure it is — including a typed nil of
+		// that type, which passes the type assertion and would be dereferenced
+		// by the mark if it were not excluded first.
+		if e, ok := err.(*LineLimitError); ok && e != nil && e.fromParser {
+			return nil, e
+		}
 
 		if err == io.EOF && r.isFinalBoundary(line) {
 			// If the buffer ends in "--boundary--" without the
