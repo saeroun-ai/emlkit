@@ -139,9 +139,10 @@ at the start of the roadmap, not claims that every existing path is defective:
   (`ROB-000-003`, `ROB-060-005`).
 - Existing quoted-printable and Base64 repairs are not surfaced as structured
   diagnostics (`ROB-000`, `ROB-070`).
-- Unknown charset and unknown transfer encoding warnings are not accumulated
+- ~~Unknown charset and unknown transfer encoding warnings are not accumulated
   independently, and the `mail` convenience layer does not treat both
-  consistently (`ROB-000-005`, `ROB-100-006`).
+  consistently~~ — accumulated independently since `ROB-000-005`, and treated
+  alike by `mail.Reader` since `ROB-100-006`.
 - Limits are not yet unified across field count/size, line size, nesting, part
   count, decoded expansion, and diagnostics (`ROB-001`).
 - Cancellation and repeated `(0, nil)` reader progress handling are not yet a
@@ -915,7 +916,23 @@ Each applicable test asserts:
 | ROB-100-003 | Planned | Select `multipart/alternative` bodies by caller capability without discarding alternatives. | Nested alternative fixtures. |
 | ROB-100-004 | Planned | Resolve `multipart/related` inline resources by normalized Content-ID/Location. | HTML CID cases. |
 | ROB-100-005 | Planned | Represent embedded messages, calendars, zero-byte files, duplicates, and unknown media types. | Typed-view tests. |
-| ROB-100-006 | Planned | Make unknown charset/CTE nonfatal in `mail.Reader` while retaining diagnostics. | Existing inconsistency regression tests. |
+| ROB-100-006 | Done | Make unknown charset/CTE nonfatal in `mail.Reader` while retaining diagnostics. | Existing inconsistency regression tests. |
+
+`ROB-100-006` ([issue #1](https://github.com/saeroun-ai/emlkit/issues/1)) closed
+the inconsistency the gap snapshot recorded: `mail.CreateReader` returned a nil
+`Reader` for a root with an unknown transfer encoding, and `mail.Reader.NextPart`
+dropped such a part, although `message.Read` and the multipart iterator returned
+a usable entity with the warning. Both now accept `IsUnknownEncoding` exactly as
+they accepted `IsUnknownCharset`, but only together with a non-nil entity and
+never inside a `FatalError`, so a sink stop or resource budget that wraps either
+warning still ends traversal — and a `(nil, FatalError)` wrapping the charset
+warning, which used to be dereferenced, is now returned. Evidence:
+`mail/reader_warning_test.go` (raw root body, a warned child between readable
+siblings with iteration continuing, unknown charset and both-unknown unchanged,
+`Parse` + `NewReader` keeping both diagnostics at paths `[1]` and `[2]`, sink
+stops wrapping either warning, `MaxPartCount` still fatal, header and body I/O
+errors still errors). The predicates themselves are unchanged; `ROB-120-007`
+still owns their behavior on hostile error graphs.
 
 ### ROB-110 — Raw storage, replay, and spooling
 
@@ -1020,6 +1037,13 @@ Items are implemented in this dependency order:
 Within a milestone, use ascending item order unless a reviewed dependency note
 is added to this document.
 
+**Exception — `ROB-100-006`.** It was taken ahead of `ROB-010` through `ROB-090`
+at the user's request, as an independent compatibility fix
+([issue #1](https://github.com/saeroun-ai/emlkit/issues/1)): it changes only how
+`mail.Reader` classifies the two decoding warnings the `message` layer already
+returns, and depends on nothing those milestones introduce. It does not advance,
+start or complete any other `ROB-100` item or any earlier milestone.
+
 ## 9. Per-item implementation protocol
 
 Each Claude Code execution receives exactly one ledger ID and must:
@@ -1070,3 +1094,5 @@ large-provider parsers, whose behavior and corpora are not public.
 Codex reviewed the `ROB-001-004` corrections for [issue #1](https://github.com/saeroun-ai/emlkit/issues/1), inspected the actual diff, and independently passed the refused-child, stopped-child, and session-stop precedence regression tests before marking the item Done.
 
 Codex independently reviewed the `ROB-001-003` correction diff and regression fixtures for issue #1, reproduced the corrected 4095-byte framing boundary and Content-Disposition sink stop, and passed the full race suite, build, and formatting checks. The remaining vet analyzers also pass with the two pre-existing warning categories (`composites` and `stdmethods`) excluded; the ordinary vet command still reports those baseline findings. The item is Done.
+
+Codex reviewed `ROB-100-006` against issue #1, verified the returned-object and fatal-precedence guards and their public-API regression tests, and independently confirmed root/child unknown-CTE preservation and the following sibling with the original reproduction program. Full tests, build, and formatting checks pass. The item is Done; callers must still handle a fatal result from Parse before constructing a mail reader.

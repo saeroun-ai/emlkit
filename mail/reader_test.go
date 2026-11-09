@@ -14,10 +14,13 @@ func ExampleReader() {
 	// Let's assume r is an io.Reader that contains a mail.
 	var r io.Reader
 
-	// Create a new mail reader
+	// Create a new mail reader. An error that comes with a reader is a warning
+	// (unknown transfer encoding or charset); one without a reader is not.
 	mr, err := mail.CreateReader(r)
-	if err != nil {
+	if mr == nil {
 		log.Fatal(err)
+	} else if err != nil {
+		log.Printf("warning: %v", err)
 	}
 
 	// Read each mail's part
@@ -25,8 +28,12 @@ func ExampleReader() {
 		p, err := mr.NextPart()
 		if err == io.EOF {
 			break
-		} else if err != nil {
+		} else if p == nil {
 			log.Fatal(err)
+		} else if err != nil {
+			// The part is usable; its body is what the stage with no decoder
+			// left undecoded.
+			log.Printf("warning: %v", err)
 		}
 
 		switch h := p.Header.(type) {

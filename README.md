@@ -33,7 +33,6 @@ import (
 	"io"
 	"log"
 
-	message "github.com/saeroun-ai/emlkit"
 	"github.com/saeroun-ai/emlkit/mail"
 )
 
@@ -41,9 +40,12 @@ func main() {
 	var r io.Reader // an io.Reader containing a mail message
 
 	mr, err := mail.CreateReader(r)
-	// An unknown-charset error is not fatal: the reader is still usable.
-	if err != nil && !message.IsUnknownCharset(err) {
-		log.Fatal(err)
+	if mr == nil {
+		log.Fatal(err) // no usable reader, whatever the error looks like
+	} else if err != nil {
+		// A warning (unknown transfer encoding or charset): the reader is
+		// still usable.
+		log.Printf("warning: %v", err)
 	}
 	defer mr.Close()
 
@@ -51,14 +53,23 @@ func main() {
 		p, err := mr.NextPart()
 		if err == io.EOF {
 			break
+		} else if p == nil {
+			log.Fatal(err) // structural, I/O or fatal error: stop
 		} else if err != nil {
-			log.Fatal(err)
+			// A warning: the part is usable, and its body is what the stage
+			// with no decoder left undecoded. Iteration continues.
+			log.Printf("warning: %v", err)
 		}
 
 		switch h := p.Header.(type) {
 		case *mail.InlineHeader:
 			// Message text (plain and/or HTML).
-			b, _ := io.ReadAll(p.Body)
+			b, err := io.ReadAll(p.Body)
+			if err != nil {
+				// Reading a body can fail too (I/O, truncation, a budget):
+				// b holds what was read before it, but it is not complete.
+				log.Fatal(err)
+			}
 			log.Printf("Got text: %v", string(b))
 		case *mail.AttachmentHeader:
 			// An attachment.
@@ -68,6 +79,38 @@ func main() {
 	}
 }
 ```
+
+### Reading under resource budgets
+
+`mail.CreateReader` and `message.Read` bound only the message header (1 MiB).
+To hold every entity of an untrusted message to the parser's budgets and to
+collect structured diagnostics, parse with `message.Parse` and hand the entity
+to `mail.NewReader`:
+
+```go
+session, e, err := message.Parse(r, nil) // nil: default Limits
+if e == nil || message.IsFatal(err) {
+	log.Fatal(err) // no usable message, or a budget/sink stopped the parse
+}
+mr := mail.NewReader(e)
+// ...iterate mr exactly as above; a FatalError from NextPart ends it...
+for _, d := range session.Diagnostics() {
+	log.Println(d) // every defect observed, with its MIME path
+}
+```
+
+Errors and diagnostics answer different questions, so read both: an error says
+whether a scope could continue, the session says what was observed. `Parse`
+enforces **eight** budgets today — `MaxHeaderBytes`, `MaxHeaderFieldBytes`,
+`MaxHeaderCount`, `MaxLineBytes`, `MaxParameterCount`, `MaxParameterSegments`,
+`MaxMIMEDepth` and `MaxPartCount`. The other `Limits` fields — total input
+bytes, encoded/decoded body bytes, the diagnostic cap and the rest — are
+validated but **not enforced yet**, and there is no cancellation support yet.
+If you need an input byte cap, enforce it with a reader that fails with an
+explicit overflow error once the cap is passed — not one that ends the input
+with a successful `io.EOF`, which would turn a truncated message into what looks
+like a complete one. See
+[docs/conformance.md](docs/conformance.md).
 
 ## Features
 
@@ -111,7 +154,7 @@ or parse mbox archives.
 
 **Guarantees** — verbatim header round-trip (DKIM), body byte-preservation when
 the encoding is unchanged, and an error-with-usable-result contract where unknown
-charset/encoding are warnings rather than failures.
+charset/encoding are warnings rather than failures, in `message` and `mail` alike.
 ([details →](docs/conformance.md#behavioral-guarantees))
 
 ## License

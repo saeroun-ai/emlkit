@@ -111,9 +111,22 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
 
 ### `mail` convenience layer
 
-- **Unknown-charset parts are surfaced** (raw body, with the error forwarded) so
-  iteration continues. Note an asymmetry: an unknown *transfer-encoding* part does
-  stop `NextPart`. ([`mail/reader.go`](../mail/reader.go) · `NextPart`)
+- **Unknown transfer-encoding and unknown-charset parts are surfaced** alike, as
+  in the `message` layer: `CreateReader` returns a usable `Reader` and `NextPart`
+  a usable `Part` together with the `IsUnknownEncoding` / `IsUnknownCharset`
+  warning (the charset one when both stages are unknown), the body is what the
+  skipped stage left undecoded, and the next `NextPart` continues with the
+  following sibling. An error that matches a warning predicate but comes without
+  a usable result, and a `FatalError` even when it wraps a warning, are not
+  warnings: the call returns no `Reader` / `Part`. A `FatalError` from a
+  `Parse` entity — a budget or a `DiagnosticSink` stop — is the session's stop,
+  so later calls repeat it; other errors, such as an I/O failure, carry no such
+  guarantee.
+  ([`mail/reader.go`](../mail/reader.go) · `recoverable`)
+- **`CreateReader` bounds only the message header**, through `message.Read`. For
+  the per-entity budgets and structured diagnostics, use `message.Parse` and pass
+  the entity to `mail.NewReader`; stop rather than iterate when `Parse` itself
+  returns a `FatalError`. ([`mail/reader.go`](../mail/reader.go) · `CreateReader`)
 - **Ambiguous parts default to attachments.** A part is treated as inline only if
   its disposition is `inline`, or it is `text/*` without an explicit `attachment`
   disposition; everything else is an attachment. ([`mail/reader.go`](../mail/reader.go) · `NextPart`)
@@ -289,10 +302,12 @@ These are deliberate boundaries, each with a reason.
   the input (case-insensitively), the original undecoded body bytes are copied
   through verbatim instead of decoded and re-encoded — preserving exact bytes for
   body hashes. ([`entity.go`](../entity.go) · `writeBodyTo`)
-- **Error with a usable result.** `Read`, `New`, and `mail.CreateReader` may return
-  an error that satisfies `IsUnknownCharset` or `IsUnknownEncoding` **together with
-  a fully usable** `Entity` / `Reader`. Treat these predicates as warnings (the raw
-  body is still readable); bail only on other errors.
+- **Error with a usable result.** `Read`, `New`, `MultipartReader.NextPart`,
+  `mail.CreateReader` and `mail.Reader.NextPart` may return an error that
+  satisfies `IsUnknownCharset` or `IsUnknownEncoding` **together with a fully
+  usable** `Entity` / `Reader` / `Part`. Treat these predicates as warnings only
+  when the result is non-nil and the error is not `IsFatal` (the undecoded body
+  is still readable); bail on every other error.
   ([`charset.go`](../charset.go) · `IsUnknownCharset`, [`encoding.go`](../encoding.go) · `IsUnknownEncoding`, [`mail/reader.go`](../mail/reader.go) · `CreateReader`)
 - **Copy-on-write headers.** Writer constructors copy the caller's `Header` before
   mutating it, so building a writer never changes the caller's view.
