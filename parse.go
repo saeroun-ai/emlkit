@@ -1,6 +1,9 @@
 package message
 
-import "io"
+import (
+	"context"
+	"io"
+)
 
 // ParseOptions configures Parse.
 //
@@ -252,7 +255,65 @@ type ParseOptions struct {
 // whole session, so every later scope of this parse — MultipartReader.NextPart
 // and Entity.Walk — reports the identical error and recovers nothing further,
 // while everything already returned stays valid.
+//
+// Parse cannot be cancelled. It is ParseContext with no context; see there for
+// a parse that can be.
 func Parse(r io.Reader, opts *ParseOptions) (*ParseSession, *Entity, error) {
+	return parse(context.Background(), r, opts)
+}
+
+// ParseContext is Parse for a parse that ctx can cancel, or give a deadline.
+// Everything Parse documents holds for it, and only what cancellation adds is
+// described here; cancel.go has the full account.
+//
+// A nil ctx, and one whose Done method returns nil, such as
+// context.Background, cancel nothing: ParseContext is then exactly Parse. Read,
+// ReadWithOptions and New have no context and are unchanged.
+//
+// The context governs the whole lazy life of the parse, not only this call:
+// the body and the parts of the message are read after ParseContext returns,
+// and each of those reads belongs to the parse ctx was given for. The session
+// keeps ctx for as long as the parse can be read, so cancelling it — as the
+// usual defer cancel() does — is also how a caller ends the reading of a
+// message it has abandoned.
+//
+// Options that cannot be resolved are reported first, exactly as by Parse and
+// before ctx is consulted at all, so a configuration error is never hidden by a
+// context that is already done. Otherwise a context already done when
+// ParseContext is called reads nothing from r and returns no entity, together
+// with the stop below.
+//
+// Once ctx is done, the parse ends with a FatalError that records no diagnostic
+// and carries none: the caller cancelling a parse is not a defect of the
+// message, as a DiagnosticSink stopping it is not. errors.Is finds ctx.Err()
+// through it — context.Canceled or context.DeadlineExceeded — and finds the
+// context's cause too, when context.WithCancelCause or a similar constructor
+// gave it one; as everywhere, errors.Is compares a cause of a type that is not
+// comparable only through that cause's own Is method. The stop belongs to the
+// whole session, like every session-wide stop: the first one published is the
+// one every scope of the parse reports from then on, so a sink or a budget that
+// stopped the parse before the cancellation was seen stays what is reported.
+//
+// Cancellation is seen only at the points cancel.go lists — before and after
+// every read of r and of every entity's Body, at every scope boundary, and at
+// the work boundaries of reading a structured header field — and never
+// interrupts anything. A source blocked in Read keeps ParseContext, or the
+// read of a Body, blocked until the source returns. ParseContext never closes
+// r, never changes a deadline of it, and starts no goroutine to watch ctx;
+// closing a source the caller owns from a context.AfterFunc of the caller's
+// own is how such a read is made to return.
+//
+// Before a read, a cancellation already seen returns no bytes and the stop,
+// without calling the reader below. After a read, the bytes it returned are
+// delivered, and if the cancellation is seen at that point the stop replaces
+// whatever error came with them, io.EOF included. Everything already returned
+// stays valid, as it does for every FatalError.
+func ParseContext(ctx context.Context, r io.Reader, opts *ParseOptions) (*ParseSession, *Entity, error) {
+	return parse(ctx, r, opts)
+}
+
+// parse is Parse and ParseContext. ctx may be nil, which cancels nothing.
+func parse(ctx context.Context, r io.Reader, opts *ParseOptions) (*ParseSession, *Entity, error) {
 	var o ParseOptions
 	if opts != nil {
 		o = *opts
@@ -275,6 +336,9 @@ func Parse(r io.Reader, opts *ParseOptions) (*ParseSession, *Entity, error) {
 	}
 
 	session := newParseSessionWithConfig(cfg, diagOpts)
+	// Before anything can see the session: the context is fixed for the life
+	// of the parse. See cancel.go.
+	session.setContext(ctx)
 
 	e, parseErr := readWithOptions(r, &read, session)
 	return session, e, parseErr

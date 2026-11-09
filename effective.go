@@ -146,6 +146,16 @@ func (d *dispositionSnapshot) get() (string, map[string]string, error) {
 		return disp, params, err
 	}
 	r := d.ctx.interpretDisposition(d.raw)
+	if r.cancelled {
+		// The parse's context was cancelled while the field was being read, so
+		// there is no interpretation to publish: nothing is cached, nothing is
+		// recorded, and the caller is given the parse's stop. It is built after
+		// the lock is released, since building it calls the context's methods. A
+		// later call reads the field again and, the context staying done, is
+		// cancelled again at once. See cancel.go.
+		d.mu.Unlock()
+		return "", nil, d.ctx.session.cancelErr()
+	}
 	d.disp, d.params, d.err, d.done = r.value, r.params, r.err, true
 	d.mu.Unlock()
 
@@ -293,10 +303,19 @@ func (e *Entity) EffectiveContentDisposition() (disp string, params map[string]s
 // for a DiagnosticSink that asked the parse to stop, or for a budget whose scope
 // is the whole parse, such as Limits.MaxPartCount or Limits.MaxInputBytes.
 //
+// For a parse started by ParseContext, it also reports the cancellation of the
+// parse's context once that context is done: the cancellation is then published
+// as the stop, unless another stop was published first, which stays the one
+// reported. The context's methods run with no lock held. See ParseContext.
+//
 // It reports only a stop of the whole parse. A failure confined to one scope —
 // a child header past a budget, which ends one multipart iterator — is reported
-// by that scope and not here. It is read-only: nothing about it can stop a parse
-// or clear a stop.
+// by that scope and not here. It offers no way to request a stop or to clear
+// one. The one thing a call can write is a cancellation the caller already
+// requested through the context of ParseContext: observing that the context is
+// done publishes it, as any other check of the parse would, when no stop was
+// published first. A parse whose context is live, or that has none, is not
+// changed by calling it.
 //
 // It exists for a layer that iterates an entity without going through the
 // parser's own scopes, as mail.Reader does for a message with a single part,

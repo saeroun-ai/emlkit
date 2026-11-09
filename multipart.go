@@ -2,6 +2,7 @@ package message
 
 import (
 	"io"
+	"sync"
 
 	"github.com/saeroun-ai/emlkit/textproto"
 )
@@ -144,13 +145,37 @@ type multipartBody struct {
 	header Header
 	parts  []*Entity
 
+	// mu guards the lifecycle below — reserving the setup, publishing the pipe,
+	// closing, and the iteration index — and nothing else. It is never held
+	// while foreign code can run: not across createWriter, whose interpretation
+	// of the header can call the configured CharsetReader, nor while the pipe
+	// is read or written, nor while a part's body is read. So a Close — from
+	// another goroutine, or from inside such a hook — never waits for the Read
+	// it closes (ROB-001-006).
+	mu sync.Mutex
+
 	r *io.PipeReader
-	w *Writer
 
 	// err is the sticky failure of setting the body up: the writer for this
 	// header could not be created, so no worker was started and no pipe was
-	// published. Every Read reports it again.
+	// published. It is only published while the body is not closed, and every
+	// Read reports it again from then on, Close or not.
 	err error
+
+	// closed is set by Close, once and for good. A body closed before its
+	// setup's outcome was published never publishes one — no pipe, no worker,
+	// no setup failure; see Close.
+	closed bool
+
+	// setup and closing are made together, by the Read that reserves the
+	// setup, and are nil before it. setup is closed once that Read has
+	// published its outcome, or found the body closed and published nothing;
+	// closing is closed by the first Close. A concurrent Read waits for
+	// whichever comes first, so a Close wakes it without waiting for a
+	// CharsetReader the setup may be blocked in. Each is closed exactly once,
+	// under mu, and neither is ever reset.
+	setup   chan struct{}
+	closing chan struct{}
 
 	i int
 }
@@ -163,55 +188,173 @@ type multipartBody struct {
 // — the error is kept and returned by this and every later Read, rather than
 // leaving a pipe that no worker will ever write to, on which a second Read
 // would block for ever. A failure while the worker writes the parts — a part
-// the writer refuses — closes the pipe with that error, which every later Read
-// then reports, and the worker exits.
+// the writer refuses — closes the pipe with that error, which later Reads
+// then report until the body is closed, and the worker exits.
+//
+// The writer is created with no lock held, because interpreting the header can
+// call the configured CharsetReader, which may block or call Close. The first
+// terminal state published wins, and stays: a setup failure published before
+// any Close is reported by every later Read, Close or not; a Close that comes
+// before the setup's outcome is published wins over that outcome, whether the
+// writer was created or failed — it is discarded, no pipe, worker or failure is
+// published, and this Read and every later one return io.ErrClosedPipe. A Read
+// made meanwhile by another goroutine waits for the outcome, or for a Close,
+// whichever comes first: a Close wakes it at once with io.ErrClosedPipe, even
+// while the setting-up Read is still inside a CharsetReader, which cannot be
+// interrupted and returns only when the hook does. A CharsetReader that reads
+// this same body from inside that hook is not supported, as reading a body
+// from inside its own setup never was.
+//
+// The first Read ends the iteration NextPart offers, as it always has.
 func (m *multipartBody) Read(p []byte) (n int, err error) {
-	if m.err != nil {
-		return 0, m.err
-	}
-	if m.r == nil {
-		r, w := io.Pipe()
-
-		mw, err := createWriter(w, &m.header)
-		if err != nil {
-			r.Close()
-			w.Close()
-			m.err = err
+	m.mu.Lock()
+	for {
+		if m.err != nil {
+			err := m.err
+			m.mu.Unlock()
 			return 0, err
 		}
-		m.r, m.w = r, mw
-
-		// Prevent calls to NextPart to succeed
-		m.i = len(m.parts)
-
-		go func() {
-			if err := m.writeBodyTo(m.w); err != nil {
-				w.CloseWithError(err)
-				return
-			}
-
-			if err := m.w.Close(); err != nil {
-				w.CloseWithError(err)
-				return
-			}
-
-			w.Close()
-		}()
+		if r := m.r; r != nil {
+			m.mu.Unlock()
+			return r.Read(p)
+		}
+		if m.closed {
+			m.mu.Unlock()
+			return 0, io.ErrClosedPipe
+		}
+		setup := m.setup
+		if setup == nil {
+			break
+		}
+		// Another Read is setting the body up. Its outcome is published before
+		// setup is closed, and Close sets m.closed before it closes the closing
+		// channel, so the next pass finds whichever woke this one. No goroutine
+		// is started for the wait.
+		closing := m.closing
+		m.mu.Unlock()
+		select {
+		case <-setup:
+		case <-closing:
+		}
+		m.mu.Lock()
 	}
 
-	return m.r.Read(p)
+	// This Read reserves the setup, and m is not touched while the lock is
+	// released.
+	//
+	// The writer is given a struct copy of the header, as it was always given
+	// m.header itself. A textproto.Header holds its fields in a map and a slice
+	// that such a copy shares — with m.header and with the entity's Header,
+	// which NewMultipart built from the same value, and with the caller's value
+	// it was given — so the one edit createWriter can make, filling in a
+	// boundary for a header that has none or one the writer cannot use, reaches
+	// those headers through the shared map and backing array, as it did before
+	// this change. That is long-standing and is not changed here; CreateWriter
+	// and CreatePart, which copy the header first, are the public writers.
+	setup, closing := make(chan struct{}), make(chan struct{})
+	m.setup, m.closing = setup, closing
+	header := m.header
+	m.mu.Unlock()
+
+	pr, pw := io.Pipe()
+	mw, err := createWriter(pw, &header)
+
+	// The outcome is published, and setup closed, under mu, so a waiting Read
+	// finds it; setup is closed before this Read goes on to read the pipe, so
+	// nothing waits behind that. A Close that came first wins over the
+	// outcome, a failure included: nothing is published.
+	m.mu.Lock()
+	switch {
+	case m.closed:
+		close(setup)
+		m.mu.Unlock()
+		pr.Close()
+		pw.Close()
+		return 0, io.ErrClosedPipe
+	case err != nil:
+		m.err = err
+		close(setup)
+		m.mu.Unlock()
+		pr.Close()
+		pw.Close()
+		return 0, err
+	}
+	m.r = pr
+
+	// Prevent calls to NextPart to succeed
+	m.i = len(m.parts)
+
+	// The worker is given what it writes rather than reading it from m, and it
+	// never takes mu: the parts are fixed at construction.
+	parts := m.parts
+	go func() {
+		if err := writeParts(mw, parts); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+
+		if err := mw.Close(); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+
+		pw.Close()
+	}()
+	close(setup)
+	m.mu.Unlock()
+
+	return pr.Read(p)
 }
 
-// Close implements io.Closer.
+// Close implements io.Closer. It ends both what this body offers: the
+// iteration over its parts, which then reports io.EOF from NextPart — the parts
+// already returned stay the caller's — and Body, which then returns
+// io.ErrClosedPipe from every Read, as the pipe it reads does once closed. The
+// first terminal state published wins: a body whose setup failure was
+// published before the Close keeps returning that failure, as it always has,
+// while a Close that comes before the setup's outcome is published wins over
+// it, a failure included.
+//
+// Close never waits for a Read. A body closed before its first Read, or while
+// its first Read is still creating the writer — inside a CharsetReader the
+// header's interpretation called, for example — never publishes a pipe, a
+// worker or a setup failure, and a Read waiting for that setup returns
+// io.ErrClosedPipe at once; the Read inside the CharsetReader returns it once
+// the hook returns. A body closed while its worker is writing makes the
+// worker's next write to the pipe fail, and the worker then exits: that is how
+// a caller that stops reading early releases it, and a Close from a
+// context.AfterFunc of the caller's own is safe, since Close may run
+// concurrently with Read. What Close cannot do is make a part's own body
+// return: a worker blocked reading a part whose source is blocked exits only
+// once that read returns, so such a source needs its owner's cooperation. Close
+// does not close the parts or their sources, which stay the caller's. A body
+// abandoned partway without Close keeps its worker waiting on the pipe, holding
+// the parts, for as long as the process runs.
+//
+// WriteTo writes the parts itself, without the pipe, and is not affected by
+// Close. Close is idempotent and returns nil.
 func (m *multipartBody) Close() error {
-	if m.r != nil {
-		m.r.Close()
+	m.mu.Lock()
+	if !m.closed {
+		m.closed = true
+		if m.closing != nil {
+			close(m.closing)
+		}
+	}
+	m.i = len(m.parts)
+	r := m.r
+	m.mu.Unlock()
+
+	if r != nil {
+		r.Close()
 	}
 	return nil
 }
 
 // NextPart implements MultipartReader.
 func (m *multipartBody) NextPart() (*Entity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.i >= len(m.parts) {
 		return nil, io.EOF
 	}
@@ -222,7 +365,19 @@ func (m *multipartBody) NextPart() (*Entity, error) {
 }
 
 func (m *multipartBody) writeBodyTo(w *Writer) error {
-	for _, p := range m.parts {
+	return writeParts(w, m.parts)
+}
+
+// writeParts writes parts into w, one CreatePart each.
+//
+// A part from ParseContext whose parse has been cancelled is not started: its
+// header is not written, and the parse's stop is returned. A part already
+// being written stops at the next read of its body, as any read of it does.
+func writeParts(w *Writer, parts []*Entity) error {
+	for _, p := range parts {
+		if stop := p.parse.session.cancelErr(); stop != nil {
+			return stop
+		}
 		pw, err := w.CreatePart(p.Header)
 		if err != nil {
 			return err

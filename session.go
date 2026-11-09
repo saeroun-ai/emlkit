@@ -1,6 +1,7 @@
 package message
 
 import (
+	"context"
 	"sync"
 
 	"github.com/saeroun-ai/emlkit/textproto"
@@ -156,6 +157,14 @@ type ParseSession struct {
 	// headerLimits; see limit_header_total.go.
 	headerTotal     *textproto.HeaderBudget
 	headerTotalInit bool
+
+	// cancelCtx and cancelDone are the context of a parse started by
+	// ParseContext and the channel its Done method returned, or nil for a parse
+	// that cannot be cancelled. They are written once, by setContext, before the
+	// session is shared, and never afterwards, so they are read without the lock.
+	// No method of cancelCtx is called with a session lock held. See cancel.go.
+	cancelCtx  context.Context
+	cancelDone <-chan struct{}
 }
 
 // newParseSession returns an empty session that records the profile and
@@ -344,6 +353,15 @@ func (s *ParseSession) headerBudget(l Limits) *textproto.HeaderBudget {
 // nor hide a stop already published: a budget's stop is read from fatalErr as it
 // always was, and a failed sink's is returned here as it always was.
 //
+// Once the context of a parse started by ParseContext is done, record omits
+// every request — nothing is retained and the sink is not called — and returns
+// the session's stop: the caller ended the parse, so nothing more is reported
+// to it. That is checked before the delivery lock is taken and again once it
+// is held, before a slot is claimed, so a request that waited behind a slow
+// sink while the context was cancelled is omitted too. A delivery already
+// running when the context is cancelled is left as it was: its diagnostic is
+// recorded and its sink call runs to its end. See cancel.go.
+//
 // record is a no-op on a nil session, and returns nil.
 //
 // Concurrency: record may be called from several goroutines. Calls on one
@@ -358,10 +376,32 @@ func (s *ParseSession) record(d Diagnostic) error {
 		return nil
 	}
 
+	// A parse whose context has been cancelled records nothing further: the
+	// caller ended it, so no diagnostic is retained or delivered to a sink from
+	// then on, and the request returns the session's stop. A diagnostic
+	// recorded before this point stays recorded. See cancel.go.
+	//
+	// It is asked twice. First before waiting for the delivery lock, where the
+	// stop can be built at once. Then again once the lock is held, under mu and
+	// before a slot is claimed or anything is retained: a request that waited
+	// behind a delivery to a slow sink may find the context cancelled meanwhile,
+	// and is then omitted like any other. That second look only receives from
+	// the Done channel; the stop is built after both locks are released, since
+	// building it calls the context's methods. A delivery already running when
+	// the context is cancelled is not interrupted.
+	if stop := s.cancelStop(); stop != nil {
+		return stop
+	}
+
 	s.deliver.Lock()
-	defer s.deliver.Unlock()
 
 	s.mu.Lock()
+	if s.cancelSignalled() {
+		s.mu.Unlock()
+		s.deliver.Unlock()
+		return s.cancelStop()
+	}
+	defer s.deliver.Unlock()
 	sink, failed := s.sink, s.sinkFailure
 	// A failed sink implies a published stop, so this is the identity every
 	// other scope of the parse is reporting.
@@ -456,10 +496,14 @@ func (s *ParseSession) publishStop(f FatalError) FatalError {
 // remains the backstop for a scope that does not check: it is handed the same
 // fatal error back rather than being allowed to continue quietly.
 //
-// It is deliberately read-only and unexported. A session reports what the
-// parser observed, so a caller can neither stop a parse through it nor clear a
-// stop; asking for a stop is what a DiagnosticSink is for. Entity.ParseStop is
-// the one exported reading of it, and it is read-only too.
+// It is deliberately unexported, and offers no way to request or clear a stop.
+// A session reports what the parser observed, so a caller can neither stop a
+// parse through it nor clear a stop; a caller asks for a stop through a
+// DiagnosticSink, or by cancelling the context given to ParseContext. The one
+// write it can make is taking up such a cancellation, described below: it
+// publishes the cancellation when it observes the context done and nothing was
+// published first. Entity.ParseStop is the one exported reading of it, on the
+// same terms.
 //
 // Two failures can end a whole session — a sink that asked the parse to stop,
 // and a resource budget whose scope is the parse — and which of them a session
@@ -480,6 +524,16 @@ func (s *ParseSession) publishStop(f FatalError) FatalError {
 // session it is delivering for exactly as it always could. See
 // ParseSession.resolvePart.
 //
+// For a parse started by ParseContext, fatalErr is also where a scope sees that
+// the caller cancelled the parse's context: once the context is done, it
+// publishes the cancellation as the stop if nothing was published before it,
+// and returns the published stop. That is the one way it writes anything, and
+// it is the caller's own request being taken up, not a stop a caller could
+// make or clear through the session. While it waits for a transition it also
+// wakes when the context is done, so a sink blocked in the delivery that
+// decides the transition cannot keep a cancelled parse's other scopes waiting.
+// The context's methods are called with no session lock held. See cancel.go.
+//
 // fatalErr is safe for concurrent use, and returns nil for a nil session.
 func (s *ParseSession) fatalErr() FatalError {
 	if s == nil {
@@ -493,12 +547,19 @@ func (s *ParseSession) fatalErr() FatalError {
 		if published != nil {
 			return published
 		}
+		if stop := s.cancelStop(); stop != nil {
+			return stop
+		}
 		if pending == nil {
 			return nil
 		}
 		// The transition publishes before it closes this, so the next pass
-		// finds the published value rather than looping.
-		<-pending
+		// finds the published value rather than looping. A nil cancelDone is a
+		// case that never fires.
+		select {
+		case <-pending:
+		case <-s.cancelDone:
+		}
 	}
 }
 

@@ -136,6 +136,11 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// one of them refuses part of the field, so that what is kept is recorded
 	// rather than quietly dropped. It is Header.ContentType for a parse with no
 	// budgets, which is every entry point but Parse.
+	//
+	// A parse cancelled while the field was being interpreted interprets none of
+	// it: the media type is empty, there are no parameters, and the error is the
+	// parse's stop, so no partial reading is mistaken for a complete one. The
+	// body is then left as the input held it, as for any stop below.
 	ct := ctx.contentType(header)
 	mediaType, mediaParams, mediaErr := ct.value, ct.params, ct.err
 
@@ -240,7 +245,21 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 				}
 			}
 			if fatal == nil && local == nil && !skip {
-				if converted, charsetErr := charsetReader(charset, body); charsetErr != nil {
+				converted, charsetErr := charsetReader(charset, body)
+				// A CharsetReader may read its input while it builds a decoder,
+				// and a cancellation it ran into — or that came while it ran —
+				// makes it fail for a reason that is not the charset's. So a
+				// cancelled parse does not record its failure as an unknown
+				// charset: the entity is returned with the parse's stop instead,
+				// its body the bytes before this stage. A decoder it did build is
+				// kept, since nothing it already read can be given back; every
+				// read of the body reports the stop anyway. See cancel.go.
+				if stop := ctx.session.cancelErr(); stop != nil {
+					fatal = stop
+					if charsetErr == nil {
+						body = converted
+					}
+				} else if charsetErr != nil {
 					warning := UnknownCharsetError{charsetErr}
 					err = warning
 					fatal = ctx.recordHeader(Diagnostic{
@@ -261,6 +280,29 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// The guard goes over whatever stages ran, including none, so that what
 	// Body delivers is what the decoded budgets count.
 	body = ctx.guardBody(body, leaf)
+
+	// A parse started by ParseContext gates both readers a caller can reach —
+	// Body, and the raw body WriteTo copies verbatim — on its context, whether
+	// the entity is a leaf or a framed multipart container, whose raw view and
+	// whose parts are read through the same gate. Bytes a buffered reader or a
+	// decoder holds ahead are then not delivered once the cancellation has been
+	// seen. A parse that cannot be cancelled gets both unchanged. See cancel.go.
+	if ctx.session.cancellable() {
+		gated := ctx.session.gateReader(body)
+		if sameReader(originalBody, body) {
+			originalBody = gated
+		} else {
+			originalBody = ctx.session.gateReader(originalBody)
+		}
+		body = gated
+
+		// A cancellation seen while this entity was being built — by a
+		// CharsetReader, by the disposition the charset stage read — is returned
+		// with it, as any stop is, rather than first being noticed by its body.
+		if fatal == nil {
+			fatal = ctx.session.cancelErr()
+		}
+	}
 
 	e := &Entity{
 		Header:                     header,
@@ -309,6 +351,27 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 // never the entity's own header — so it yields the bytes of the parts before
 // the refused one, then the error. WriteTo has by then written the entity's
 // header as well as those parts to w. Nothing already produced is withdrawn.
+//
+// Body, which is also the MultipartReader of such an entity, implements
+// io.Closer. The body's worker goroutine starts on the first Read and exits once
+// the body has been read to its end or has failed, or once Close is called; a
+// caller that stops reading early calls Close to release it. Close ends both
+// Body and the iteration over the parts: NextPart then reports io.EOF and Read
+// io.ErrClosedPipe — except for a body whose setup had already failed when it
+// was closed, which keeps reporting that failure — and a body closed before its
+// first Read has finished setting it up never starts a worker and reports no
+// setup failure. Close may be called from another goroutine while Body is
+// read, or from a CharsetReader the setup calls; it never waits, and it wakes
+// a Read waiting for that setup. It does not close the parts or their sources,
+// and it cannot make a part's own
+// body return: a worker blocked reading a part whose source is blocked exits
+// only once that read returns. A body abandoned partway without Close keeps its
+// worker waiting, holding the parts. WriteTo writes the parts itself and is not
+// affected by Close.
+//
+// A part from ParseContext whose parse was cancelled ends the body with that
+// parse's stop: a part the writer has not reached yet is not started, and one
+// being written stops at the next read of its body.
 func NewMultipart(header Header, parts []*Entity) (*Entity, error) {
 	r := &multipartBody{
 		header: header,
@@ -432,7 +495,13 @@ func readWithOptions(r io.Reader, opts *ReadOptions, session *ParseSession) (*En
 	// byte it refuses is never one a position is measured against. A parse that
 	// budgets nothing, which is Read and ReadWithOptions, reads r as it is; see
 	// limit_input.go.
-	cr := &countingReader{r: session.limitInput(r)}
+	//
+	// Under the input budget, at the very source, sits the cancellation gate of
+	// a parse started by ParseContext, so that once its context is seen to be
+	// done the input is never read again, and so that a read the gate cut short
+	// still counts every byte it delivered. A parse that cannot be cancelled
+	// reads r as it is; see cancel.go.
+	cr := &countingReader{r: session.limitInput(session.gateReader(r))}
 	lr := &limitedReader{R: cr, N: math.MaxInt64}
 	br := bufio.NewReader(lr)
 
@@ -604,7 +673,19 @@ func (e *Entity) writeBodyTo(w *Writer) error {
 // which keeps the input's bytes, and the writer does not serialize a field it
 // cannot interpret. Replaying such an entity's raw bytes is not what WriteTo
 // does; raw replay, including of a body already consumed, is #41's.
+//
+// For an entity from ParseContext whose context is already done when WriteTo
+// is called, nothing is written and the parse's stop is returned. A
+// cancellation that comes later is seen by the reads of the body, before and
+// after each: the header — and, for a body built by NewMultipart, the parts
+// before it — may already be on w, as may the bytes the read that saw the
+// cancellation still delivered, and nothing read after that is written. A write
+// to w already in progress is the caller's and is not interrupted. Whatever was
+// written is not withdrawn, and WriteTo returns the stop. See cancel.go.
 func (e *Entity) WriteTo(w io.Writer) error {
+	if stop := e.parse.session.cancelErr(); stop != nil {
+		return stop
+	}
 	ew, err := CreateWriter(w, e.Header)
 	if err != nil {
 		return err
@@ -652,6 +733,10 @@ type WalkFunc func(path []int, entity *Entity, err error) error
 // An entity that was not parsed with a session, which is every entity but one
 // from Parse, has no parse that could be stopped, and Walk behaves exactly as
 // it always has.
+//
+// For an entity from ParseContext, the cancellation of the parse's context is
+// such a stop, and Walk sees it at the same boundaries. A walkFunc already
+// running is not interrupted; the bodies it reads report the stop.
 //
 // Under ProfileStrict an entity refused for a valid base with malformed
 // parameters ends the walk with its entity-scoped FatalError, before walkFunc

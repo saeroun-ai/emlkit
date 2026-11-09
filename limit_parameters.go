@@ -142,6 +142,18 @@ func boundParameters(raw string, maxCount, maxSegments int64) (head int, occurre
 // of the field first, then the segments of that occurrence's parameter — so that
 // a field that exceeds both at once is reported the same way every time.
 func scanParameters(raw string, maxCount, maxSegments int64) parameterScan {
+	scan, _ := scanParametersPoll(raw, maxCount, maxSegments, nil)
+	return scan
+}
+
+// scanParametersPoll is scanParameters for a parse that can be cancelled. poll,
+// when it is not nil, is asked between parameter items and within one so that
+// at most cancelScanStride bytes of raw are crossed between two polls, escaped
+// pairs included; once it reports true the scan
+// ends, cancelled is true, and what it found is discarded by the caller rather
+// than read as the field's parameters. It is a work boundary rather than an
+// interruption: one item shorter than the stride is crossed whole.
+func scanParametersPoll(raw string, maxCount, maxSegments int64, poll func() bool) (scan parameterScan, cancelled bool) {
 	var (
 		count     int64
 		segments  map[string]int64
@@ -151,8 +163,15 @@ func scanParameters(raw string, maxCount, maxSegments int64) parameterScan {
 	)
 
 	s := newParameterScanner(raw)
+	s.poll = poll
 	for {
+		if poll != nil && poll() {
+			return parameterScan{}, true
+		}
 		start, end, ok := s.next()
+		if s.cancelled {
+			return parameterScan{}, true
+		}
 		if !ok {
 			break
 		}
@@ -177,7 +196,7 @@ func scanParameters(raw string, maxCount, maxSegments int64) parameterScan {
 				limit: maxCount,
 				kept:  len(out.occurrences),
 			}
-			return out
+			return out, false
 		}
 
 		if segment {
@@ -193,7 +212,7 @@ func scanParameters(raw string, maxCount, maxSegments int64) parameterScan {
 					base:  base,
 					kept:  len(out.occurrences),
 				}
-				return out
+				return out, false
 			}
 		}
 
@@ -211,8 +230,13 @@ func scanParameters(raw string, maxCount, maxSegments int64) parameterScan {
 		empty--
 	}
 	out.head, out.strayEmpty = s.head, empty
-	return out
+	return out, false
 }
+
+// cancelScanStride is the most bytes a scan of a parameterized field crosses
+// between two polls of a parse that can be cancelled. It is
+// the size of the buffers the input itself is read through.
+const cancelScanStride = 4096
 
 // A parameterScanner walks the semicolon-separated parameter items of a
 // structured header field value, one at a time.
@@ -245,6 +269,12 @@ type parameterScanner struct {
 	head int
 
 	done bool
+
+	// poll, when it is not nil, is asked so that at most cancelScanStride bytes
+	// are crossed between two polls; once it reports true the scanner yields
+	// nothing more and cancelled is set.
+	poll      func() bool
+	cancelled bool
 }
 
 func newParameterScanner(raw string) *parameterScanner {
@@ -259,7 +289,20 @@ func (s *parameterScanner) next() (start, end int, ok bool) {
 	}
 
 	inQuote := false
+	// mark is where the last poll was, measured in bytes of raw rather than in
+	// iterations: an escaped pair is crossed in one iteration but is two
+	// bytes. A poll is due once cancelScanStride-1 bytes have been crossed, so
+	// that even the pair that straddles the threshold leaves at most
+	// cancelScanStride bytes between two polls.
+	mark := s.i
 	for s.i < len(s.raw) {
+		if s.poll != nil && s.i-mark >= cancelScanStride-1 {
+			mark = s.i
+			if s.poll() {
+				s.done, s.cancelled = true, true
+				return 0, 0, false
+			}
+		}
 		switch c := s.raw[s.i]; {
 		case inQuote && c == '\\':
 			// The escaped byte cannot end the quoted string, so it is skipped
@@ -403,6 +446,11 @@ func (c parseContext) contentType(h Header) fieldReading {
 		return fieldReading{value: "text/plain"}
 	}
 	r := c.interpretParameterized("Content-Type", v)
+	if r.cancelled {
+		// Nothing of the field is interpreted, nothing it was owed is recorded,
+		// and the parse's stop is its error. Built here, where no lock is held.
+		return fieldReading{err: c.session.cancelErr(), cancelled: true}
+	}
 	c.recordParameterDiagnostics(r.owed)
 	return r
 }
@@ -440,6 +488,13 @@ func (c parseContext) interpretDisposition(raw string) fieldReading {
 // its diagnostics afterwards, once its cache lock is released. That split is
 // what lets an entity publish its interpretation before a diagnostic reaches a
 // DiagnosticSink, which may read it back; see dispositionSnapshot.
+//
+// A parse that can be cancelled is polled at the work boundaries of every step
+// — before it starts, in the scan, in the whole-field parse and in the repair —
+// and a reading the cancellation reached is returned with cancelled set and
+// nothing else: no value, no parameters, nothing owed. The caller turns that
+// into the parse's stop where it holds no lock; the poll itself calls no method
+// of the context, so this may run under an entity's lock. See cancel.go.
 func (c parseContext) interpretParameterized(field, raw string) fieldReading {
 	limits, ok := c.limits()
 	if !ok {
@@ -447,6 +502,11 @@ func (c parseContext) interpretParameterized(field, raw string) fieldReading {
 		f, params, err := parseHeaderWithParams(raw)
 		return fieldReading{value: f, params: params, err: err}
 	}
+	poll := c.cancelPoll()
+	if poll != nil && poll() {
+		return fieldReading{cancelled: true}
+	}
+	var cancelled bool
 
 	var (
 		f      string
@@ -459,16 +519,23 @@ func (c parseContext) interpretParameterized(field, raw string) fieldReading {
 		// Nothing to bound, so nothing is scanned unless the field turns out to
 		// need repair: a scan that can refuse nothing would only walk the field
 		// to reach the same answer.
-		if f, params, err = parseHeaderWithParams(raw); err == nil {
+		if f, params, cancelled, err = parseHeaderWithParamsPoll(raw, poll); cancelled {
+			return fieldReading{cancelled: true}
+		} else if err == nil {
 			return fieldReading{value: f, params: params}
 		}
 	}
 
-	scan := scanParameters(raw, limits.MaxParameterCount, limits.MaxParameterSegments)
+	scan, scanCancelled := scanParametersPoll(raw, limits.MaxParameterCount, limits.MaxParameterSegments, poll)
+	if scanCancelled {
+		return fieldReading{cancelled: true}
+	}
 	head, occurrences, refusal := scan.head, scan.occurrences, scan.refusal
 	if refusal == nil {
 		if budgeted {
-			f, params, err = parseHeaderWithParams(raw)
+			if f, params, cancelled, err = parseHeaderWithParamsPoll(raw, poll); cancelled {
+				return fieldReading{cancelled: true}
+			}
 		}
 		if err == nil {
 			return fieldReading{value: f, params: params}
@@ -480,12 +547,17 @@ func (c parseContext) interpretParameterized(field, raw string) fieldReading {
 		// The retained prefix is rebuilt without empty items, so a stray one
 		// before the cut would vanish from it unreported; such a field is read
 		// by the repair instead, which reports it.
-		if f, params, err = parseHeaderWithParams(retainedParameters(raw, head, occurrences)); err == nil && scan.strayEmpty == 0 {
+		if f, params, cancelled, err = parseHeaderWithParamsPoll(retainedParameters(raw, head, occurrences), poll); cancelled {
+			return fieldReading{cancelled: true}
+		} else if err == nil && scan.strayEmpty == 0 {
 			return fieldReading{value: f, params: params, owed: owed}
 		}
 	}
 
 	repaired, ok := c.repairParameterized(field, raw, scan)
+	if repaired.cancelled {
+		return fieldReading{cancelled: true}
+	}
 	if !ok {
 		if err == nil {
 			// The retained prefix parsed, and only its stray empty items sent

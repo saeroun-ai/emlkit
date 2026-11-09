@@ -131,6 +131,12 @@ type fieldReading struct {
 	// unframed reports that a repair kept a multipart media type but no
 	// boundary it may use; see "A multipart that kept no boundary" above.
 	unframed bool
+
+	// cancelled reports that the parse's context was cancelled while the field
+	// was being read, and that nothing else here is an interpretation of it: a
+	// reading cut short is never handed on as a complete one, and nothing it
+	// owed is recorded. See cancel.go.
+	cancelled bool
 }
 
 // fieldInvalidCode returns the diagnostic code of a malformed field.
@@ -182,7 +188,14 @@ func (c parseContext) repairParameterized(field, raw string, scan parameterScan)
 			order = append(order, name)
 		}
 	}
+	// Each item is one parse of its own, and can decode its value through the
+	// configured CharsetReader, so a parse that can be cancelled is polled
+	// before each; a repair the cancellation reached is discarded whole.
+	poll := c.cancelPoll()
 	for _, occ := range occurrences {
+		if poll != nil && poll() {
+			return fieldReading{cancelled: true}, true
+		}
 		item := raw[occ.start:occ.end]
 		key, val, wellFormed, decoded := parseParameterItem(item)
 		switch {
@@ -221,6 +234,10 @@ func (c parseContext) repairParameterized(field, raw string, scan parameterScan)
 				clash[key] = true
 			}
 		}
+	}
+
+	if poll != nil && poll() {
+		return fieldReading{cancelled: true}, true
 	}
 
 	var kept, conflicting, dropped, unsupported []string

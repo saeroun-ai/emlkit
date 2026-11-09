@@ -107,6 +107,10 @@ func (s *ParseSession) headerTotalFailure(ctx parseContext, ref *textproto.Heade
 // no lock held — while another caller's transition is open.
 func (s *ParseSession) claimStop() (stop error, claimed bool) {
 	for {
+		// A cancelled parse claims nothing; see chargePart.
+		if stop := s.cancelStop(); stop != nil {
+			return stop, false
+		}
 		s.mu.Lock()
 		if s.stop != nil {
 			published := s.stop
@@ -115,7 +119,10 @@ func (s *ParseSession) claimStop() (stop error, claimed bool) {
 		}
 		if pending := s.partPending; pending != nil {
 			s.mu.Unlock()
-			<-pending
+			select {
+			case <-pending:
+			case <-s.cancelDone:
+			}
 			continue
 		}
 		s.partPending = make(chan struct{})

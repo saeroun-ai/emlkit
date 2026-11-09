@@ -7,14 +7,42 @@ import (
 )
 
 func parseHeaderWithParams(s string) (f string, params map[string]string, err error) {
+	// Without a poll nothing is cancelled, and this is exactly the parse it
+	// always was.
+	f, params, _, err = parseHeaderWithParamsPoll(s, nil)
+	return
+}
+
+// parseHeaderWithParamsPoll is parseHeaderWithParams for a parse that can be
+// cancelled: poll, when it is not nil, is asked before the field is parsed,
+// after mime.ParseMediaType returns, before each parameter value is decoded —
+// a decoding that can call the configured CharsetReader — and after the last
+// one. Once it reports true, nothing further is decoded and cancelled is true;
+// the result is then discarded rather than returned, so the caller never
+// mistakes a reading the cancellation reached for a whole one. A single call of
+// mime.ParseMediaType or of a CharsetReader is not interrupted.
+func parseHeaderWithParamsPoll(s string, poll func() bool) (f string, params map[string]string, cancelled bool, err error) {
+	if poll != nil && poll() {
+		return "", nil, true, nil
+	}
 	f, params, err = mime.ParseMediaType(s)
 	if err != nil {
-		return s, nil, err
+		if poll != nil && poll() {
+			return "", nil, true, nil
+		}
+		return s, nil, false, err
 	}
 	for k, v := range params {
+		if poll != nil && poll() {
+			return "", nil, true, nil
+		}
 		params[k], _ = decodeHeader(v)
 	}
-	return
+	if poll != nil && poll() {
+		// The last decoding may have been where it was cancelled.
+		return "", nil, true, nil
+	}
+	return f, params, false, nil
 }
 
 func formatHeaderWithParams(f string, params map[string]string) string {

@@ -2,7 +2,9 @@ package message_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -336,4 +338,25 @@ func Example_transform() {
 	w.Close()
 
 	log.Println(b.String())
+}
+
+func ExampleParseContext() {
+	// A context bounds the whole lazy life of the parse: the body is read
+	// after ParseContext returns, and still belongs to it.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, e, err := message.ParseContext(ctx, strings.NewReader("Content-Type: text/plain\r\n\r\nHello"), nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Cancelling records no diagnostic; every later read reports the stop,
+	// which wraps the context's error. A caller whose source can block in Read
+	// makes it return itself, for example by closing it from a
+	// context.AfterFunc of its own: the parser never closes the source.
+	cancel()
+	_, err = io.ReadAll(e.Body)
+	fmt.Println(message.IsFatal(err), errors.Is(err, context.Canceled))
+	// Output: true true
 }

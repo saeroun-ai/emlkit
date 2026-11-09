@@ -105,6 +105,18 @@ bounded, read once and fixed at construction), not by reparsing the raw header.
 It also stops whenever the parse was stopped, including for a single-part
 message.
 
+`message.ParseContext(ctx, r, opts)` is `Parse` under a context, for the whole
+lazy life of the parse: once `ctx` is done, every later read of the input and of
+every `Body`, `NextPart`, `Walk` and `mail.Reader` reports the parse's one stop.
+That is a `FatalError` wrapping `ctx.Err()` (and its cause), with no diagnostic —
+unless a sink or a budget had already stopped the parse, in which case that
+earlier stop stays the one reported, with its own cause and its diagnostic, if
+it has one. Cancellation is checked
+before and after reads and at scope and metadata-scan boundaries; it never
+interrupts a blocked `Read`, a `CharsetReader` or a sink, never closes `r` and
+starts no goroutine. Close a source you own, for example from your own
+`context.AfterFunc`, to make a blocked read return.
+
 Errors and diagnostics answer different questions, so read both: an error says
 whether a scope could continue, the session says what was observed. `Parse`
 enforces **fifteen** budgets today — `MaxInputBytes`, `MaxHeaderBytes`,

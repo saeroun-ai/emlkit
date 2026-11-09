@@ -71,6 +71,19 @@ import (
 // for the refusal. Such an earlier stop — a DiagnosticSink's, or another
 // budget's — does not by itself end reading a body already returned.
 //
+// # Cancellation
+//
+// A parse started by ParseContext gates every leaf Body and every raw body
+// above all of this, and checks its context before and after each read; see
+// cancel.go. Once cancellation has been seen, no read of a body — one that
+// already failed locally included — delivers anything more, and each reports
+// the session's published stop, which is the cancellation unless a stop of the
+// parse was published first. Bytes the read that saw it delivered are still
+// delivered. A decoder that turned a failure into io.EOF cannot hide it, since
+// the gate asks the context rather than the error. Until the context is done,
+// nothing here changes, including what a body already returned may do after a
+// sink or another budget stopped the parse.
+//
 // # What decoders cannot hide
 //
 // A decoder reports the failure of what it reads in its own words, or not at

@@ -279,6 +279,12 @@ func (s *ParseSession) chargePart() (fatal error, claimed bool) {
 	limit := s.Limits().MaxPartCount
 
 	for {
+		// A cancelled parse charges nothing more: its stop is what this part
+		// reports. Asked with no lock held; see cancel.go.
+		if stop := s.cancelStop(); stop != nil {
+			return stop, false
+		}
+
 		s.mu.Lock()
 
 		if s.stop != nil {
@@ -291,8 +297,12 @@ func (s *ParseSession) chargePart() (fatal error, claimed bool) {
 			s.mu.Unlock()
 			// Another caller is deciding what this parse stops with. Wait for
 			// that, then look again: the transition publishes before it closes
-			// the channel, so the next pass takes the branch above.
-			<-pending
+			// the channel, so the next pass takes the branch above. A
+			// cancellation also ends the wait, and the next pass reports it.
+			select {
+			case <-pending:
+			case <-s.cancelDone:
+			}
 			continue
 		}
 

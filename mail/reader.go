@@ -168,6 +168,11 @@ func CreateReader(r io.Reader) (*Reader, error) {
 // bytes unchanged, and its own ContentType and ContentDisposition keep parsing
 // it under no budget.
 //
+// For an entity from message.ParseContext, the cancellation of the parse's
+// context is such a stop: NextPart returns it, and every Part.Body already
+// returned reports it from its next read. NextPart never closes the message's
+// source.
+//
 // Reading the disposition records its budget diagnostic, once per part, if the
 // parse had not read it already. If a DiagnosticSink stops the parse there,
 // NextPart returns that stop and no part, like any other stop.
