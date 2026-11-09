@@ -423,11 +423,27 @@ type unwrapsTo struct{ inner error }
 func (u unwrapsTo) Error() string { return "adversarial: unwraps to " + u.inner.Error() }
 func (u unwrapsTo) Unwrap() error { return u.inner }
 
-// endlessChain unwraps to itself forever.
-type endlessChain struct{}
+// cycleFuse is how many Unwrap calls an in-process cycle fixture answers
+// before it reports no child. The walk under test makes far fewer, so a fuse
+// that blows means the walk was not bounded; and the fuse is what keeps such a
+// regression finite work in process, where nothing could interrupt it. Cycles
+// that never end are exercised only in subprocesses under a deadline.
+const cycleFuse = 10000
 
-func (e endlessChain) Error() string { return "adversarial: endless chain" }
-func (e endlessChain) Unwrap() error { return e }
+// endlessChain unwraps to itself until its fuse blows.
+type endlessChain struct{ calls int }
+
+func (e *endlessChain) Error() string { return "adversarial: endless chain" }
+func (e *endlessChain) Unwrap() error {
+	e.calls++
+	if e.calls > cycleFuse {
+		return nil
+	}
+	return e
+}
+
+// blown reports whether the walk went past the fuse.
+func (e *endlessChain) blown() bool { return e.calls > cycleFuse }
 
 // TestHeaderLimit_rejectsForgeries pins the predicate itself: only a refusal
 // this package made is one. Every shape an input can present — an error that
@@ -435,16 +451,21 @@ func (e endlessChain) Unwrap() error { return e }
 // a forgery met at depth, a chain that does not end — is refused, without
 // panicking and without hanging.
 func TestHeaderLimit_rejectsForgeries(t *testing.T) {
+	// A chain that does not end within any walk's bound, tested on the
+	// predicate itself because the walk it promises to bound is the one under
+	// test. It is fused, so a regression fails here rather than spins.
+	chain, wrapped := &endlessChain{}, &endlessChain{}
+	t.Cleanup(func() {
+		if chain.blown() || wrapped.blown() {
+			t.Error("a chain's fuse blew: HeaderLimit's walk is not bounded")
+		}
+	})
 	cases := append([]struct {
 		name string
 		err  error
 	}{
-		// A chain that never ends. It is tested here rather than injected into
-		// a parse because the walk this predicate promises to bound is the one
-		// under test; Go's own errors.Is, which the pre-existing EOF
-		// classification uses, does not bound its walk and would not return.
-		{"endless chain", endlessChain{}},
-		{"wrapped endless chain", unwrapsTo{endlessChain{}}},
+		{"endless chain", chain},
+		{"wrapped endless chain", unwrapsTo{wrapped}},
 	}, adversarialFailures...)
 
 	for _, tc := range cases {
@@ -562,6 +583,10 @@ func TestHeaderLimit_boundedOnHostileGraphs(t *testing.T) {
 	forged := &HeaderLimitError{}
 	genuine := newHeaderLimitError(HeaderLimitBytes, 1, 2, 2)
 
+	// Cycles are fused fixtures, so that a regression fails rather than spins;
+	// see cycleFuse.
+	self, selfInJoin := &endlessChain{}, &endlessChain{}
+
 	// A cycle of two nodes, tied after construction.
 	ringA := &mutableWrap{}
 	ringB := &mutableWrap{inner: ringA}
@@ -571,6 +596,11 @@ func TestHeaderLimit_boundedOnHostileGraphs(t *testing.T) {
 	// while going round.
 	ringWithForgery := &mutableWrap{}
 	ringWithForgery.inner = multiUnwrap{[]error{forged, ringWithForgery}}
+	t.Cleanup(func() {
+		if self.blown() || selfInJoin.blown() || ringA.blown() || ringB.blown() || ringWithForgery.blown() {
+			t.Error("a cycle's fuse blew: HeaderLimit's walk is not bounded")
+		}
+	})
 
 	// A join far wider than anything held pending. The children are one value
 	// repeated, so building it costs one slice rather than a million errors.
@@ -589,8 +619,8 @@ func TestHeaderLimit_boundedOnHostileGraphs(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{"self cycle", endlessChain{}, false},
-		{"self cycle in a join", errors.Join(endlessChain{}, forged), false},
+		{"self cycle", self, false},
+		{"self cycle in a join", errors.Join(selfInJoin, forged), false},
 		{"two node cycle", ringA, false},
 		{"cycle carrying a forgery", ringWithForgery, false},
 		{"huge join of forgeries", multiUnwrap{wide}, false},
@@ -646,11 +676,24 @@ func TestHeaderLimit_allocationIsFixed(t *testing.T) {
 }
 
 // mutableWrap is a single-child wrapper whose child can be set after it exists,
-// which is how a cycle is tied.
-type mutableWrap struct{ inner error }
+// which is how a cycle is tied. It is fused like endlessChain: past cycleFuse
+// calls it reports no child.
+type mutableWrap struct {
+	inner error
+	calls int
+}
 
 func (m *mutableWrap) Error() string { return "adversarial: ring" }
-func (m *mutableWrap) Unwrap() error { return m.inner }
+func (m *mutableWrap) Unwrap() error {
+	m.calls++
+	if m.calls > cycleFuse {
+		return nil
+	}
+	return m.inner
+}
+
+// blown reports whether the walk went past the fuse.
+func (m *mutableWrap) blown() bool { return m.calls > cycleFuse }
 
 // nilHostileWrap reads a field in Unwrap, so unwrapping a nil one panics. An
 // error a caller or an input writes is free to be written this way — most are,

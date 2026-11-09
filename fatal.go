@@ -1,6 +1,6 @@
 package message
 
-import "errors"
+import "github.com/saeroun-ai/emlkit/internal/errgraph"
 
 // A FatalError reports that the parser cannot make safe forward progress in
 // the scope that returned it.
@@ -57,25 +57,58 @@ import "errors"
 //
 // UnknownCharsetError and UnknownEncodingError accompany a usable result and
 // are warnings, not failures; the io.EOF that ends an iterator is ordinary
-// control flow. None of them satisfies IsFatal, and their behavior is
-// unchanged.
+// control flow.
+//
+// The parser decides that an error is a warning by the error it returned
+// itself, not by searching it: a part returned with an UnknownCharsetError or
+// UnknownEncodingError is usable, and iteration goes on past it, whatever that
+// warning's cause is. IsFatal answers a different question — whether a genuine
+// fatal error is anywhere in a graph — so it is false for an ordinary decoder
+// warning but true for one whose cause holds a fatal error, which a
+// CharsetReader failing with a fatal error from another parse puts there. Such
+// a warning still describes this part, not a stop of this parse, and the parser
+// treats it as the warning it is.
 //
 // # Using it
 //
-// FatalError is a sealed interface: its unexported method can only be
-// implemented inside this package, so a value that satisfies it was produced
-// by the parser and its invariants hold. Test it with IsFatal, or take it out
-// of an error chain the ordinary way:
+// Test an error with IsFatal. It recognizes only a fatal error the parser
+// created, wherever it sits in a graph of wrapped and joined errors within a
+// fixed bound, and it never asks the error under test about itself; see
+// IsFatal for exactly what it walks.
 //
-//	var fatal message.FatalError
-//	if errors.As(err, &fatal) {
+// FatalError has an unexported method, so a type declared elsewhere cannot
+// implement it on its own. That alone does not prove a value came from the
+// parser: a struct in another package that embeds a FatalError field inherits
+// the method, and satisfies the interface even when the embedded value is nil.
+// IsFatal does not accept such a value; satisfying the interface does not make
+// one.
+//
+// To read the diagnostic, take the fatal error from the result a parse API
+// returned directly. Such an error is either one the parser created or one the
+// caller's own components failed with — the io.Reader, notably, whose read
+// failures are passed on unchanged — so a type assertion on it relies on
+// nothing beyond the parser and those components, and calls nothing:
+//
+//	if fatal, ok := err.(message.FatalError); ok {
 //		if d, ok := fatal.Diagnostic(); ok {
 //			log.Println(d.Code)
 //		}
 //	}
 //
-// The parser never returns a nil FatalError, and errors.As only assigns a
-// non-nil one; as with any interface, calling a method on a nil value panics.
+// That holds only while those components do not themselves fail with values
+// that embed a FatalError; the message's bytes cannot make one, but a
+// component's code can.
+//
+// The standard library's errors.As also finds a fatal error inside a chain of
+// wrappers, but on the standard library's terms, which are not IsFatal's: it
+// calls the As method of every error on its way, so an error can claim to be a
+// fatal error and assign anything, a value that embeds a nil one included; and
+// it follows Unwrap without any bound, so a cycle never lets it return. Use it
+// only on chains whose every wrapper is trusted, such as ones your own code
+// built around a parser result. IsFatal returning true for an error does not
+// make errors.As safe on it: that a genuine fatal error is reachable says
+// nothing about what errors.As meets on its own way there. As with any
+// interface, calling a method on a nil FatalError panics.
 //
 // A fatal error wraps the error that caused it, so errors.Is, errors.As and
 // errors.Unwrap reach that cause through it, including when the fatal error
@@ -104,10 +137,10 @@ type FatalError interface {
 	// error.
 	Diagnostic() (Diagnostic, bool)
 
-	// fatalError seals the interface to this package, which is the only place
-	// that can decide a scope of a message cannot be parsed any further, and
-	// the only place that can establish the invariants a fatal error carries,
-	// such as the severity of its diagnostic.
+	// fatalError keeps types declared elsewhere from implementing the interface
+	// by themselves. It is not proof of origin — an embedded FatalError field
+	// passes it on — which is why IsFatal recognizes the parser's own concrete
+	// type rather than this interface.
 	fatalError()
 }
 
@@ -194,15 +227,47 @@ func (e *fatalParseError) Diagnostic() (Diagnostic, bool) {
 func (e *fatalParseError) fatalError() {}
 
 // IsFatal reports whether err says that a scope of the message could not be
-// parsed any further, as described by FatalError. It finds a fatal error
-// anywhere in err's chain, including inside an error built by errors.Join.
+// parsed any further, as described by FatalError: whether a non-nil fatal error
+// the parser created is err, or is reachable from it.
 //
 // A fatal error never invalidates a value already returned, nor a non-nil
 // result returned alongside it, but how much of the parse ends with it depends
-// on the scope that returned it. IsFatal returns false for nil, for the
-// warnings reported by IsUnknownCharset and IsUnknownEncoding, and for the
-// io.EOF that ends an iterator.
+// on the scope that returned it. IsFatal returns false for nil, for the io.EOF
+// that ends an iterator, and for the parser's decoding warnings unless their
+// cause holds a genuine fatal error; see "What is not fatal" on FatalError.
+//
+// What it walks is err's whole error graph, not one chain of it: it follows
+// Unwrap() error and Unwrap() []error, so a fatal error wrapped by fmt.Errorf
+// with %w, joined by errors.Join, or held by a custom wrapper's Unwrap is
+// found. It matches by the parser's own concrete type and never calls an Is,
+// As or Error method, so an error cannot pass by claiming to be fatal, and a
+// value of another type that embeds or exposes a FatalError — through an As
+// method, for example — is not one. A nil or typed-nil error is never asked to
+// unwrap itself, and an Unwrap that panics is treated as having no children.
+//
+// The walk is bounded in the errors it examines, in the errors it holds
+// pending and in the child slots it inspects, nil ones included, so a cyclic
+// or enormous graph makes it return rather than hang. A fatal error deeper or
+// wider than those bounds is reported as absent; nothing the parser builds
+// comes near them. It bounds how many Unwrap calls it makes, not what one does:
+// an Unwrap that blocks, spins or allocates without end is the caller's code
+// and is not interrupted.
+//
+// A genuine fatal error presented again somewhere it did not come from — by a
+// reader that returns one it obtained from another parse, for example — is
+// still the parser's value and is reported as fatal. Nothing in the type system
+// tells a value from itself.
+//
+// Before ROB-120-007 this was errors.As against FatalError, which called As
+// methods, followed Unwrap without a bound, and accepted any value satisfying
+// the interface, an embedded nil one included.
 func IsFatal(err error) bool {
-	var fatal FatalError
-	return errors.As(err, &fatal)
+	return errgraph.Find(err, isParserFatal)
+}
+
+// isParserFatal reports whether err is a non-nil fatal error this package
+// created. It is a type assertion, so it calls nothing on err.
+func isParserFatal(err error) bool {
+	f, ok := err.(*fatalParseError)
+	return ok && f != nil
 }

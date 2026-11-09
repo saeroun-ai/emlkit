@@ -153,10 +153,20 @@ func headerLimitDiagnostic(kind textproto.HeaderLimitKind, limit int64, cause er
 // the one this call was configured with, so what is reported is what was
 // actually enforced.
 func rootHeaderError(err error, session *ParseSession) error {
-	limitErr, refused := textproto.HeaderLimit(err)
+	if session == nil {
+		return err
+	}
+	// textproto.ReadHeaderLimits returns its refusal as itself, so only err's
+	// own dynamic type is asked about: nothing a source's read failure wraps
+	// is unwrapped to look further.
+	top, ok := err.(*textproto.HeaderLimitError)
+	if !ok {
+		return err
+	}
+	limitErr, refused := textproto.HeaderLimit(top)
 	// A shared-budget refusal that is not this session's own, which
 	// readWithOptions has already handled, is something an input handed back.
-	if session == nil || !refused || isTotalHeaderKind(limitErr.Kind()) {
+	if !refused || isTotalHeaderKind(limitErr.Kind()) {
 		return err
 	}
 

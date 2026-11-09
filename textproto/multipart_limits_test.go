@@ -444,7 +444,22 @@ func TestLineLimit_boundedOnHostileGraphs(t *testing.T) {
 
 	forgedRingA := &mutableWrap{}
 	forgedRingB := &mutableWrap{inner: forgedRingA}
-	forgedRingA.inner = &mutableWrap{inner: forgedRingB}
+	forgedRingC := &mutableWrap{inner: forgedRingB}
+	forgedRingA.inner = forgedRingC
+
+	// Every cycle is a fused fixture (see cycleFuse), so a regression fails
+	// here rather than spins.
+	self := &endlessChain{}
+	t.Cleanup(func() {
+		for _, ring := range []*mutableWrap{ringA, ringB, forgedRingA, forgedRingB, forgedRingC} {
+			if ring.blown() {
+				t.Error("a ring's fuse blew: LineLimit's walk is not bounded")
+			}
+		}
+		if self.blown() {
+			t.Error("a cycle's fuse blew: LineLimit's walk is not bounded")
+		}
+	})
 
 	deep := error(errors.New("bottom"))
 	for i := 0; i < 5000; i++ {
@@ -465,7 +480,7 @@ func TestLineLimit_boundedOnHostileGraphs(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{"self cycle", endlessChain{}, false},
+		{"self cycle", self, false},
 		{"two node ring", ringA, false},
 		{"ring with forgeries", forgedRingA, false},
 		{"chain deeper than the bound", deep, false},

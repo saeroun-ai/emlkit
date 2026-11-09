@@ -797,23 +797,20 @@ func TestParse_totalHeaders_foreignRefusal(t *testing.T) {
 	if foreign == nil {
 		t.Fatal("no foreign refusal")
 	}
+	// The cycle is fused, so that a classification that walked it without a
+	// bound would blow the fuse and fail here rather than spin. Before
+	// ROB-120-007 the child case hung in textproto's errors.Is and was skipped.
+	cyclic := &fusedLoop{}
 	for name, fail := range map[string]error{
 		"foreign":        foreign,
 		"wrapped":        fmt.Errorf("x: %w", foreign),
 		"forged":         &textproto.HeaderLimitError{},
-		"cyclic":         &cyclicError{},
+		"cyclic":         cyclic,
 		"panicking As":   &trappedError{},
 		"typed nil kind": (*textproto.HeaderLimitError)(nil),
 	} {
 		const root = "Content-Type: multipart/mixed; boundary=B\r\n\r\n--B\r\nX: 1\r\n"
 		for _, at := range []string{"root", "child"} {
-			if name == "cyclic" && at == "child" {
-				// textproto.MultipartReader.NextPart asks a part header's read
-				// failure errors.Is(err, io.EOF), which never returns for an
-				// error that unwraps to itself. That predates this budget and
-				// belongs to the predicate audit of #16.
-				continue
-			}
 			in := root
 			if at == "root" {
 				in = "X: 1\r\n"
@@ -830,6 +827,9 @@ func TestParse_totalHeaders_foreignRefusal(t *testing.T) {
 				t.Errorf("%s %s: err %v, stop %v, %v: want an ordinary failure", name, at, err, session.fatalErr(), codesOfDiags(session.Diagnostics()))
 			}
 		}
+	}
+	if cyclic.blown {
+		t.Error("the cycle's fuse blew: a classification walked it without a bound")
 	}
 }
 

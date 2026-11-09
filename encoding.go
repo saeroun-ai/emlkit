@@ -4,11 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"mime/quotedprintable"
 	"strings"
+
+	"github.com/saeroun-ai/emlkit/internal/errgraph"
 )
 
 type UnknownEncodingError struct {
@@ -22,9 +23,36 @@ func (u UnknownEncodingError) Error() string {
 }
 
 // IsUnknownEncoding returns a boolean indicating whether the error is known to
-// report that the encoding advertised by the entity is unknown.
+// report that the encoding advertised by the entity is unknown: whether an
+// UnknownEncodingError value with a cause is err, or is reachable from it.
+//
+// It walks and matches on the terms IsUnknownCharset describes, with the same
+// bounds: the value type UnknownEncodingError with a cause, found through
+// wrapping and joins, without calling an Is, As or Error method. The zero
+// UnknownEncodingError{}, the only value a composite literal in another
+// package can build, does not match. Like IsUnknownCharset it searches the
+// whole graph, which the parser's own warning decision does not.
 func IsUnknownEncoding(err error) bool {
-	return errors.As(err, new(UnknownEncodingError))
+	return errgraph.Find(err, isEncodingWarning)
+}
+
+// isEncodingWarning reports whether err is itself a transfer-encoding warning
+// with a cause. It is a type assertion and a nil check, so it calls nothing on
+// err.
+func isEncodingWarning(err error) bool {
+	u, ok := err.(UnknownEncodingError)
+	return ok && u.e != nil
+}
+
+// isWarning reports whether err itself, not anything it wraps, is one of the
+// two decoding warnings the parser returns together with a usable entity.
+//
+// It is what the parser's own control flow asks, because a warning the parser
+// reports is always returned as itself: entity construction never wraps one.
+// Asking only about err's own dynamic type means no Unwrap of anything an
+// input or a caller's component supplied is ever called on the way.
+func isWarning(err error) bool {
+	return isEncodingWarning(err) || isCharsetWarning(err)
 }
 
 // normalizeEncodingName returns the transfer encoding name in the one form

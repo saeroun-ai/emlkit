@@ -3,7 +3,8 @@ package textproto
 import (
 	"errors"
 	"fmt"
-	"reflect"
+
+	"github.com/saeroun-ai/emlkit/internal/errgraph"
 )
 
 // HeaderLimits are the budgets one header block is read under.
@@ -237,10 +238,11 @@ func (e *LineLimitError) Unwrap() error {
 // It is to LineLimitError what HeaderLimit is to HeaderLimitError, with the
 // same guarantees and the same bounds: exact dynamic type and the parser's own
 // mark, no Is or As method ever called, both Unwrap forms followed, nil and
-// typed-nil nodes never asked to unwrap themselves, and a walk bounded in nodes
-// examined and children held pending so that a cyclic or enormous error graph
-// terminates rather than hangs. See HeaderLimit for why classification cannot
-// be left to the error under test.
+// typed-nil nodes never asked to unwrap themselves, an Unwrap that panics
+// treated as having no children, and a walk bounded in nodes examined, children
+// held pending and child slots inspected so that a cyclic or enormous error
+// graph terminates rather than hangs. See HeaderLimit for why classification
+// cannot be left to the error under test.
 func LineLimit(err error) (*LineLimitError, bool) {
 	var found *LineLimitError
 	walkError(err, func(node error) bool {
@@ -253,110 +255,15 @@ func LineLimit(err error) (*LineLimitError, bool) {
 	return found, found != nil
 }
 
-// walkError walks the error tree rooted at err and reports whether match
-// accepted a node.
-//
-// It is the one traversal every input-facing classification in this package
-// uses, so that each of them has the same properties rather than each having
-// to restate them:
-//
-//   - What is walked is the whole tree, not one chain of it: both
-//     Unwrap() error and Unwrap() []error are followed, so a node joined with
-//     others by errors.Join is found wherever in the join it sits.
-//   - No Is or As method is ever called. An error is free to answer yes to any
-//     question about itself, so provenance cannot be established by asking the
-//     suspect; match decides by exact dynamic type and by a mark only this
-//     package can set.
-//   - The walk is bounded in both directions an error graph can grow, because
-//     an input decides the shape of that graph: a cap on the nodes examined,
-//     which is what makes a cycle terminate rather than hang, and a fixed
-//     number of children held pending, which is what keeps a join of a million
-//     errors from costing a million slots. What does not fit is not examined,
-//     so a node buried deeper or wider than those caps is reported as absent
-//     rather than searched for without limit. Nothing this package builds comes
-//     close: a refusal is returned as itself, or one wrap from the top.
-//   - A node that is nil, or that holds nil underneath its type, is never asked
-//     to unwrap itself — what an input hands over may have methods that
-//     dereference nothing.
+// walkError walks the error graph rooted at err and reports whether match
+// accepted a node. It is errgraph.Find, the one traversal every classification
+// in this module uses, with its bounds: nodes examined, children held pending
+// and child slots inspected, so that a cycle terminates and a join of a million
+// errors, or of a million nils, costs what a small one does. No Is, As or Error
+// method is called; a nil-valued node is never asked to unwrap itself; and an
+// Unwrap that panics is treated as having no children. What lies past the
+// bounds is reported as absent. Nothing this package builds comes close: a
+// refusal is returned as itself.
 func walkError(err error, match func(error) bool) bool {
-	const (
-		// maxNodes bounds the whole search, cycles included.
-		maxNodes = 256
-
-		// maxPending bounds what is held while searching. The queue is an
-		// array, so this is the entire cost of the walk whatever the graph
-		// does.
-		maxPending = 64
-	)
-
-	var (
-		queue [maxPending]error
-		head  int // where the next pending node is read from
-		count int // pending nodes
-	)
-
-	for nodes := 0; nodes < maxNodes; nodes++ {
-		if err == nil {
-			if count == 0 {
-				break
-			}
-			err = queue[head]
-			queue[head] = nil
-			head = (head + 1) % len(queue)
-			count--
-		}
-
-		if match(err) {
-			return true
-		}
-
-		// A value that is nil underneath is a leaf. Its Unwrap may be perfectly
-		// willing to dereference the nothing it was called on.
-		if !isNilValue(err) {
-			switch u := err.(type) {
-			case interface{ Unwrap() error }:
-				// Single-child first, as the errors package resolves the same
-				// ambiguity, so a type that implements both is followed the way
-				// the standard library follows it.
-				if child := u.Unwrap(); child != nil && count < len(queue) {
-					queue[(head+count)%len(queue)] = child
-					count++
-				}
-			case interface{ Unwrap() []error }:
-				for _, child := range u.Unwrap() {
-					if count == len(queue) {
-						// Full. Stop reading this list rather than walking a
-						// hostile one to its end.
-						break
-					}
-					if child == nil {
-						continue
-					}
-					queue[(head+count)%len(queue)] = child
-					count++
-				}
-			}
-		}
-
-		err = nil
-	}
-
-	return false
-}
-
-// isNilValue reports whether err holds nil underneath its type: a nil pointer,
-// interface, map, slice, func or channel inside a non-nil error interface.
-//
-// Such a value is not the nil error, so it is delivered and examined like any
-// other, but calling a method on it runs code written for a receiver that is not
-// there. Whether that panics is up to the value's own author, and the value's
-// own author may be whoever wrote the input.
-func isNilValue(err error) bool {
-	v := reflect.ValueOf(err)
-	switch v.Kind() {
-	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice,
-		reflect.Func, reflect.Chan, reflect.UnsafePointer:
-		return v.IsNil()
-	}
-	return false
+	return errgraph.Find(err, match)
 }

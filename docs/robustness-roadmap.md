@@ -569,8 +569,8 @@ a plain body hands it back unchanged as before this item, while a decoder may
 still reword it, as quoted-printable rewords an ordinary read error. A first
 pass that asked every source error `IsFatal` regressed exactly that and was
 corrected in review. Nothing is claimed about what an arbitrary decoder does
-with the errors it is given, and the wider predicate audit stays with
-`ROB-120-007` (#16). This fixes a defect present before
+with the errors it is given. The wider predicate audit is `ROB-120-007` (#16),
+which leaves this guard's identity test as it is. This fixes a defect present before
 this item (recorded on [issue #3](https://github.com/saeroun-ai/emlkit/issues/3)):
 a quoted-printable body whose soft line break the input budget cut, such as
 `foo=\r\nbar` with the budget ending after the `\r`, ended with the decoder's ordinary
@@ -830,10 +830,11 @@ the session creates; `Read`, `ReadWithOptions` and `New` have none.
   anywhere else is an ordinary input error. The budget records its first
   refusal under its lock, from the charge that did not fit, so `Refusal` and
   the refusal's position name that charge; it then refuses every later charge,
-  from any reader, with that same value. The wider predicate audit stays with
-  `ROB-120-007` (#16): a part header's source error that unwraps to itself
-  still hangs the pre-existing `errors.Is` in `textproto` `NextPart` (also on
-  `b994934`), which this item does not change.
+  from any reader, with that same value. A part header's source error that
+  unwraps to itself hung the pre-existing `errors.Is` in `textproto` `NextPart`
+  (on `b994934` and `b5db93f`); this item did not change that, and
+  `ROB-120-007` (#16) removed it, after which the child case of this item's
+  provenance test is no longer skipped.
 - Additions: two `Limits` fields, and in `textproto` the `HeaderBudget` type,
   `NewHeaderBudget`, `HeaderBudget.Refusal`, `HeaderLimits.Total` and two
   `HeaderLimitKind` values. Positional `Limits{...}` literals no longer
@@ -1419,8 +1420,8 @@ warning, which used to be dereferenced, is now returned. Evidence:
 siblings with iteration continuing, unknown charset and both-unknown unchanged,
 `Parse` + `NewReader` keeping both diagnostics at paths `[1]` and `[2]`, sink
 stops wrapping either warning, `MaxPartCount` still fatal, header and body I/O
-errors still errors). The predicates themselves are unchanged; `ROB-120-007`
-still owns their behavior on hostile error graphs.
+errors still errors). The predicates themselves were unchanged by this item;
+`ROB-120-007` later made them, and `mail.Reader`'s own test, bounded and exact.
 
 `ROB-100-007` ([issue #15](https://github.com/saeroun-ai/emlkit/issues/15))
 closes a cross-layer inconsistency. Under `Parse` the engine reads
@@ -1528,7 +1529,7 @@ contract is:
 | ROB-120-004 | Planned | Keep filename sanitization, HTML safety, archive expansion, and executable handling outside core parsing. | API boundary/documentation tests. |
 | ROB-120-005 | Planned | Never perform network fetches for Content-Location/external-body while parsing. | Hostile URI tests. |
 | ROB-120-006 | Planned | Preserve cryptographic raw representations and clearly mark repaired signed content as unverifiable. | DKIM/S-MIME/PGP invariants. |
-| ROB-120-007 | Planned | Make every parser-wide error classification cycle-safe and non-forgeable over input-derived error graphs. | Hostile-graph tests at each predicate: no hang, no panic, no nil dereference, no misclassification. |
+| ROB-120-007 | Done | Make every parser-wide error classification cycle-safe and non-forgeable over input-derived error graphs. | Hostile-graph tests at each predicate: no hang, no panic, no nil dereference, no misclassification. |
 | ROB-120-008 | Done | Make writer generation and serialization refuse a syntactically unparseable Content-Type with an explicit error, never a panic, an invented media type, parameter map or boundary, or silent metadata loss ([issue #58](https://github.com/saeroun-ai/emlkit/issues/58)). | Lowercase/uppercase malformed tail, duplicate boundary, malformed text/plain and missing subtype, at the root and as a part, through `CreateWriter`, `CreatePart`/`CreatePartWithBuffer`, `Parse`→`WriteTo` and `NewMultipart` Body reads: no panic; no output from the refused entity or part before its header is validated (output of its parent and of earlier siblings may already have been written and is not withdrawn); a good part after a refused one, deterministic repeated reads with no blocked worker; valid boundary generation, charset/encoding policy and copy-on-write unchanged. |
 
 `ROB-120-008` ([issue #58](https://github.com/saeroun-ai/emlkit/issues/58))
@@ -1637,6 +1638,159 @@ examined and children held pending, follow `Unwrap() error` and
 methods. Predicates that are documented as `errors.As` semantics and must stay
 that way for compatibility should say so, and the parser's own decisions should
 stop depending on them.
+
+A third consequence was found while the item was being designed, and is what
+moved it forward (see the ordering exception below): a source that fails inside
+a part's header block with an error that unwraps to itself made the child's
+`NextPart` hang in `textproto`'s `errors.Is`, after `Parse` had succeeded. It
+reproduces on `b994934` and on `b5db93f`. A `CharsetReader` failing with such
+an error hung `Entity.Walk` (in `IsUnknownEncoding`) and `mail.Reader` (in
+`IsFatal`) the same way, because both asked the predicates about a warning
+whose cause they then walked without a bound.
+
+**Contract.** The item was implemented as follows.
+
+- One traversal, `internal/errgraph.Find`, used by every classification in the
+  module and by no public API of its own. It walks breadth first over
+  `Unwrap() error` and `Unwrap() []error` from the error given. It never calls
+  `Error`, `Is`, `As` or `Format`; it never asks a nil or typed-nil value to
+  unwrap itself; it treats an `Unwrap` that panics — `panic(nil)` included — as
+  having no children; and it hashes and compares nothing, so a value of a
+  non-comparable type cannot make it panic. Its match callbacks are the
+  module's own: an exact type assertion, a field only the module can set, or
+  `==` against a pointer-typed target.
+- Fixed bounds: at most 256 errors examined, which is what ends a cycle, a ring
+  or a diamond; at most 64 held pending, in a fixed array; and at most 256 child
+  slots inspected across the walk, one per `Unwrap() error` call and one per
+  element of an `Unwrap() []error` result, nil and typed-nil elements included,
+  so a join whose children are a long run of nils is not scanned to its end.
+  A match deeper or wider than these is reported as absent (a false negative).
+  Nothing the parser builds comes near them. The numbers are not a
+  compatibility promise.
+- **Public predicates.** `IsFatal`, `IsUnknownEncoding` and `IsUnknownCharset`
+  use that walk. `IsFatal` matches only a non-nil `*fatalParseError`, the
+  parser's own concrete type; it no longer accepts any value that satisfies
+  `FatalError`, since a struct in another package embedding a `FatalError`
+  field inherits the unexported method — a nil one included. The two warning
+  predicates match the exact value types, as `errors.As` did, but only with a
+  non-nil cause: every warning the parser reports carries one, and the zero
+  `UnknownEncodingError{}` / `UnknownCharsetError{}` describe nothing. The
+  cause is unexported, so a composite literal in another package can only build
+  that zero value; a genuine warning the parser returned can still be copied
+  and handed on like any value, and is still matched. A pointer to either type
+  is not itself a match, as before; it is unwrapped like any wrapper, unless it
+  is nil. Being graph searches, these answer whether such a value is anywhere
+  in an error, which is not the parser's own warning decision below: a warning
+  whose cause holds a genuine fatal error satisfies both `IsUnknownCharset` and
+  `IsFatal`.
+- **Parser decisions.** They decide by top-level type, reader-local identity or
+  session identity, and do not unwrap what a caller's component supplied, with
+  one deliberate exception: the EOF class of `textproto.MultipartReader.NextPart`
+  follows a source error's own `Unwrap` methods through the bounded walk, to
+  keep recognizing a wrapped `io.EOF`. That is the only foreign method it calls;
+  the walk bounds the number of calls, not what one call does. Nothing here
+  promises that no foreign method runs anywhere else — a decoder or a
+  `CharsetReader` may do what it likes with an error it is given.
+  `textproto.MultipartReader.NextPart` recognizes its own header and
+  line refusals by identity with the refusal that reader created and returned
+  (an unexported field), so a refusal an input hands back — forged, or genuine
+  but made by another reader — is an ordinary failure, also at the framing line
+  where type and mark used to decide. Its EOF class is the bounded walk with an
+  identity match against `io.EOF` and `io.ErrUnexpectedEOF`. The `message`
+  multipart iterator and the root header read ask `textproto.HeaderLimit` and
+  `LineLimit` only after a top-level type assertion, because textproto returns
+  its refusals as themselves; given a value of their own type those predicates
+  call no method but that type's. `Entity.Walk` and `mail.Reader` accept a
+  warning only when the error is itself one of the two warning types and comes
+  with an entity; `mail` then confirms the cause with the public predicate on
+  that value alone, which matches a genuine warning before it would unwrap
+  anything. A warning is recoverable whatever its cause holds: a
+  `CharsetReader` failing with a `FatalError` from another parse leaves the part,
+  its raw body and the siblings after it usable, because only this parse's own
+  stop ends the traversal. The
+  existing identities are unchanged: the shared header budget's refusal
+  (`HeaderBudget.Refusal`, pointer comparison), the session's published stop,
+  and the body guard's input-limiter failure (`inputStop`, at most one standard
+  join per level), with their existing precedence.
+
+**Compatibility.**
+
+- The three public predicates no longer call `As` methods, no longer follow
+  `Unwrap` without a bound, and no longer accept an embedded or nil
+  `FatalError`, a zero warning, or a match past the bounds. They still find a
+  genuine value through `fmt.Errorf` with `%w` (one or several), `errors.Join`
+  and custom `Unwrap` wrappers, and inside a `FatalError`. An error type that
+  exposes one of these values only through an `As` method is no longer
+  recognized.
+- `textproto.MultipartReader.NextPart` no longer consults `Is` methods for its
+  EOF class: an error that claims to be `io.EOF` only through `Is` no longer
+  ends the iteration, while `io.EOF` and `io.ErrUnexpectedEOF` wrapped by `%w`,
+  joins or custom `Unwrap` still do. A bare `io.EOF` inside a header block
+  still ends that block, as before. A genuine refusal made elsewhere and handed
+  back by the source no longer ends the iteration.
+- `mail.Reader` (`NextPart`, `CreateReader`) used to reject a warning for which
+  `IsFatal` was true, so a `CharsetReader` failing with a genuine `FatalError`
+  from another parse ended the reader with no part. It now returns that part
+  with its warning and continues, as `Entity.Walk` already did; a stop of the
+  reader's own parse is still returned in place of the warning and still ends
+  it.
+- `FatalError`'s documentation no longer claims that satisfying the interface
+  proves origin. It restricts the type assertion example to an error a parse
+  API returned directly, and `errors.As` to chains whose every wrapper is
+  trusted: `IsFatal` returning true does not make `errors.As` safe on the same
+  error, since `errors.As` still calls every `As` method and follows `Unwrap`
+  without a bound on its own way through the graph.
+- No public API was added. `internal/errgraph` is internal to the module.
+
+**Limits that remain.**
+
+- A walk bounds how many `Unwrap` calls it makes, not what one call does. An
+  `Unwrap` that blocks, spins, allocates without end, calls `runtime.Goexit`
+  or exhausts the stack is the caller's code on the caller's goroutine, and no
+  in-process walk can interrupt it. Neither is anything claimed for `Error` or
+  `fmt` of such an error, for a caller's own `errors.Is`/`errors.As`, or for
+  what a `CharsetReader` or decoder does with an error it is given.
+- Replay. A genuine value presented again somewhere it did not come from is the
+  parser's value, and nothing in the type system tells a value from itself.
+  `IsFatal` reports a replayed fatal error as fatal; `textproto.HeaderLimit`
+  and `LineLimit` report a replayed refusal as genuine; and the `message`
+  multipart iterator and root header read, which see a refusal only through
+  `textproto`'s public API, diagnose a genuine refusal the source fails with
+  at the top level as a budget refusal of their own. Only `textproto`'s own
+  iterator decision is exact by identity.
+- The message's bytes cannot produce Go methods. Every hostile error here is a
+  caller's component — its `io.Reader`, `CharsetReader` or `DiagnosticSink` —
+  failing with a value of a type its own code declares.
+
+**Acceptance evidence.** `internal/errgraph/errgraph_test.go` (genuine through
+wrapping and joins; nil and typed nil; fused self, join and ring cycles; a
+2^30-path diamond; the node, pending and slot bounds at their edges, including
+a run of 65,536 nils and the shared charge of `Unwrap() error`; panicking
+single and multi `Unwrap` with `panic(nil)`; typed nils never unwrapped;
+`Is`/`As`/`Error` never called; non-comparable nodes);
+`textproto/multipart_errgraph_test.go` (wrapped `io.EOF` and
+`io.ErrUnexpectedEOF` still end the iteration at a framing line and in a part
+header; an `Is` liar, cycles, panics, typed nils and an EOF past the bounds do
+not, and do not hang or panic; own header and line refusals end it; replayed,
+forged, typed-nil and joined refusals do not, with and without budgets);
+`errgraph_test.go` (exact provenance of the three predicates, external
+`FatalError` embedding, zero warnings, hostile graphs for every predicate,
+source failures at the root and at a child after an intact sibling through
+`NextPart` and `Walk`, a hostile `CharsetReader` keeping the part, its raw
+body, its warning and the sibling after it, a hostile sink's stop returned as
+the identical session stop, a `CharsetReader` failing with a genuine fatal
+error from another parse — a warning `IsFatal` also matches — keeping the
+part, its raw body and its siblings at the root, through the iterator and
+through `Walk`, and an independent subprocess probe with cycles that never
+end, under a 30 s deadline and a 16 MiB stack cap);
+`mail/reader_errgraph_test.go` (the same source, `CharsetReader` and sink
+cases through `mail.Reader`, and the genuine-fatal cause through
+`CreateReader` and `NewReader`); `TestParse_totalHeaders_foreignRefusal`, whose
+child cycle case is no longer skipped; and the existing `HeaderLimit` and
+`LineLimit` hostile-graph tests in `textproto`, whose self cycles and rings are
+now fused fixtures with a blown-fuse assertion. Every in-process cycle is fused
+at 10,000 `Unwrap` calls without allocating, so a regression fails instead of
+spinning; cycles that never end run only in the subprocess probes.
 
 ### ROB-130 — Corpus, fuzzing, differential testing, and performance
 
@@ -1772,6 +1926,17 @@ no-progress detection, general header recovery, embedded-message parsing or
 raw replay. Those items are not advanced by this work. Future embedded-message
 parsing must reuse the same session budget rather than resetting it.
 
+**Exception — `ROB-120-007`.** Taken after `ROB-001-010` was Done, for
+[issue #16](https://github.com/saeroun-ai/emlkit/issues/16), ahead of
+`ROB-010` through `ROB-110` and of `ROB-120-001` through `ROB-120-006`,
+because QA found a concrete hang, independently confirmed on `b994934` and
+`b5db93f`: a source failing inside a child's header block with an error that
+unwraps to itself made `NextPart` never return. It depends on nothing those
+items introduce: it changes how existing errors are classified, not what is
+parsed. It does not advance, start or complete cancellation of a blocked read
+(`ROB-001-006`, #6), no-progress detection (`ROB-001-007`, #7), raw replay
+(#41) or any other item.
+
 ## 9. Per-item implementation protocol
 
 Each Claude Code execution receives exactly one ledger ID and must:
@@ -1870,3 +2035,34 @@ fuzz run's observed memory peak was 236,122,112 bytes. Completed delegation
 JSONs have empty permission-denial arrays; the interrupted run is not a success.
 This operational safeguard does not complete CI (#14). The wider cancellation,
 no-progress, embedded-message, raw-replay and predicate-audit items remain open.
+
+
+Codex reviewed `ROB-120-007` for [issue #16](https://github.com/saeroun-ai/emlkit/issues/16).
+The independent 60-case baseline had eight timeouts, 13 panics and six false
+positive classifications; every case now returns normally without a false
+match. Genuine wrappers (18 cases), EOF classification (nine), source/hook/sink
+flows across all three profiles (147), and 85 exact node/pending/child-slot
+boundary checks pass. These ran as 235 deadline-bound subprocess invocations;
+the boundary executable also passes with `GODEBUG=panicnil=1`. Full non-short
+tests and race pass in all six packages on Go 1.26.10 linux/amd64, with build,
+focused 386 checks, formatting, whitespace and vet excluding the two existing
+warning categories. The existing header totals (2,352 matrix + 199 integration,
+three candidate preflights and six default boundaries), input (2,160 + 288 +
+200), body (168 + 1,080), diagnostic (196 and a 10,000-part storm), healing
+(240), opaque (288) and mail (36) QA probes still pass. Scoped total-header
+fuzzing passed 30 seconds / 694,037 executions.
+
+Review kept the public graph search distinct from the parser's own top-level
+warning decision: a charset hook replaying a genuine fatal error from another
+parse leaves this part and its siblings usable; this parse's actual stop still
+wins. That mail behavior change is accepted within the requested healing scope
+and documented above. Review also corrected exact child-slot charging, converted
+the relevant old in-process endless fixtures to fused ones, qualified the
+external-method and warning claims, and restored the previously skipped #5
+child-cycle regression. Exact infinite cycles run only in a deadline subprocess
+with a 16 MiB stack cap. Every build/test/QA run used the enforced 1.5 GiB RAM,
+zero-swap, two-core, 128-task bounded runner, one job at a time; no guard-disabling
+mutation was run. All completed delegation JSONs have empty permission-denial
+arrays. Foreign-method execution, bounded-search false negatives and genuine
+error replay remain the explicitly documented limits; this does not complete
+cancellation (#6) or no-progress handling (#7).

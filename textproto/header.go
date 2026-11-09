@@ -633,7 +633,10 @@ func (e *HeaderLimitError) Unwrap() error {
 //     unwraps to itself, or a ring of them — terminate rather than hang;
 //   - a fixed number of children held pending, which is what keeps a join of a
 //     million errors from costing a million slots. What does not fit is not
-//     examined.
+//     examined;
+//   - a fixed number of child slots inspected across the whole walk, nil
+//     children included, so that a join whose children are a long run of nils
+//     is not scanned to its end either.
 //
 // So a refusal buried deeper or wider than those caps is not found, and is
 // reported as no refusal rather than by searching without limit. Nothing the
@@ -642,7 +645,13 @@ func (e *HeaderLimitError) Unwrap() error {
 //
 // Nodes that are nil, or that hold a nil pointer, are never asked to unwrap
 // themselves — what an input hands over may have methods that dereference
-// nothing.
+// nothing — and an Unwrap that panics is treated as having no children. The
+// walk bounds how many Unwrap calls it makes, not what one of them does: an
+// Unwrap that blocks or allocates without end is the caller's code and is not
+// interrupted.
+//
+// The one value that cannot be told apart is a genuine refusal presented again
+// somewhere it did not come from; see HeaderLimitError.
 func HeaderLimit(err error) (*HeaderLimitError, bool) {
 	var found *HeaderLimitError
 	walkError(err, func(node error) bool {

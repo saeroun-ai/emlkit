@@ -89,15 +89,27 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 		// inside a part whose extent it never learned, or on a line it could not
 		// finish, and there is nothing safe to resume from.
 		//
-		// textproto.HeaderLimit and textproto.LineLimit are what decide that,
-		// rather than the shape of the error: a value shaped like a refusal is
-		// something the message's own bytes can put here, and one of the shapes
-		// it can put here is a typed nil that would be dereferenced below.
-		if limit, refused := textproto.HeaderLimit(err); refused && !isTotalHeaderKind(limit.Kind()) {
-			return nil, r.headerLimitFailure(limit)
+		// textproto returns its own refusal as itself, never wrapped, so only
+		// err's own dynamic type is asked about, and nothing err wraps — a
+		// read failure of the caller's source, with whatever methods it has —
+		// is unwrapped to look further. textproto.HeaderLimit and
+		// textproto.LineLimit then decide whether that value is genuine rather
+		// than shaped like one: a reader's error can be a forged refusal, or a
+		// typed nil that would be dereferenced below. Given a value of their
+		// own type they call no method of anything but that type.
+		//
+		// A genuine refusal made elsewhere and handed back by the source is
+		// the one value this cannot tell from the iterator's own: nothing in
+		// the type system tells a value from itself.
+		if e, ok := err.(*textproto.HeaderLimitError); ok {
+			if limit, refused := textproto.HeaderLimit(e); refused && !isTotalHeaderKind(limit.Kind()) {
+				return nil, r.headerLimitFailure(limit)
+			}
 		}
-		if limit, refused := textproto.LineLimit(err); refused {
-			return nil, r.lineLimitFailure(limit)
+		if e, ok := err.(*textproto.LineLimitError); ok {
+			if limit, refused := textproto.LineLimit(e); refused {
+				return nil, r.lineLimitFailure(limit)
+			}
 		}
 		return nil, err
 	}

@@ -710,31 +710,33 @@ func (e *Entity) Walk(walkFunc WalkFunc) error {
 				}
 				path = path[:len(path)-1]
 				continue
-			} else if part != nil && (IsUnknownEncoding(err) || IsUnknownCharset(err)) {
+			} else if part != nil && isWarning(err) {
 				// Forward the warning to walkFunc, together with the usable
-				// part it describes.
+				// part it describes. A part's warning is returned as itself, so
+				// only err's own type is asked about: whatever the warning wraps
+				// came from a CharsetReader or the decoders, and is not walked.
 				//
-				// A warning always arrives with its part, so an error that
-				// answers to one of these predicates with no part is not a
-				// warning about anything walkFunc could be handed. A scope that
-				// refused a child returns no part, and its FatalError wraps
-				// whatever a sink returned or the input failed with, which may
-				// itself wrap a warning; forwarding that would hand walkFunc a
-				// nil entity and then descend into it. It ends the walk as
-				// itself instead, below.
+				// A warning always arrives with its part, so an error with no
+				// part is not a warning about anything walkFunc could be
+				// handed. A scope that refused a child returns no part, and its
+				// FatalError wraps whatever a sink returned or the input failed
+				// with, which may itself wrap a warning; forwarding that would
+				// hand walkFunc a nil entity and then descend into it. It ends
+				// the walk as itself instead, below.
 			} else if err != nil {
 				return err
 			}
 
-			// A part forwarded with a warning may have been the one a sink
-			// stopped the parse over, and the stop it returned with is then the
-			// session's: a FatalError wrapping the sink's own error, which may be
-			// or wrap that very warning and so pass the test above. The stop is
-			// the caller ending the parse, not a warning about a part, so it
-			// outranks the forwarding and is returned — the identical value
-			// every other scope reports — before walkFunc is handed the part.
-			// Asking the session rather than err is what makes this exact: an
-			// unstopped parse reports nil whatever err claims to be.
+			// A part that would be forwarded may belong to a parse that has been
+			// stopped meanwhile. A sink that stops the parse over a part's own
+			// warning makes the part come back with the session's stop rather
+			// than the warning, which the test above already returns, but the
+			// stop is the caller ending the parse, not a warning about a part,
+			// so it outranks the forwarding wherever it came from and is
+			// returned — the identical value every other scope reports — before
+			// walkFunc is handed the part. Asking the session rather than err
+			// is what makes this exact: an unstopped parse reports nil whatever
+			// err claims to be.
 			if stop := e.parse.fatalErr(); stop != nil {
 				return stop
 			}

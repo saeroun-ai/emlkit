@@ -79,9 +79,33 @@ func NewReader(e *message.Entity) *Reader {
 // comes without an entity, or inside a message.FatalError — a stop a
 // DiagnosticSink asked for, or a resource budget, that happens to wrap one. A
 // stop ends the traversal however it is described.
+//
+// The message package returns a warning as itself together with its entity,
+// never wrapped, so only err's own dynamic type is asked about: nothing it
+// wraps — a CharsetReader's error, a source's read failure, a sink's error
+// inside a FatalError — is unwrapped to look further. The predicate then runs
+// on that value alone and matches a genuine warning before it would unwrap
+// anything; a zero UnknownEncodingError{} or UnknownCharsetError{}, which
+// carries no cause and is no warning of the parser's, does not match, and
+// unwrapping it calls only this module's own method.
+//
+// A warning is recoverable whatever its cause holds. A CharsetReader may fail
+// with a FatalError from some other parse, which message.IsFatal then finds
+// inside the warning, but it describes this part's undecoded charset, not a
+// stop of this parse: the part is returned with the warning and the next call
+// continues. A stop of this parse is the FatalError returned in place of a
+// warning, or ParseStop, and ends the traversal as before.
 func recoverable(e *message.Entity, err error) bool {
-	return e != nil && !message.IsFatal(err) &&
-		(message.IsUnknownEncoding(err) || message.IsUnknownCharset(err))
+	if e == nil {
+		return false
+	}
+	switch err.(type) {
+	case message.UnknownEncodingError:
+		return message.IsUnknownEncoding(err)
+	case message.UnknownCharsetError:
+		return message.IsUnknownCharset(err)
+	}
+	return false
 }
 
 // CreateReader reads a mail header from r and returns a new mail reader.

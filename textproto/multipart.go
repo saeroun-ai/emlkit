@@ -150,8 +150,11 @@ func newPart(mr *MultipartReader) (*Part, error) {
 			// The part is gone, so the position it had is reported with the
 			// failure rather than lost with it. The refused line or field is
 			// placed the same way: its offset within the block plus where the
-			// block itself began.
-			return nil, scan.limitError()
+			// block itself began. It is remembered as this reader's own, which
+			// is how NextPart tells it from one an input hands back.
+			refusal := scan.limitError()
+			mr.refused = refusal
+			return nil, refusal
 		}
 		return nil, err
 	}
@@ -339,6 +342,15 @@ type MultipartReader struct {
 	partsRead   int
 	done        bool
 
+	// refused is the budget refusal this reader itself created and returned —
+	// a *HeaderLimitError for a part's header block, a *LineLimitError for a
+	// framing line — or nil. NextPart recognizes its own refusal by identity
+	// with it, so that a refusal an input hands back, forged or genuine but
+	// made by another reader, is the ordinary read failure it is. When set it
+	// holds a non-nil pointer, so comparing an error with it compares two
+	// pointers, or two different types, and cannot panic.
+	refused error
+
 	// limits are the budgets of each part's header block, and of the framing
 	// lines between parts, or the zero value for no budget at all. See
 	// SetHeaderLimits.
@@ -420,29 +432,41 @@ func (r *MultipartReader) SetHeaderLimits(limits HeaderLimits) {
 // NextPart returns the next part in the multipart or an error.
 // When there are no more parts, the error io.EOF is returned.
 //
-// Once NextPart has returned an EOF-class error (one satisfying
-// errors.Is(err, io.EOF) or errors.Is(err, io.ErrUnexpectedEOF)), subsequent
-// calls return io.EOF immediately. This guards callers against infinite loops
-// on a body that ends without its closing boundary, whose underlying reader
-// stays errored. A header block that exceeded the budget set by
-// SetMaxHeaderBytes ends the iteration the same way, for the same reason: the
-// reader is standing inside a part whose extent it never learned. An ordinary
-// read failure does not end it, whatever that failure carries.
+// Once NextPart has returned an EOF-class error, subsequent calls return io.EOF
+// immediately. This guards callers against infinite loops on a body that ends
+// without its closing boundary, whose underlying reader stays errored. An error
+// is EOF-class when io.EOF or io.ErrUnexpectedEOF itself is reachable from it
+// through Unwrap() error and Unwrap() []error, so a read failure wrapped by
+// fmt.Errorf with %w, joined by errors.Join or wrapped by a custom Unwrap still
+// is one. The walk is the bounded one HeaderLimit describes, and no Is or As
+// method is consulted: an error that claims to be io.EOF only through its Is
+// method is not EOF-class, and neither is one that reaches io.EOF only deeper
+// or wider than the walk's bounds.
+//
+// A header block or a framing line that exceeded its budget ends the iteration
+// the same way, for the same reason: the reader is standing inside a part whose
+// extent it never learned, or on a line it could not finish. That refusal is
+// recognized by identity with the one this reader made, so a refusal an input
+// hands back, forged or genuine but made elsewhere, does not end it. An
+// ordinary read failure does not end it, whatever that failure carries.
 func (r *MultipartReader) NextPart() (*Part, error) {
 	if r.done {
 		return nil, io.EOF
 	}
 	p, err := r.nextPart()
-	if err != nil {
-		if _, refused := HeaderLimit(err); refused {
-			r.done = true
-		} else if _, refused := LineLimit(err); refused {
-			r.done = true
-		} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			r.done = true
-		}
+	if err != nil && (err == r.refused || isEOFClass(err)) {
+		r.done = true
 	}
 	return p, err
+}
+
+// isEOFClass reports whether io.EOF or io.ErrUnexpectedEOF is reachable from
+// err by identity, through the bounded walk. Both targets are pointers, so the
+// comparison cannot panic whatever the dynamic type of a node is.
+func isEOFClass(err error) bool {
+	return walkError(err, func(node error) bool {
+		return node == io.EOF || node == io.ErrUnexpectedEOF
+	})
 }
 
 // readFramingLine reads the next line of multipart framing — a preamble line, a
@@ -511,7 +535,9 @@ func (r *MultipartReader) readFramingLine() ([]byte, error) {
 		}
 		if n > r.limits.MaxLineBytes-data {
 			r.lineBuf = line
-			return nil, newLineLimitError(r.limits.MaxLineBytes, start)
+			refusal := newLineLimitError(r.limits.MaxLineBytes, start)
+			r.refused = refusal
+			return nil, refusal
 		}
 		data += n
 
@@ -537,14 +563,13 @@ func (r *MultipartReader) nextPart() (*Part, error) {
 
 		// A framing line past its budget is this reader's own refusal, and is
 		// returned as itself rather than wrapped: it is not a failure of the
-		// input, and nothing below it should be asked to explain it. The exact
-		// dynamic type and this package's own mark are what identify it, so an
-		// input that fails with ErrLineTooBig, or with a LineLimitError of its
-		// own, is the ordinary read failure it is — including a typed nil of
-		// that type, which passes the type assertion and would be dereferenced
-		// by the mark if it were not excluded first.
-		if e, ok := err.(*LineLimitError); ok && e != nil && e.fromParser {
-			return nil, e
+		// input, and nothing below it should be asked to explain it. Identity
+		// with the refusal this reader made is what identifies it, so an input
+		// that fails with ErrLineTooBig, with a LineLimitError of its own — a
+		// typed nil included — or with a genuine one another reader made, is
+		// the ordinary read failure it is.
+		if err != nil && err == r.refused {
+			return nil, err
 		}
 
 		if err == io.EOF && r.isFinalBoundary(line) {
