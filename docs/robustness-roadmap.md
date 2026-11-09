@@ -2304,6 +2304,66 @@ spinning; cycles that never end run only in the subprocess probes.
 | ROB-130-006 | Planned | Add parser/decoder benchmarks for small mail, huge attachments, deep/wide MIME, and near-boundary attacks. | Baselines and regression thresholds. |
 | ROB-130-007 | Planned | Add long-running randomized soak tests with leak and memory ceilings. | Repeatable seeded job. |
 | ROB-130-008 | Planned | Run `go test`, race tests, fuzz smoke tests, formatting, vet/static analysis, and benchmarks in CI. | Required green checks. |
+| ROB-130-009 | Done | Stabilize comment-parser cumulative-allocation regression checks without weakening their ability to detect allocation growth ([issue #59](https://github.com/saeroun-ai/emlkit/issues/59)). | Bounded repeated checks, finite deliberate-allocation positive controls, original accessor results and scanner no-allocation assertions, full/race/386 verification; no threshold-only relaxation or retry-until-pass. |
+
+`ROB-130-009` changes test measurement only, in `mail/header_comment_test.go`.
+`allocBytesPerOp` replaces the single-call `TotalAlloc` reading with one
+reading around a fixed 32 back-to-back calls, at `GOMAXPROCS` 1 (restored by
+`defer`), divided by 32 and rounded up — the averaging `testing.AllocsPerRun`
+uses for counts, without its warm-up call. The result is the mean cumulative
+bytes per accessor call, not each call's own cost: a cost every call pays,
+such as a copy of the comment, is in the mean at full size, while one paid by
+only some calls is diluted by their share (a once-only cost at 1/32). Foreign
+allocations can only add to the process-wide counter, so the mean never falls
+below the calls' own mean; bytes from elsewhere are spread over 32 calls
+instead of landing on one. This lowers the odds of a noisy failure; repeated
+passes do not prove the window free of foreign bytes. The 4 KiB budget, the
+4–32 KiB sizes, the linear-growth rule and the accessor results are unchanged.
+Every measured call's error and result is now checked, not only the last
+one's: each call compares against expected values built before the
+measurement, without allocating, and the first failing call is reported
+afterwards (the trailing `Message-Id` result and the address counts of the
+linear-growth test are newly checked). The constant-budget cases and the
+32 KiB issue #9 reproduction each measure a 1 KiB comment first on the same
+budget, and the first size over budget stops the case, so a reintroduced
+quadratic copy costs about 16 MiB per case before failing instead of being
+replayed 32 times at 32 KiB (about 16 GiB); the 32 KiB measurements still run
+when the preflight passes. `TestAllocBytesPerOp_controls` runs both gates
+against known allocations: a per-call payload one byte over budget and the
+pre-#9 `comment += byte` loop on a 256-byte comment must fail the budget,
+1 KiB per call (over budget only when summed) and no allocation must pass, and
+the pre-#9 loop at 64–512 bytes must fail the growth rule while 64 bytes per
+input byte must pass. The pre-#9 replica refuses, by panicking before copying,
+any input over 1,024 bytes including its closing delimiter and suffix, and a
+control checks that refusal with a just-over-cap input.
+`TestSkipComment_noAllocation` and the scanner are untouched. The source of the
+extra bytes in issue #59 is still not established; this bounds its effect, it
+does not explain it.
+
+**Codex review and verification for ROB-130-009.** Review required the
+hard-capped positive-control replica, the independent 1 KiB gate before the
+32 KiB reproduction, and checking every measured result/error. The final change
+is confined to test code and this ledger. All ten bounded verification steps
+passed: full uncached tests/race/GOARCH=386 across all six packages, build,
+filtered vet (the existing composites/stdmethods warnings remain), formatting
+and whitespace; the allocation/linear-growth/control tests repeated 100 times,
+and all mail tests repeated 25 times. The internal scanner's no-allocation
+assertion remains covered. Independent measurements checked 64 accessor/shape/
+size cases: MessageID 16 bytes/call, References 80, List-Unsubscribe 184 across
+4–32 KiB comments; a modest 16 KiB allocation repeated 64 times measured
+1,048,576 bytes and was detected. The committed controls additionally verify
+budget+1 and bounded quadratic growth, and reject an over-cap replica input.
+
+Evidence: `/tmp/emlkit-allocation-verification.json` and `.out`, per-step logs,
+plus the preserved pre-fix current/baseline failures in
+`/tmp/emlkit-empty-allocation-investigation.out`. Service
+`emlkit-bounded-5579c678a5` enforced 1,536 MiB RAM, no swap, two CPU cores,
+128 tasks and a deadline. Its memory peak reached the enforced limit; observed
+`memory.events` reported max=134 and oom=0/oom_kill=0/oom_group_kill=0 during
+race, and the whole job exited successfully. All jobs ran sequentially. Both
+Claude calls had empty permission-denial arrays. This is empirical stability
+under the tested conditions, not proof that process-wide measurement noise or
+one-time-cost dilution cannot occur.
 
 ### ROB-140 — Optional interoperability extensions
 
@@ -2357,6 +2417,15 @@ header-only input is accepted by the existing common path, every `Profile` and
 their own documented profile behavior), and its round-trip
 contract is the existing serializer's. It documents and pins that; it does not
 claim #17 or any part of it is finished.
+
+**Reviewed validation dependency — `ROB-130-009`.** After `ROB-010-001`,
+address the existing intermittent allocation-regression test before further
+framing implementation. Codex reproduced it on both the current test-only
+change and the older `92eaec1` baseline; evidence and acceptance criteria are
+in [issue #59](https://github.com/saeroun-ai/emlkit/issues/59). Reliable
+regression measurements are needed for the following implementation reviews.
+This changes the test measurement only; it does not reopen the fixed comment
+scanner, complete CI (#14), or complete the performance audit (#18).
 
 **Exception — `ROB-100-006`.** It was taken ahead of `ROB-010` through `ROB-090`
 at the user's request, as an independent compatibility fix
