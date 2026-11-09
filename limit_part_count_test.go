@@ -172,8 +172,14 @@ func mixedKinds(eol string) originFixture {
 // position of the header block that proved the part existed.
 func checkPartCountDiagnostic(t *testing.T, session *ParseSession, limit int64, path []int, offset int64) {
 	t.Helper()
+	checkPartCountDiagnosticIn(t, session.Diagnostics(), limit, path, offset)
+}
 
-	diags := session.Diagnostics()
+// checkPartCountDiagnosticIn is checkPartCountDiagnostic holding diags, rather
+// than everything the session recorded, to exactly the one entry.
+func checkPartCountDiagnosticIn(t *testing.T, diags []Diagnostic, limit int64, path []int, offset int64) {
+	t.Helper()
+
 	if len(diags) != 1 {
 		t.Fatalf("Diagnostics() = %v, want exactly one limit.part_count entry", codesOfDiags(diags))
 	}
@@ -258,7 +264,7 @@ func TestParse_partCount_wideBoundary(t *testing.T) {
 								if want := wideBodies(n); !reflect.DeepEqual(got.bodies, want) {
 									t.Errorf("bodies = %v, want %v", got.bodies, want)
 								}
-								if d := session.Diagnostics(); d != nil {
+								if d := takeLineNotes(t, "", eol, f.text, session.Diagnostics(), true); len(d) != 0 {
 									t.Errorf("Diagnostics() = %v, want none", codesOfDiags(d))
 								}
 								return
@@ -270,7 +276,7 @@ func TestParse_partCount_wideBoundary(t *testing.T) {
 							if want := wideBodies(n - 1); !reflect.DeepEqual(got.bodies, want) {
 								t.Errorf("bodies = %v, want %v recovered before the refusal", got.bodies, want)
 							}
-							checkPartCountDiagnostic(t, session, limit, []int{n - 1}, offset)
+							checkPartCountDiagnosticIn(t, takeLineNotes(t, "", eol, f.text, session.Diagnostics(), true), limit, []int{n - 1}, offset)
 						})
 					}
 				})
@@ -308,7 +314,7 @@ func TestParse_partCount_sharedAcrossTheWholeTree(t *testing.T) {
 						if !reflect.DeepEqual(got.bodies, spreadBodies) {
 							t.Errorf("bodies = %v, want %v", got.bodies, spreadBodies)
 						}
-						if d := session.Diagnostics(); d != nil {
+						if d := takeLineNotes(t, "", eol, f.text, session.Diagnostics(), true); len(d) != 0 {
 							t.Errorf("Diagnostics() = %v, want none", codesOfDiags(d))
 						}
 						return
@@ -320,7 +326,7 @@ func TestParse_partCount_sharedAcrossTheWholeTree(t *testing.T) {
 					if want := spreadBodies[:len(spreadBodies)-1]; !reflect.DeepEqual(got.bodies, want) {
 						t.Errorf("bodies = %v, want %v recovered before the refusal", got.bodies, want)
 					}
-					checkPartCountDiagnostic(t, session, limit, spreadOrder[last], offset)
+					checkPartCountDiagnosticIn(t, takeLineNotes(t, "", eol, f.text, session.Diagnostics(), true), limit, spreadOrder[last], offset)
 				})
 			}
 		})
@@ -659,7 +665,7 @@ func TestParse_partCount_chunkInvariance(t *testing.T) {
 					if !reflect.DeepEqual(got.bodies, spreadBodies) {
 						t.Errorf("%s: bodies = %v, want %v", label, got.bodies, spreadBodies)
 					}
-					if d := session.Diagnostics(); d != nil {
+					if d := takeLineNotes(t, label, eol, f.text, session.Diagnostics(), true); len(d) != 0 {
 						t.Errorf("%s: Diagnostics() = %v, want none", label, codesOfDiags(d))
 					}
 					continue
@@ -672,7 +678,7 @@ func TestParse_partCount_chunkInvariance(t *testing.T) {
 				if want := spreadBodies[:len(spreadBodies)-1]; !reflect.DeepEqual(got.bodies, want) {
 					t.Errorf("%s: bodies = %v, want %v", label, got.bodies, want)
 				}
-				checkPartCountDiagnostic(t, session, limit, spreadOrder[last], offset)
+				checkPartCountDiagnosticIn(t, takeLineNotes(t, label, eol, f.text, session.Diagnostics(), true), limit, spreadOrder[last], offset)
 			}
 		}
 	}

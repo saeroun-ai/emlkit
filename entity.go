@@ -35,6 +35,32 @@ type Entity struct {
 	// iterator that could not find a single delimiter. See metadata_repair.go.
 	unframed bool
 
+	// framing is, for a framed multipart entity of a parse, its body as the
+	// parse read it, before the cancellation gate of ParseContext — what this
+	// entity's own MultipartReader frames its parts from — and nil otherwise.
+	//
+	// The gate is for what a caller reads: once the parse is cancelled, Body
+	// and every part's Body deliver nothing more. Framing is not a caller's
+	// read. Where the enclosing scope's end has already been proven from bytes
+	// the parse holds — the outer delimiter after an inner closing delimiter,
+	// whose line ending is the outer one's — the framing must still see that
+	// end as the end of its input, as it would after an ordinary failure of
+	// the input at the same point, or a body the cancellation cut would end
+	// differently from the same body cut by a failure. Everything this reads
+	// comes, through the reader below it, from bytes the parse already took
+	// from its input, or from the input behind the gate on the input itself,
+	// which reads nothing once cancellation has been seen. (A Body the caller
+	// replaced is not framed through this; MultipartReader gates it.) So after
+	// the cancellation, framing only works through bytes the parse already
+	// admitted — what each enclosing container's reader holds: its 4 KiB
+	// buffer, a delimiter candidate held or being delivered as body, at most a
+	// framing line under Limits.MaxLineBytes plus one buffer (one buffer with
+	// that budget disabled), and its framing-line accumulator, bounded the same
+	// way — at every depth of containers, Limits.MaxMIMEDepth bounding how
+	// many, and only inside a read a caller had already started. NextPart and
+	// Walk still report the stop before framing anything.
+	framing io.Reader
+
 	// disposition is the Content-Disposition this entity was constructed with,
 	// interpreted at most once. It is nil only for an Entity that no constructor
 	// built — a struct literal — and that is how such an entity is recognized.
@@ -141,7 +167,18 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// it: the media type is empty, there are no parameters, and the error is the
 	// parse's stop, so no partial reading is mistaken for a complete one. The
 	// body is then left as the input held it, as for any stop below.
-	ct := ctx.contentType(header)
+	//
+	// The header block's line endings come first: they are how the block was
+	// framed, before anything its fields say. Under ProfileStrict a block framed
+	// by a bare '\r', or whose last line the input ended before any line ending,
+	// is refused on the terms of a refused Content-Type, which is then not
+	// interpreted at all; see line_endings.go.
+	var ct fieldReading
+	if lineErr := ctx.headerLineEndings(&header.Header); lineErr != nil {
+		ct = fieldReading{err: lineErr}
+	} else {
+		ct = ctx.contentType(header)
+	}
 	mediaType, mediaParams, mediaErr := ct.value, ct.params, ct.err
 
 	// A leaf body — one MultipartReader will not frame into parts — is held to
@@ -308,11 +345,19 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 
 	// A parse started by ParseContext gates both readers a caller can reach —
 	// Body, and the raw body WriteTo copies verbatim — on its context, whether
-	// the entity is a leaf or a framed multipart container, whose raw view and
-	// whose parts are read through the same gate. Bytes a buffered reader or a
-	// decoder holds ahead are then not delivered once the cancellation has been
-	// seen. A parse that cannot be cancelled gets both unchanged. See cancel.go.
+	// the entity is a leaf or a framed multipart container, whose raw view is
+	// gated like any Body and whose parts are each gated as entities. Bytes a
+	// buffered reader or a decoder holds ahead are then not delivered once the
+	// cancellation has been seen. A parse that cannot be cancelled gets both
+	// unchanged. See cancel.go.
+	//
+	// A framed multipart container keeps its ungated body for its own framing
+	// only, which no caller reads; see Entity.framing.
+	var framing io.Reader
 	if ctx.session.cancellable() {
+		if strings.HasPrefix(mediaType, "multipart/") && !ct.unframed {
+			framing = body
+		}
 		gated := ctx.session.gateReader(body)
 		if sameReader(originalBody, body) {
 			originalBody = gated
@@ -336,6 +381,7 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 		mediaParams:                mediaParams,
 		mediaErr:                   mediaErr,
 		unframed:                   ct.unframed,
+		framing:                    framing,
 		disposition:                disposition,
 		originalBody:               originalBody,
 		decodedBody:                body,
@@ -632,6 +678,7 @@ func (e *Entity) MultipartReader() MultipartReader {
 	}
 
 	parent := e.parse
+	src := e.Body
 	if !sameReader(e.Body, e.decodedBody) {
 		// The caller replaced the body after this entity was parsed, so what
 		// is about to be iterated is not the input's parts. Neither their
@@ -639,9 +686,21 @@ func (e *Entity) MultipartReader() MultipartReader {
 		// the input, so the parts are given no origin rather than a wrong one.
 		// They stay part of this parse, so the session travels down anyway.
 		parent = parent.detached()
+		// The framing reads the caller's reader through this parse's
+		// cancellation gate, so that once the parse is cancelled the framing
+		// asks nothing more of it — and nor does the framing of any part
+		// inside, which reads through this one. Body itself stays the
+		// caller's reader, ungated, as cancel.go says; only the parse's own
+		// reads of it are gated. No input budget applies to it, and its
+		// parts get no origin.
+		src = parent.session.gateReader(e.Body)
+	} else if e.framing != nil {
+		// The parse's own framing reads the body as the parse read it, behind
+		// no cancellation gate of this entity's; see Entity.framing.
+		src = e.framing
 	}
 
-	r := textproto.NewMultipartReader(e.Body, e.mediaParams["boundary"])
+	r := textproto.NewMultipartReader(src, e.mediaParams["boundary"])
 
 	// Every entity's header block is budgeted, and each gets the whole of every
 	// budget: the parts of this body are entities of the same parse, so the

@@ -104,8 +104,19 @@ func parseInput(src io.Reader, limit int64, sink DiagnosticSink) (*ParseSession,
 // diagnostic.
 func checkInputDiagnostic(t *testing.T, session *ParseSession, limit int64) {
 	t.Helper()
+	checkInputDiagnosticAfter(t, session, limit, -1)
+}
+
+// checkInputDiagnosticAfter is checkInputDiagnostic for a parse whose root
+// header, read with LF line endings, first recorded its header.bare_lf note at
+// lfNote (ROB-010-002); a negative lfNote is a parse that recorded none.
+func checkInputDiagnosticAfter(t *testing.T, session *ParseSession, limit, lfNote int64) {
+	t.Helper()
 
 	diags := session.Diagnostics()
+	if lfNote >= 0 {
+		diags = takeBareLFNote(t, "", diags, lfNote)
+	}
 	if len(diags) != 1 {
 		t.Fatalf("Diagnostics() = %v, want exactly one limit.input_bytes", diags)
 	}
@@ -223,13 +234,16 @@ func TestParse_inputBytesRootHeader(t *testing.T) {
 		// complete is the length of the shortest prefix that holds a whole
 		// header block.
 		complete int64
+		// lfNote is where an LF block records its header.bare_lf note once it
+		// is read (ROB-010-002), or -1.
+		lfNote int64
 	}{
-		{"crlf, nothing after", "Subject: x\r\n\r\n", 14},
-		{"lf, nothing after", "Subject: x\n\n", 12},
-		{"crlf, body after", "Subject: x\r\n\r\nbody", 14},
-		{"lf, body after", "Subject: x\n\nbody", 12},
-		{"no empty line", "Subject: x\r\n", 12},
-		{"long field", "Subject: " + strings.Repeat("s", 300) + "\r\nTo: y\r\n\r\nbody", 9 + 300 + 2 + 7 + 2},
+		{"crlf, nothing after", "Subject: x\r\n\r\n", 14, -1},
+		{"lf, nothing after", "Subject: x\n\n", 12, 10},
+		{"crlf, body after", "Subject: x\r\n\r\nbody", 14, -1},
+		{"lf, body after", "Subject: x\n\nbody", 12, 10},
+		{"no empty line", "Subject: x\r\n", 12, -1},
+		{"long field", "Subject: " + strings.Repeat("s", 300) + "\r\nTo: y\r\n\r\nbody", 9 + 300 + 2 + 7 + 2, -1},
 	}
 
 	for _, tc := range cases {
@@ -254,8 +268,12 @@ func TestParse_inputBytesRootHeader(t *testing.T) {
 					if err != nil || e == nil {
 						t.Fatalf("Parse() = (%v, %v), want the header: it ended within the budget", e, err)
 					}
-					if session.Len() != 0 {
-						t.Errorf("Diagnostics() = %v after the header, want none: nothing past it was read", session.Diagnostics())
+					after := session.Diagnostics()
+					if tc.lfNote >= 0 {
+						after = takeBareLFNote(t, "", after, tc.lfNote)
+					}
+					if len(after) != 0 {
+						t.Errorf("Diagnostics() = %v after the header, want none: nothing past it was read", after)
 					}
 					// Every field is kept whole. The header layer writes an LF field,
 					// and the empty line after the fields, with CRLF, so line endings
@@ -275,7 +293,7 @@ func TestParse_inputBytesRootHeader(t *testing.T) {
 					if want := tc.text[tc.complete:limit]; string(body) != want || err != session.fatalErr() || err == nil {
 						t.Errorf("body = (%q, %v), want (%q, the stop)", body, err, want)
 					}
-					checkInputDiagnostic(t, session, limit)
+					checkInputDiagnosticAfter(t, session, limit, tc.lfNote)
 				})
 			}
 		}

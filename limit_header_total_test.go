@@ -28,6 +28,41 @@ type totalBlock struct {
 type totalFixture struct {
 	text   string
 	blocks []totalBlock
+
+	// lfNote is where the one header.bare_lf note of an LF fixture is: the
+	// first line ending of the root's header block, which is read before any
+	// part's (ROB-010-002). It is -1 for a CRLF fixture, which records none.
+	lfNote int64
+}
+
+// withLFNote sets f.lfNote from f.text and the line ending it was built with.
+func (f totalFixture) withLFNote(eol string) totalFixture {
+	f.lfNote = -1
+	if eol == "\n" {
+		f.lfNote = int64(strings.IndexByte(f.text, '\n'))
+	}
+	return f
+}
+
+// takeLFNote checks that diags begin with f's header.bare_lf note when it has
+// one, then with the root's multipart.bare_lf exactly when reached says the
+// root's first delimiter line was framed and looked at, and returns the
+// diagnostics after them.
+func (f totalFixture) takeLFNote(t *testing.T, label string, diags []Diagnostic, reached bool) []Diagnostic {
+	t.Helper()
+	if f.lfNote < 0 {
+		return diags
+	}
+	if len(diags) == 0 || diags[0].Code != CodeHeaderBareLF || diags[0].Severity != SeverityInfo ||
+		diags[0].Path != nil || !diags[0].Location.HasOffset ||
+		diags[0].Location.Offset != f.lfNote || diags[0].Location.EndOffset != f.lfNote+1 {
+		t.Fatalf("%s: Diagnostics() = %+v, want the root's header.bare_lf at %d first", label, diags, f.lfNote)
+	}
+	at := int64(-1)
+	if reached {
+		at = rootDelimiterLF(f.text)
+	}
+	return takeMultipartLFNote(t, label, diags[1:], at)
 }
 
 // candidatesOf returns where each field candidate of a header block begins:
@@ -77,7 +112,7 @@ func newTotalFixture(eol string) totalFixture {
 	header([]int{4}, "X-C: 3\n folded\n\n", "five")
 	w("five\n--OUTER--\nouter epilogue\n")
 	f.text = b.String()
-	return f
+	return f.withLFNote(eol)
 }
 
 // cost is what one block charges to the named total.
@@ -150,6 +185,13 @@ func (f totalFixture) boundaries(kind string) []int64 {
 // every scope that reports it.
 func checkTotalStop(t *testing.T, session *ParseSession, err error, kind string, limit int64, blk *totalBlock, at int64) {
 	t.Helper()
+	checkTotalStopDiags(t, session, session.Diagnostics(), err, kind, limit, blk, at)
+}
+
+// checkTotalStopDiags is checkTotalStop holding diags, rather than everything
+// the session recorded, to exactly the one total diagnostic.
+func checkTotalStopDiags(t *testing.T, session *ParseSession, diags []Diagnostic, err error, kind string, limit int64, blk *totalBlock, at int64) {
+	t.Helper()
 	if !IsFatal(err) {
 		t.Fatalf("err = %v, want a FatalError", err)
 	}
@@ -162,7 +204,6 @@ func checkTotalStop(t *testing.T, session *ParseSession, err error, kind string,
 	if !ok || d.Code != totalCode(kind) {
 		t.Fatalf("fatal diagnostic = %+v, want %s", d, totalCode(kind))
 	}
-	diags := session.Diagnostics()
 	if len(diags) != 1 || diags[0].Code != totalCode(kind) || diags[0].Severity != SeverityLimitExceeded {
 		t.Fatalf("Diagnostics() = %v, want one %s", codesOfDiags(diags), totalCode(kind))
 	}
@@ -222,13 +263,20 @@ func verifyTotalParse(t *testing.T, label string, f totalFixture, kind string, l
 	if !reflect.DeepEqual(got.bodies, wantBodies) && !(len(got.bodies) == 0 && len(wantBodies) == 0) {
 		t.Errorf("%s: bodies = %q, want %q", label, got.bodies, wantBodies)
 	}
+	// The root's header was read, so an LF fixture has recorded its one
+	// header.bare_lf note before anything else. The root's first NextPart
+	// then frames its first delimiter line and looks at it, unless that call
+	// is the one the total refuses — the first child's own block — which stops
+	// the parse with nothing looked at.
+	reached := refused == nil || !reflect.DeepEqual(refused.path, []int{0})
+	diags := f.takeLFNote(t, label, session.Diagnostics(), reached)
 	if refused == nil {
-		if got.err != nil || session.Diagnostics() != nil {
-			t.Errorf("%s: (%v, %v), want a clean parse", label, got.err, codesOfDiags(session.Diagnostics()))
+		if got.err != nil || len(diags) != 0 {
+			t.Errorf("%s: (%v, %v), want a clean parse", label, got.err, codesOfDiags(diags))
 		}
 		return
 	}
-	checkTotalStop(t, session, got.err, kind, limit, refused, at)
+	checkTotalStopDiags(t, session, diags, got.err, kind, limit, refused, at)
 	if e.ParseStop() != got.err {
 		t.Errorf("%s: ParseStop() = %v, want the identical stop", label, e.ParseStop())
 	}
@@ -325,7 +373,7 @@ func genTotalFixture(seed []byte, eol string) totalFixture {
 	container(nil, 0)
 	b.WriteString(eol + "epilogue" + eol)
 	f.text = b.String()
-	return f
+	return f.withLFNote(eol)
 }
 
 // FuzzParse_totalHeaders holds generated valid trees to the exact outcome the
@@ -615,7 +663,26 @@ func (r *endlessHeader) Read(p []byte) (int, error) {
 // candidate, and keeps the malformed-header error it always had.
 func TestParse_totalHeaders_countPreflight(t *testing.T) {
 	const head = "Content-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\n"
-	for _, prefix := range []string{"X: ", ":", "X-no-colon", "bad key\x01", "\r"} {
+	// A bare '\r' at the start of a part's header is the empty line that ends
+	// it (ROB-010-002): no candidate, so nothing for the spent count to refuse.
+	t.Run(`"\r" is no candidate`, func(t *testing.T) {
+		src := &endlessHeader{prefix: "\r"}
+		session, e, err := Parse(io.MultiReader(strings.NewReader(head), src), &ParseOptions{Limits: totalsOnly("count", 1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := e.MultipartReader().NextPart()
+		if err != nil || p == nil || p.Header.Len() != 0 || session.fatalErr() != nil {
+			t.Fatalf("NextPart() = (%v, %v), want a part with an empty header and no stop", p, err)
+		}
+		if d := session.Diagnostics(); len(d) != 1 || d[0].Code != CodeHeaderBareCR || !d[0].Location.HasOffset || d[0].Location.Offset != int64(len(head)) {
+			t.Errorf("diagnostics = %+v, want one header.bare_cr at %d", d, len(head))
+		}
+		if src.n > 2*4096 {
+			t.Errorf("read %d bytes past the header, want at most two buffers", src.n)
+		}
+	})
+	for _, prefix := range []string{"X: ", ":", "X-no-colon", "bad key\x01"} {
 		t.Run(fmt.Sprintf("%q", prefix), func(t *testing.T) {
 			src := &endlessHeader{prefix: prefix}
 			session, e, err := Parse(io.MultiReader(strings.NewReader(head), src), &ParseOptions{Limits: totalsOnly("count", 1)})

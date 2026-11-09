@@ -31,8 +31,14 @@ func lineOnly(n int64) Limits {
 // line records.
 func checkLineDiagnostic(t *testing.T, session *ParseSession, limit int64, path []int, offset int64) {
 	t.Helper()
+	checkLineDiagnosticIn(t, session.Diagnostics(), limit, path, offset)
+}
 
-	diags := session.Diagnostics()
+// checkLineDiagnosticIn is checkLineDiagnostic holding diags, rather than
+// everything the session recorded, to exactly the one entry.
+func checkLineDiagnosticIn(t *testing.T, diags []Diagnostic, limit int64, path []int, offset int64) {
+	t.Helper()
+
 	if len(diags) != 1 {
 		t.Fatalf("Diagnostics() = %v, want exactly one limit.line_bytes entry", codesOfDiags(diags))
 	}
@@ -69,6 +75,12 @@ type framingCase struct {
 	all     []string
 	upTo    []string
 }
+
+// rootFramed reports whether the root's first delimiter line is framed before
+// c's line is refused, so that an LF fixture records its multipart.bare_lf: a
+// refused line of the root's own framing — its preamble line or its first
+// delimiter line — comes first, and one inside a part comes after.
+func (c framingCase) rootFramed() bool { return len(c.path) > 0 }
 
 // framingCases returns the framing lines of a multipart body, each made the
 // longest line in its message so that a budget swept across it says something
@@ -186,7 +198,7 @@ func TestParse_multipartLineBytes_boundary(t *testing.T) {
 								if !reflect.DeepEqual(got.bodies, tc.all) {
 									t.Errorf("bodies = %v, want %v", got.bodies, tc.all)
 								}
-								if d := session.Diagnostics(); d != nil {
+								if d := takeLineNotes(t, "", eol, tc.fixture.text, session.Diagnostics(), true); len(d) != 0 {
 									t.Errorf("Diagnostics() = %v, want none", codesOfDiags(d))
 								}
 								return
@@ -201,7 +213,7 @@ func TestParse_multipartLineBytes_boundary(t *testing.T) {
 							if !reflect.DeepEqual(got.bodies, tc.upTo) {
 								t.Errorf("bodies = %v, want %v recovered before the refusal", got.bodies, tc.upTo)
 							}
-							checkLineDiagnostic(t, session, limit, tc.path, offset)
+							checkLineDiagnosticIn(t, takeLineNotes(t, "", eol, tc.fixture.text, session.Diagnostics(), tc.rootFramed()), limit, tc.path, offset)
 						})
 					}
 				})
@@ -247,7 +259,7 @@ func TestParse_multipartLineBytes_chunkInvariance(t *testing.T) {
 						t.Errorf("%s: err = %v, want a FatalError", label, got.err)
 						continue
 					}
-					checkLineDiagnostic(t, session, limit, tc.path, offset)
+					checkLineDiagnosticIn(t, takeLineNotes(t, label, eol, tc.fixture.text, session.Diagnostics(), tc.rootFramed()), limit, tc.path, offset)
 				}
 			}
 		}
@@ -513,7 +525,9 @@ func TestParse_cteLineBytes_boundary(t *testing.T) {
 										if IsFatal(err) {
 											t.Fatalf("a line of %d bytes was refused by a budget of %d: %v", n, limit, err)
 										}
-										if d := session.Diagnostics(); d != nil {
+										// Reaching the body of part 1 frames the root's
+										// delimiters; a root that is not multipart has none.
+										if d := takeLineNotes(t, "", eol, f.text, session.Diagnostics(), true); len(d) != 0 {
 											t.Errorf("Diagnostics() = %v, want none", codesOfDiags(d))
 										}
 										return
@@ -525,7 +539,7 @@ func TestParse_cteLineBytes_boundary(t *testing.T) {
 									if !strings.HasPrefix(body, tc.decoded) {
 										t.Errorf("body = %q, want the prefix %q decoded before the refusal", body, tc.decoded)
 									}
-									checkLineDiagnostic(t, session, limit, place.path, offset)
+									checkLineDiagnosticIn(t, takeLineNotes(t, "", eol, f.text, session.Diagnostics(), true), limit, place.path, offset)
 								})
 							}
 						})

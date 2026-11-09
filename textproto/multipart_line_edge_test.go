@@ -118,9 +118,11 @@ func TestMultipartReader_lineBytesCRAtBufferEdge(t *testing.T) {
 }
 
 // TestMultipartReader_lineBytesCRAtBufferEdgeIsContent pins the other half: a
-// '\r' on the edge that is not followed by '\n' was content all along and is
-// charged, whether a byte, another '\r' that does begin the terminator, or the
-// end of the input follows it.
+// '\r' on the edge that is not followed by '\n' is a bare '\r', which ends a
+// framing line (ROB-010-002) and is never charged as content — whether a byte,
+// another '\r', or the end of the input follows it. Before ROB-010-002 such a
+// '\r' was content of a line that ran on to the next '\n'; these lines are now
+// shorter, so the budget that admits them is too.
 func TestMultipartReader_lineBytesCRAtBufferEdgeIsContent(t *testing.T) {
 	edge := strings.Repeat("a", edgeContent(1)) + "\r"
 	tail := "--A\r\n\r\none\r\n--A--\r\n"
@@ -129,15 +131,15 @@ func TestMultipartReader_lineBytesCRAtBufferEdgeIsContent(t *testing.T) {
 		name string
 		body string
 		n    int64 // content bytes of the first line
-		eof  bool  // the line is ended by the end of input rather than a terminator
+		eof  bool  // the input ends after the first line
 	}{
-		// "a"*4095 "\r" "x" "\r\n": the edge '\r' and the 'x' are both content.
-		{"a byte follows", edge + "x\r\n" + tail, int64(edgeContent(1)) + 2, false},
-		// "a"*4094 "\r" "\r" "\n": the first '\r' is content, the one on the edge
-		// begins the terminator.
-		{"another CR follows", strings.Repeat("a", edgeContent(1)-1) + "\r\r\n" + tail, int64(edgeContent(1)), false},
-		// "a"*4095 "\r" then EOF: nothing follows, so the '\r' is content.
-		{"the input ends", edge, int64(edgeContent(1)) + 1, true},
+		// "a"*4095 "\r" "x" "\r\n": the edge '\r' ends the line; "x" is the next.
+		{"a byte follows", edge + "x\r\n" + tail, int64(edgeContent(1)), false},
+		// "a"*4094 "\r" "\r" "\n": the first '\r' ends the line, the one on the
+		// edge begins the empty line "\r\n".
+		{"another CR follows", strings.Repeat("a", edgeContent(1)-1) + "\r\r\n" + tail, int64(edgeContent(1)) - 1, false},
+		// "a"*4095 "\r" then EOF: a '\r' the input ends after is a line ending.
+		{"the input ends", edge, int64(edgeContent(1)), true},
 	} {
 		for name, src := range edgeSources(tc.body) {
 			for _, delta := range []int64{-1, 0} {

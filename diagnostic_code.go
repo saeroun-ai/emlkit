@@ -65,13 +65,27 @@ const (
 	CodeHeaderNameWhitespace          Code = "header.name_whitespace"
 	CodeHeaderInvalidUTF8             Code = "header.invalid_utf8"
 	CodeHeaderNUL                     Code = "header.nul"
-	CodeHeaderBareLF                  Code = "header.bare_lf"
-	CodeHeaderBareCR                  Code = "header.bare_cr"
-	CodeHeaderMixedLineEndings        Code = "header.mixed_line_endings"
-	CodeHeaderTruncatedLine           Code = "header.truncated_line"
-	CodeHeaderDuplicateSingleton      Code = "header.duplicate_singleton"
-	CodeHeaderMboxEnvelope            Code = "header.mbox_envelope"
-	CodeHeaderMisplacedMboxEnvelope   Code = "header.misplaced_mbox_envelope"
+
+	// CodeHeaderBareLF reports a header line ended by a '\n' with no '\r'
+	// before it; recorded once per parse, at the first.
+	CodeHeaderBareLF Code = "header.bare_lf"
+
+	// CodeHeaderBareCR reports a header line ended by a '\r' not followed by
+	// '\n'; recorded once per parse, at the first, and for each entity
+	// ProfileStrict refuses for it.
+	CodeHeaderBareCR Code = "header.bare_cr"
+
+	// CodeHeaderMixedLineEndings reports a header block whose lines end in
+	// more than one way; recorded once per parse.
+	CodeHeaderMixedLineEndings Code = "header.mixed_line_endings"
+
+	// CodeHeaderTruncatedLine reports a header block whose last line the input
+	// ended, with io.EOF, before any line ending; recorded for each such block.
+	CodeHeaderTruncatedLine Code = "header.truncated_line"
+
+	CodeHeaderDuplicateSingleton    Code = "header.duplicate_singleton"
+	CodeHeaderMboxEnvelope          Code = "header.mbox_envelope"
+	CodeHeaderMisplacedMboxEnvelope Code = "header.misplaced_mbox_envelope"
 
 	// CodeHeaderDecoderNoProgress reports that a CharsetReader's reader of an
 	// encoded word in a Content-Type or Content-Disposition parameter the
@@ -117,18 +131,27 @@ const (
 
 // Multipart codes.
 const (
-	CodeMultipartBoundaryMissing         Code = "multipart.boundary_missing"
-	CodeMultipartBoundaryEmpty           Code = "multipart.boundary_empty"
-	CodeMultipartBoundaryInvalid         Code = "multipart.boundary_invalid"
-	CodeMultipartBoundaryTooLong         Code = "multipart.boundary_too_long"
-	CodeMultipartBoundaryInferred        Code = "multipart.boundary_inferred"
-	CodeMultipartBoundaryMismatch        Code = "multipart.boundary_mismatch"
-	CodeMultipartBoundaryAmbiguous       Code = "multipart.boundary_ambiguous"
-	CodeMultipartStartNotFound           Code = "multipart.start_not_found"
-	CodeMultipartCloseNotFound           Code = "multipart.close_not_found"
-	CodeMultipartCloseTruncated          Code = "multipart.close_truncated"
-	CodeMultipartInvalidDelimiterSuffix  Code = "multipart.invalid_delimiter_suffix"
-	CodeMultipartMixedLineEndings        Code = "multipart.mixed_line_endings"
+	CodeMultipartBoundaryMissing        Code = "multipart.boundary_missing"
+	CodeMultipartBoundaryEmpty          Code = "multipart.boundary_empty"
+	CodeMultipartBoundaryInvalid        Code = "multipart.boundary_invalid"
+	CodeMultipartBoundaryTooLong        Code = "multipart.boundary_too_long"
+	CodeMultipartBoundaryInferred       Code = "multipart.boundary_inferred"
+	CodeMultipartBoundaryMismatch       Code = "multipart.boundary_mismatch"
+	CodeMultipartBoundaryAmbiguous      Code = "multipart.boundary_ambiguous"
+	CodeMultipartStartNotFound          Code = "multipart.start_not_found"
+	CodeMultipartCloseNotFound          Code = "multipart.close_not_found"
+	CodeMultipartCloseTruncated         Code = "multipart.close_truncated"
+	CodeMultipartInvalidDelimiterSuffix Code = "multipart.invalid_delimiter_suffix"
+	// CodeMultipartMixedLineEndings reports one multipart whose delimiter
+	// lines end, or are preceded by, line endings of more than one kind.
+	CodeMultipartMixedLineEndings Code = "multipart.mixed_line_endings"
+	// CodeMultipartBareCR reports a bare CR before or after a multipart
+	// delimiter line; ProfileStrict refuses the rest of that multipart for it.
+	CodeMultipartBareCR Code = "multipart.bare_cr"
+	// CodeMultipartBareLF reports a bare LF before or after a multipart
+	// delimiter line.
+	CodeMultipartBareLF Code = "multipart.bare_lf"
+
 	CodeMultipartEmpty                   Code = "multipart.empty"
 	CodeMultipartEmptyPart               Code = "multipart.empty_part"
 	CodeMultipartPartHeaderMissing       Code = "multipart.part_header_missing"

@@ -89,15 +89,11 @@ func (p *Part) BodyOffset() int64 {
 // the message's "Content-Type" header. Use mime.ParseMediaType to
 // parse such headers.
 func NewMultipartReader(r io.Reader, boundary string) *MultipartReader {
-	b := []byte("\r\n--" + boundary + "--")
 	src := &stickyErrorReader{r: r}
 	return &MultipartReader{
-		src:              src,
-		bufReader:        bufio.NewReaderSize(src, peekBufferSize),
-		nl:               b[:2],
-		nlDashBoundary:   b[:len(b)-2],
-		dashBoundaryDash: b[2:],
-		dashBoundary:     b[2 : len(b)-2],
+		src:          src,
+		bufReader:    bufio.NewReaderSize(src, peekBufferSize),
+		dashBoundary: []byte("--" + boundary),
 	}
 }
 
@@ -132,8 +128,19 @@ func (r *stickyErrorReader) Read(p []byte) (n int, _ error) {
 // the cursor, is what makes the result the parser's own position: a reader
 // that hands out one byte at a time and one that hands out the whole message
 // at once fill the buffer differently but reach the same offset.
+//
+// Bytes the reader has taken out of its buffer but not yet handed to a caller
+// or consumed as framing — a delimiter candidate held while it is decided, or
+// one that turned out to be body and is still being delivered — are not past
+// the cursor either, so they are subtracted too.
 func (r *MultipartReader) offset() int64 {
-	return r.src.n - int64(r.bufReader.Buffered())
+	return r.src.n - int64(r.bufReader.Buffered()) - int64(len(r.out)) - int64(len(r.cand.held))
+}
+
+// windowAt returns the input offset of the byte at index x of what the
+// buffered reader holds.
+func (r *MultipartReader) windowAt(x int) int64 {
+	return r.src.n - int64(r.bufReader.Buffered()) + int64(x)
 }
 
 func newPart(mr *MultipartReader) (*Part, error) {
@@ -165,9 +172,10 @@ func newPart(mr *MultipartReader) (*Part, error) {
 
 func (bp *Part) populateHeaders(scan *headerScan) error {
 	// Two boundary lines in a row mean an empty part with no header block. If
-	// the next bytes already form a boundary, return an empty header instead
-	// of trying to parse the boundary line as a header.
-	if peek, _ := bp.mr.bufReader.Peek(len(bp.mr.dashBoundary)); bytes.HasPrefix(peek, bp.mr.dashBoundary) {
+	// the next bytes form a whole delimiter line, return an empty header
+	// instead of trying to parse that line as a header. Bytes that only begin
+	// like one — "--boundary-junk" — are read as the header they are.
+	if bp.mr.atDelimiter() {
 		bp.Header = Header{}
 		return nil
 	}
@@ -195,22 +203,70 @@ type partReader struct {
 	p *Part
 }
 
+// Read returns the part's body: every byte up to the delimiter line that ends
+// it, which is not body.
+//
+// A delimiter line is the line ending that precedes it — "\r\n", or a bare
+// '\n' or '\r', each matched as that whole ending, so "\r\r\n--b" leaves the
+// first '\r' in the body — or, at the very start of a body, nothing; then
+// "--" and the boundary, "--" again for the closing one, any spaces and tabs,
+// and a line ending of its own, or for the closing one the end of the input.
+// Endings before and after need not match each other or any other delimiter's.
+// Bytes that begin like one and then do not fit — "--b-x", "--b junk", "--b"
+// and white space followed by anything else — are body, every one of them,
+// the line ending before them included.
+//
+// The decision may need bytes the reader does not have yet. Body before a
+// candidate is returned at once; the candidate is held, at most one framing
+// line of it, until it is decided. White space past what the reader's buffer
+// holds is held outside it, bounded by the framing line budget
+// (HeaderLimits.MaxLineBytes) counted on the line from its "--" up to its line
+// ending, the line ending before and after excluded. A candidate whose valid
+// prefix — up to the byte that decides it, which is not counted — grows past
+// that budget is a framing line too long to read, however its bytes arrive and
+// whatever that byte turns out to be: the body ends before it, and NextPart
+// returns the reader's own *LineLimitError. With no budget a
+// candidate line must fit in one buffer of the reader, ending included, as it
+// always had to; one that does not ends the body the same way, and NextPart
+// returns this reader's own error wrapping bufio.ErrBufferFull.
+//
+// At a delimiter, Read returns io.EOF, and NextPart consumes the delimiter. A
+// failure of the input other than io.EOF while a candidate is undecided does
+// not decide it: the candidate's bytes are body, returned with everything
+// before them, and the failure is reported as for any body the input cut
+// short, in errors.Join with ErrMissingBoundaryClose. The input ending with
+// io.EOF decides it: a closing delimiter needs no line ending there, a
+// delimiter line "--boundary" and white space is one with nothing after it
+// (NextPart then reports the input's end), and anything shorter is body.
 func (pr partReader) Read(d []byte) (int, error) {
 	p := pr.p
-	br := p.mr.bufReader
+	mr := p.mr
+	br := mr.bufReader
 
 	// Read into buffer until we identify some data to return,
 	// or we find a reason to stop (boundary or read error).
-	for p.n == 0 && p.err == nil {
-		peek, _ := br.Peek(br.Buffered())
-		p.n, p.err = scanUntilBoundary(peek, p.mr.dashBoundary, p.mr.nlDashBoundary, p.total, p.readErr)
-		if p.n == 0 && p.err == nil {
-			// Force buffered I/O to read more into buffer.
-			_, p.readErr = br.Peek(len(peek) + 1)
-			if p.readErr == io.EOF {
-				p.readErr = io.ErrUnexpectedEOF
+	for len(mr.out) == 0 && p.n == 0 && p.err == nil {
+		p.n, p.err = mr.scanBody(p)
+		if p.n == 0 && p.err == nil && len(mr.out) == 0 {
+			// Force buffered I/O to read more into buffer. The peek is for one
+			// byte more than is held, never more than the whole buffer, so a
+			// bufio.ErrBufferFull it returns is the input's own failure.
+			if n := br.Buffered(); n < br.Size() {
+				_, p.readErr = br.Peek(n + 1)
 			}
 		}
+	}
+
+	// A candidate that turned out to be body comes first: its bytes precede
+	// everything the reader holds.
+	if len(mr.out) > 0 {
+		n := copy(d, mr.out)
+		mr.out = mr.out[n:]
+		if len(mr.out) == 0 {
+			mr.out = nil
+		}
+		p.total += int64(n)
+		return n, nil
 	}
 
 	// Read out from "data to return" part of buffer.
@@ -230,98 +286,398 @@ func (pr partReader) Read(d []byte) (int, error) {
 	return n, nil
 }
 
-// scanUntilBoundary scans buf to identify how much of it can be safely
-// returned as part of the Part body.
-// dashBoundary is "--boundary".
-// nlDashBoundary is "\r\n--boundary" or "\n--boundary", depending on what mode we are in.
-// The comments below (and the name) assume "\n--boundary", but either is accepted.
-// total is the number of bytes read out so far. If total == 0, then a leading "--boundary" is recognized.
-// readErr is the read error, if any, that followed reading the bytes in buf.
-// scanUntilBoundary returns the number of data bytes from buf that can be
-// returned as part of the Part body and also the error to return (if any)
-// once those data bytes are done.
-func scanUntilBoundary(buf, dashBoundary, nlDashBoundary []byte, total int64, readErr error) (int, error) {
-	if total == 0 {
-		// At beginning of body, allow dashBoundary.
-		if bytes.HasPrefix(buf, dashBoundary) {
-			switch matchAfterPrefix(buf, dashBoundary, readErr) {
-			case -1:
-				return len(dashBoundary), nil
-			case 0:
-				return 0, nil
-			case +1:
-				return 0, io.EOF
-			}
-		}
-		if bytes.HasPrefix(dashBoundary, buf) {
-			if readErr != nil {
-				// EOF reached without ever seeing a boundary; flush the
-				// buffered bytes as body rather than holding them back for a
-				// boundary that will never arrive.
-				return len(buf), errors.Join(readErr, ErrMissingBoundaryClose)
-			}
-			return 0, readErr
-		}
-	}
+// matchStatus is what is known of a delimiter candidate.
+type matchStatus uint8
 
-	// Search for "\n--boundary".
-	if i := bytes.Index(buf, nlDashBoundary); i >= 0 {
-		switch matchAfterPrefix(buf[i:], nlDashBoundary, readErr) {
-		case -1:
-			return i + len(nlDashBoundary), nil
-		case 0:
-			return i, nil
-		case +1:
-			return i, io.EOF
-		}
-	}
-	if bytes.HasPrefix(nlDashBoundary, buf) {
-		if readErr != nil {
-			return len(buf), errors.Join(readErr, ErrMissingBoundaryClose)
-		}
-		return 0, readErr
-	}
+const (
+	matchFail  matchStatus = iota // not a delimiter: its bytes are body
+	matchNeed                     // undecided until more bytes arrive
+	matchDelim                    // a whole delimiter line
+)
 
-	// Otherwise, anything up to the final \n is not part of the boundary
-	// and so must be part of the body.
-	// Also if the section from the final \n onward is not a prefix of the boundary,
-	// it too must be part of the body.
-	i := bytes.LastIndexByte(buf, nlDashBoundary[0])
-	if i >= 0 && bytes.HasPrefix(nlDashBoundary, buf[i:]) {
-		if readErr != nil {
-			return len(buf), errors.Join(readErr, ErrMissingBoundaryClose)
-		}
-		return i, nil
-	}
-	if readErr != nil {
-		return len(buf), errors.Join(readErr, ErrMissingBoundaryClose)
-	}
-	return len(buf), readErr
+// A delimMatch is the outcome of matching one candidate.
+type delimMatch struct {
+	status matchStatus
+	close  bool
+
+	// For matchNeed, padding reports that the candidate's name has matched and
+	// k is where its white space so far ends. For matchFail after the name, k
+	// is the byte that did not fit.
+	padding bool
+	k       int
+
+	// For matchDelim: end is just past the delimiter line; endKind and endLen
+	// are its line ending, none when the input ended it (atEOF).
+	end     int
+	endKind LineEnding
+	endLen  int
+	atEOF   bool
 }
 
-// matchAfterPrefix checks whether buf should be considered to match the boundary.
-// The prefix is "--boundary" or "\r\n--boundary" or "\n--boundary",
-// and the caller has verified already that bytes.HasPrefix(buf, prefix) is true.
-//
-// matchAfterPrefix returns +1 if the buffer does match the boundary,
-// meaning the prefix is followed by a dash, space, tab, cr, nl, or end of input.
-// It returns -1 if the buffer definitely does NOT match the boundary,
-// meaning the prefix is followed by some other character.
-// For example, "--foobar" does not match "--foo".
-// It returns 0 more input needs to be read to make the decision,
-// meaning that len(buf) == len(prefix) and readErr == nil.
-func matchAfterPrefix(buf, prefix []byte, readErr error) int {
-	if len(buf) == len(prefix) {
-		if readErr != nil {
-			return +1
+// match matches the candidate whose line ending before it is buf[c:c+elen]
+// (elen is 0 at the start of a body). eof reports that buf is all the input
+// there is, ended by io.EOF; full that buf is all the buffered reader can hold,
+// so a name that does not fit in it never matches.
+func (r *MultipartReader) match(buf []byte, c, elen int, eof, full bool) delimMatch {
+	db := r.dashBoundary
+	head := c + elen
+	if len(buf)-head < len(db) {
+		if eof || full || !bytes.HasPrefix(db, buf[head:]) {
+			return delimMatch{status: matchFail}
 		}
-		return 0
+		return delimMatch{status: matchNeed}
 	}
-	c := buf[len(prefix)]
-	if c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '-' {
-		return +1
+	if !bytes.Equal(buf[head:head+len(db)], db) {
+		return delimMatch{status: matchFail}
 	}
-	return -1
+	k := head + len(db)
+	if k == len(buf) && !eof {
+		// Whether a closing "--" follows is not known yet.
+		if full {
+			return delimMatch{status: matchFail}
+		}
+		return delimMatch{status: matchNeed}
+	}
+	if k < len(buf) && buf[k] == '-' {
+		if k+1 == len(buf) {
+			if eof || full {
+				return delimMatch{status: matchFail}
+			}
+			return delimMatch{status: matchNeed}
+		}
+		if buf[k+1] != '-' {
+			return delimMatch{status: matchFail}
+		}
+		k += 2
+		return matchTail(buf, k, eof, delimMatch{close: true})
+	}
+	return matchTail(buf, k, eof, delimMatch{})
+}
+
+// matchTail matches the white space and line ending of a candidate whose
+// name has matched, from buf[k:].
+func matchTail(buf []byte, k int, eof bool, m delimMatch) delimMatch {
+	for k < len(buf) && (buf[k] == ' ' || buf[k] == '\t') {
+		k++
+	}
+	if k == len(buf) {
+		if eof {
+			m.status, m.end, m.atEOF = matchDelim, k, true
+			return m
+		}
+		m.status, m.padding, m.k = matchNeed, true, k
+		return m
+	}
+	switch buf[k] {
+	case '\n':
+		m.endKind, m.endLen = LineEndingLF, 1
+	case '\r':
+		switch {
+		case k+1 < len(buf) && buf[k+1] == '\n':
+			m.endKind, m.endLen = LineEndingCRLF, 2
+		case k+1 < len(buf) || eof:
+			m.endKind, m.endLen = LineEndingCR, 1
+		default:
+			// The byte after the '\r' decides it.
+			m.status, m.padding, m.k = matchNeed, true, k
+			return m
+		}
+	default:
+		return delimMatch{status: matchFail, padding: true, k: k}
+	}
+	m.status, m.end = matchDelim, k+m.endLen
+	return m
+}
+
+// scanBody decides how much of what the reader holds is body of p. It returns
+// how many bytes the buffered reader holds that are body, and the error that
+// follows them: io.EOF at a delimiter or a refused framing attempt, the
+// input's failure joined with ErrMissingBoundaryClose, or nil. (0, nil) with
+// nothing in r.out asks the caller to read more.
+func (r *MultipartReader) scanBody(p *Part) (int, error) {
+	br := r.bufReader
+	buf, _ := br.Peek(br.Buffered())
+	eof := p.readErr == io.EOF
+	failed := p.readErr != nil && !eof
+	full := len(buf) == br.Size()
+
+	if r.cand.active {
+		return r.scanHeld(p, buf, eof, failed)
+	}
+
+	// At the very start of a body, a delimiter needs no line ending before it.
+	if p.total == 0 {
+		m := r.match(buf, 0, 0, eof, full)
+		if done, n, err := r.decide(p, m, buf, 0, 0, failed); done {
+			return n, err
+		}
+	}
+
+	for from := 0; ; {
+		j := bytes.Index(buf[from:], r.dashBoundary)
+		if j < 0 {
+			break
+		}
+		j += from
+		from = j + 1
+		c, elen := -1, 0
+		switch {
+		case j >= 2 && buf[j-1] == '\n' && buf[j-2] == '\r':
+			c, elen = j-2, 2
+		case j >= 1 && (buf[j-1] == '\n' || buf[j-1] == '\r'):
+			c, elen = j-1, 1
+		}
+		if c < 0 {
+			continue
+		}
+		m := r.match(buf, c, elen, eof, full)
+		if done, n, err := r.decide(p, m, buf, c, elen, failed); done {
+			return n, err
+		}
+	}
+
+	if eof || failed {
+		return len(buf), r.bodyFailure(p)
+	}
+	// Hold back a line ending that could still begin a delimiter. The name
+	// holds no '\r' or '\n', so only the last ending in reach can.
+	h := len(buf)
+	if q := bytes.LastIndexAny(buf[max(0, len(buf)-len(r.dashBoundary)-2):], "\r\n"); q >= 0 {
+		q += max(0, len(buf)-len(r.dashBoundary)-2)
+		start, rest := q, buf[q+1:]
+		switch {
+		case buf[q] == '\n' && q > 0 && buf[q-1] == '\r':
+			start = q - 1
+		case buf[q] == '\r' && q+1 < len(buf) && buf[q+1] == '\n':
+			rest = buf[q+2:]
+		}
+		if bytes.HasPrefix(r.dashBoundary, rest) {
+			h = start
+		}
+	}
+	if h == 0 && full {
+		// A name that cannot fit in the buffer never matches.
+		h = len(buf)
+	}
+	return h, nil
+}
+
+// bodyFailure is the error a body the input stopped ends with.
+func (r *MultipartReader) bodyFailure(p *Part) error {
+	err := p.readErr
+	if err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
+	return errors.Join(err, ErrMissingBoundaryClose)
+}
+
+// decide acts on the match m of the candidate at buf[c:], whose line ending
+// before it is elen bytes. It reports whether the scan is done, and what
+// scanBody then returns.
+func (r *MultipartReader) decide(p *Part, m delimMatch, buf []byte, c, elen int, failed bool) (bool, int, error) {
+	switch m.status {
+	case matchDelim:
+		content := m.end - m.endLen - (c + elen)
+		if err := r.checkLine(int64(content), m.endLen, true, r.windowAt(c+elen)); err != nil {
+			return true, c, io.EOF
+		}
+		before := LineEnding(0)
+		if elen > 0 {
+			before = endingOf(buf[c : c+elen])
+		}
+		r.prove(m, before, r.windowAt(c), r.windowAt(m.end-m.endLen), m.end-c)
+		return true, c, io.EOF
+	case matchNeed:
+		// The candidate's valid prefix is charged before anything else is
+		// decided about it, as a held candidate's is as it grows, so that
+		// where the bytes happen to end in the buffer cannot change whether
+		// it is refused. A budget the bytes already read exceed wins over a
+		// failure of the input that follows them.
+		if m.padding {
+			if err := r.checkLine(int64(m.k-(c+elen)), 0, false, r.windowAt(c+elen)); err != nil {
+				return true, c, io.EOF
+			}
+		}
+		if failed {
+			// The input failed before the candidate was decided: it is
+			// body, and the failure follows it.
+			return true, len(buf), r.bodyFailure(p)
+		}
+		if c > 0 {
+			// The body before the candidate first; it is looked at again
+			// from its own first byte.
+			return true, c, nil
+		}
+		if m.padding {
+			// Hold what has matched outside the buffer, so that white space
+			// longer than it can be read on.
+			r.cand = heldCandidate{
+				active: true,
+				held:   append(r.cand.held[:0], buf[:m.k]...),
+				elen:   elen,
+				close:  m.close,
+				start:  r.windowAt(0),
+			}
+			if elen > 0 {
+				r.cand.before = endingOf(buf[:elen])
+			}
+			r.bufReader.Discard(m.k)
+		}
+		return true, 0, nil
+	case matchFail:
+		// A candidate whose name matched and whose white space went on past
+		// the framing line budget before the byte that broke it was a framing
+		// line too long to read, wherever that byte is: read a byte at a time
+		// it is refused as soon as its valid prefix passes the budget, before
+		// that byte arrives. Only the valid prefix is charged — the byte that
+		// broke it is not candidate content — so a prefix of exactly the
+		// budget followed by such a byte is body, as is anything that broke
+		// before its name ended.
+		if m.padding {
+			if err := r.checkLine(int64(m.k-(c+elen)), 0, false, r.windowAt(c+elen)); err != nil {
+				return true, c, io.EOF
+			}
+		}
+	}
+	return false, 0, nil
+}
+
+// scanHeld goes on deciding the held candidate with the bytes buf the reader
+// now holds.
+func (r *MultipartReader) scanHeld(p *Part, buf []byte, eof, failed bool) (int, error) {
+	cd := &r.cand
+	m := matchTail(buf, 0, eof, delimMatch{close: cd.close})
+	held := len(cd.held) - cd.elen
+	lineStart := cd.start + int64(cd.elen)
+	switch m.status {
+	case matchDelim:
+		content := held + m.end - m.endLen
+		if err := r.checkLine(int64(content), m.endLen, true, lineStart); err != nil {
+			return 0, io.EOF
+		}
+		r.prove(m, cd.before, cd.start, r.windowAt(m.end-m.endLen), m.end)
+		return 0, io.EOF
+	}
+	// The valid prefix — what is held and the white space in the reader up to
+	// what decided it or the end of what is there — is charged first, as in
+	// decide, whether the candidate then fails, waits, or the input failed.
+	if err := r.checkLine(int64(held+m.k), 0, false, lineStart); err != nil {
+		return 0, io.EOF
+	}
+	if m.status == matchFail {
+		// Body after all, its white space in the reader included; the byte
+		// that did not fit is looked at again as the start of what follows.
+		r.out = cd.held
+		*cd = heldCandidate{}
+		return m.k, nil
+	}
+	if failed {
+		r.out = cd.held
+		*cd = heldCandidate{}
+		return len(buf), r.bodyFailure(p)
+	}
+	cd.held = append(cd.held, buf[:m.k]...)
+	r.bufReader.Discard(m.k)
+	return 0, nil
+}
+
+// checkLine holds the delimiter line being decided, of content bytes from
+// its "--", to the framing line budget, or with none to one buffer of the
+// reader, its ending of endLen bytes included once decided says it has one.
+// A line past it is this reader's own refusal, kept for NextPart.
+func (r *MultipartReader) checkLine(content int64, endLen int, decided bool, lineStart int64) error {
+	if limit := r.limits.MaxLineBytes; limit > 0 {
+		if content <= limit {
+			return nil
+		}
+		r.refuseLine(newLineLimitError(limit, lineStart))
+		return r.pending
+	}
+	size := int64(r.bufReader.Size())
+	if content+int64(endLen) <= size && (decided || content <= size) {
+		return nil
+	}
+	r.refuseLine(fmt.Errorf("multipart: NextPart: %w", bufio.ErrBufferFull))
+	return r.pending
+}
+
+// refuseLine records err as this reader's own refusal of a framing line, which
+// NextPart returns, recognizing it by identity.
+func (r *MultipartReader) refuseLine(err error) {
+	r.refused = err
+	r.pending = err
+	r.cand = heldCandidate{}
+}
+
+// prove records the delimiter m, which began at start with the line ending
+// before before (none at the start of a body) and whose own ending is at
+// endAt; rest of its bytes are still in the buffered reader.
+func (r *MultipartReader) prove(m delimMatch, before LineEnding, start, endAt int64, rest int) {
+	if before != 0 {
+		r.ends.note(before, start)
+	}
+	if m.endLen > 0 {
+		r.ends.note(m.endKind, endAt)
+	}
+	r.delim = &provenDelimiter{rest: rest, close: m.close, truncated: m.atEOF && !m.close}
+}
+
+// endingOf names the line ending e, which is "\r\n", "\n" or "\r".
+func endingOf(e []byte) LineEnding {
+	switch {
+	case len(e) == 2:
+		return LineEndingCRLF
+	case e[0] == '\n':
+		return LineEndingLF
+	}
+	return LineEndingCR
+}
+
+// atDelimiter reports whether the bytes at the reader's cursor are a whole
+// delimiter line, deciding with as many bytes as it takes. A candidate whose
+// white space runs past the buffer is left to the body to decide, as one at
+// the start of the body; anything that is not a delimiter is left as it is.
+func (r *MultipartReader) atDelimiter() bool {
+	br := r.bufReader
+	eof := false
+	for {
+		buf, _ := br.Peek(br.Buffered())
+		full := len(buf) == br.Size()
+		m := r.match(buf, 0, 0, eof, full)
+		switch {
+		case m.status == matchDelim:
+			return true
+		case m.status == matchFail:
+			return false
+		case m.padding && full:
+			return true
+		case full:
+			return false
+		}
+		// Undecided: look one byte further. A failed look is the header's to
+		// report; the source keeps failing, so it is not lost.
+		if _, err := br.Peek(len(buf) + 1); err != nil {
+			if err != io.EOF {
+				return false
+			}
+			eof = true
+		}
+	}
+}
+
+// DelimiterEndings returns the line endings of every delimiter line this
+// reader has proven so far: the ending before each — none for one at the
+// start of the input — and each one's own. Offsets are in the reader's input,
+// on the terms of Part.HeaderOffset; a closing delimiter the input ended has
+// no ending of its own. A delimiter is proven, and its endings counted, when
+// the part before it has been read to it — by Part.Read, which may be before
+// NextPart is called — or by NextPart for the first one. It reports no
+// unterminated line; the result is a snapshot, known for every reader.
+func (r *MultipartReader) DelimiterEndings() LineEndings {
+	e := r.ends
+	e.known = true
+	e.unterminated = false
+	return e
 }
 
 func (p *Part) Close() error {
@@ -363,10 +719,47 @@ type MultipartReader struct {
 	// were.
 	lineBuf []byte
 
-	nl               []byte // "\r\n" or "\n" (set after seeing first boundary line)
-	nlDashBoundary   []byte // nl + "--boundary"
-	dashBoundaryDash []byte // "--boundary--"
-	dashBoundary     []byte // "--boundary"
+	dashBoundary []byte // "--boundary"
+
+	// cand is the delimiter candidate held while the bytes that decide it
+	// arrive: its bytes, taken out of the buffered reader, and what has been
+	// matched. out is a candidate that turned out to be body, still to be
+	// delivered by the part being read, ahead of anything the reader holds.
+	// Neither is ever more than one framing line: see Part.Read.
+	cand heldCandidate
+	out  []byte
+
+	// delim is the delimiter the part being read ended at, proven and not yet
+	// consumed; NextPart consumes it. pending is this reader's own refusal of
+	// a framing attempt the part's body scan met, for NextPart to return.
+	delim   *provenDelimiter
+	pending error
+
+	// ends is the line endings of every delimiter this reader has proven; see
+	// DelimiterEndings. lastEnd and lastEndAt are the ending of the preamble
+	// line read last, which is the ending before a delimiter that follows it.
+	ends      LineEndings
+	lastEnd   LineEnding
+	lastEndAt int64
+}
+
+// A heldCandidate is a delimiter candidate whose name — its line ending
+// before, if any, "--", the boundary and a closing "--" — has matched, and
+// whose white space continues past what the buffered reader can hold.
+type heldCandidate struct {
+	active bool
+	held   []byte // the candidate's bytes so far, its line ending before first
+	elen   int    // how many of them are that line ending
+	before LineEnding
+	close  bool
+	start  int64 // where the candidate began in the input
+}
+
+// A provenDelimiter is a delimiter line a part's body ended at.
+type provenDelimiter struct {
+	rest      int  // its bytes still in the buffered reader, after any held
+	close     bool // a closing delimiter
+	truncated bool // "--boundary" and white space, then the end of the input
 }
 
 // SetMaxHeaderBytes limits the header block of every part this reader returns
@@ -469,92 +862,145 @@ func isEOFClass(err error) bool {
 	})
 }
 
-// readFramingLine reads the next line of multipart framing — a preamble line, a
-// delimiter line, or the empty line before one — and returns it exactly as
-// bufio.Reader.ReadSlice would, terminator included.
+// readFramingLine reads the next line of multipart framing before the first
+// part — a preamble line, or the first delimiter line — and returns its
+// content without its line ending, which ending that was (0 when the input
+// ended or failed first), and where the line began.
 //
-// With no line budget it is ReadSlice, unchanged, down to which inputs it turns
-// away and with which error: a line longer than the reader's buffer fails with
-// bufio.ErrBufferFull, as it always has. That is deliberate. A budget is what
-// should decide how long a line may be, and where there is no budget there is
-// nothing to change the long-standing answer to.
+// A line ends at "\r\n", even split across reads, at a bare '\n', or at a bare
+// '\r', which the byte after it decides; a '\r' that io.EOF follows is a line
+// ending, one another failure follows is part of the line that failure cut.
+// The buffered reader is only ever asked for one byte more than it holds, never
+// more than its buffer, so a bufio.ErrBufferFull it returns is the input's own
+// failure and is returned as such.
 //
-// With one, the line is accumulated across buffers into lineBuf until it ends or
-// until it passes the budget, and passing it returns a *LineLimitError saying
-// where the line began. Nothing beyond the budget is ever retained: the check
-// happens as each buffer arrives, so what is held is at most one buffer past it.
+// With no line budget a line must end within one buffer of the reader, as it
+// always had to: a line that does not fails with bufio.ErrBufferFull, the whole
+// buffer consumed. With one, the line is accumulated into lineBuf until it ends
+// or its content passes the budget, which returns this reader's own
+// *LineLimitError saying where the line began; nothing beyond one buffer past
+// the budget is retained.
 //
-// The returned slice is valid until the next call, which is the same contract
-// ReadSlice's result carries.
-func (r *MultipartReader) readFramingLine() ([]byte, error) {
-	if r.limits.MaxLineBytes <= 0 {
-		return r.bufReader.ReadSlice('\n')
+// The returned slice is valid until the next read of the reader.
+func (r *MultipartReader) readFramingLine() (line []byte, end LineEnding, start int64, err error) {
+	br := r.bufReader
+	start = r.offset()
+	budget := r.limits.MaxLineBytes
+	acc := r.lineBuf[:0]
+	var data int64
+	var failed error
+	scanned := 0
+
+	// take charges content to the line budget and keeps it.
+	take := func(content []byte) error {
+		if budget > 0 {
+			if int64(len(content)) > budget-data {
+				r.lineBuf = acc
+				refusal := newLineLimitError(budget, start)
+				r.refused = refusal
+				return refusal
+			}
+			data += int64(len(content))
+		}
+		acc = append(acc, content...)
+		return nil
 	}
 
-	// Where this line begins, so that a refusal reports a real position in the
-	// reader's input rather than where the failure was noticed.
-	start := r.offset()
-
-	line := r.lineBuf[:0]
-	// data is the bytes of this line that are not its terminator, counted the
-	// way headerScan counts them, including a '\r' that turns out not to have
-	// been the start of one.
-	var data int64
-	// pendingCR records a '\r' that ended a full buffer. It may be the first
-	// byte of a "\r\n" whose '\n' is in the next read, or an ordinary byte of
-	// the line, and only that next read can say which, so it is held back
-	// uncharged until then. Charging it early would refuse a line whose content
-	// is exactly the budget because its terminator straddled a buffer edge.
-	// This is headerScan.classify's rule, applied to framing lines.
-	var pendingCR bool
 	for {
-		l, err := r.bufReader.ReadSlice('\n')
-		// ReadSlice reports a line longer than the buffer with
-		// bufio.ErrBufferFull and exactly the whole buffer. The same value with
-		// fewer bytes is the input's own failure, which an io.Reader may return:
-		// the line ends there rather than being read on without bytes. An input
-		// failing so after exactly filling the buffer cannot be told apart; the
-		// read after it meets the failure again, since src keeps it, and ends.
-		full := err == bufio.ErrBufferFull && len(l) == r.bufReader.Size()
-
-		n := int64(len(l))
-		if pendingCR {
-			pendingCR = false
-			if len(l) == 0 || l[0] != '\n' {
-				// Followed by something other than '\n', or by nothing at
-				// all: it was content.
-				n++
+		n := br.Buffered()
+		if n == 0 {
+			if failed != nil {
+				r.lineBuf = acc
+				return acc, 0, start, failed
 			}
-		}
-		switch {
-		case err == nil:
-			n--
-			if len(l) >= 2 && l[len(l)-2] == '\r' {
-				n--
+			if _, perr := br.Peek(1); perr != nil {
+				failed = perr
 			}
-		case full:
-			// No terminator yet. A trailing '\r' may begin one, so it is held
-			// back rather than charged.
-			if len(l) > 0 && l[len(l)-1] == '\r' {
-				pendingCR = true
-				n--
-			}
-		}
-		if n > r.limits.MaxLineBytes-data {
-			r.lineBuf = line
-			refusal := newLineLimitError(r.limits.MaxLineBytes, start)
-			r.refused = refusal
-			return nil, refusal
-		}
-		data += n
-
-		line = append(line, l...)
-		if full {
 			continue
 		}
-		r.lineBuf = line
-		return line, err
+		w, _ := br.Peek(n)
+		i := bytes.IndexAny(w[scanned:], "\r\n")
+		if i >= 0 {
+			i += scanned
+		} else {
+			scanned = n
+		}
+
+		var kind LineEnding
+		var elen int
+		switch {
+		case i >= 0 && w[i] == '\n':
+			kind, elen = LineEndingLF, 1
+		case i >= 0 && i+1 < n && w[i+1] == '\n':
+			kind, elen = LineEndingCRLF, 2
+		case i >= 0 && (i+1 < n || failed == io.EOF):
+			kind, elen = LineEndingCR, 1
+		}
+		if kind != 0 {
+			if terr := take(w[:i]); terr != nil {
+				return nil, 0, start, terr
+			}
+			br.Discard(i + elen)
+			r.lineBuf = acc
+			return acc, kind, start, nil
+		}
+
+		// Nothing held ends the line yet.
+		if failed == nil && n < br.Size() {
+			if i >= 0 {
+				scanned = i
+			}
+			if _, perr := br.Peek(n + 1); perr != nil {
+				failed = perr
+			}
+			continue
+		}
+		if failed != nil {
+			// The input stopped inside the line: all of it, a trailing '\r'
+			// whose next byte never came included, is what there is.
+			if terr := take(w); terr != nil {
+				return nil, 0, start, terr
+			}
+			br.Discard(n)
+			r.lineBuf = acc
+			return acc, 0, start, failed
+		}
+		// A full buffer with no line ending in it.
+		if budget <= 0 {
+			br.Discard(n)
+			return w, 0, start, bufio.ErrBufferFull
+		}
+		k := n
+		if i == n-1 {
+			// A '\r' last: the next read decides it.
+			k = n - 1
+		}
+		if terr := take(w[:k]); terr != nil {
+			return nil, 0, start, terr
+		}
+		br.Discard(k)
+		scanned = 0
 	}
+}
+
+// delimiterLine reports whether content, a framing line without its line
+// ending, is a delimiter line, and whether it is the closing one: "--", the
+// boundary, "--" for the closing one, then only spaces and tabs.
+func (r *MultipartReader) delimiterLine(content []byte) (ok, close bool) {
+	if !bytes.HasPrefix(content, r.dashBoundary) {
+		return false, false
+	}
+	rest := content[len(r.dashBoundary):]
+	if len(rest) >= 2 && rest[0] == '-' && rest[1] == '-' {
+		close = true
+		rest = rest[2:]
+	}
+	for _, c := range rest {
+		if c != ' ' && c != '\t' {
+			return false, false
+		}
+	}
+	return true, close
 }
 
 func (r *MultipartReader) nextPart() (*Part, error) {
@@ -564,9 +1010,34 @@ func (r *MultipartReader) nextPart() (*Part, error) {
 	if string(r.dashBoundary) == "--" {
 		return nil, fmt.Errorf("multipart: boundary is empty")
 	}
-	expectNewPart := false
+
+	// A framing line the part's body scan refused is this reader's own
+	// refusal, and is returned as itself: NextPart recognizes it by identity.
+	if r.pending != nil {
+		return nil, r.pending
+	}
+
+	// The part before ended at a delimiter its body scan proved: consume it.
+	if d := r.delim; d != nil {
+		r.delim = nil
+		r.bufReader.Discard(d.rest)
+		r.cand = heldCandidate{}
+		switch {
+		case d.close:
+			return nil, io.EOF
+		case d.truncated:
+			// "--boundary" and the end of the input: the input ended where the
+			// next part should have begun.
+			return nil, fmt.Errorf("multipart: NextPart: %w", io.EOF)
+		}
+		return r.startPart()
+	}
+
+	// Before the first part, and after a part whose input ended or failed with
+	// no delimiter, framing is read a line at a time. Before the first part, a
+	// line that is not a delimiter is preamble and is skipped.
 	for {
-		line, err := r.readFramingLine()
+		line, end, start, err := r.readFramingLine()
 
 		// A framing line past its budget is this reader's own refusal, and is
 		// returned as itself rather than wrapped: it is not a failure of the
@@ -579,99 +1050,57 @@ func (r *MultipartReader) nextPart() (*Part, error) {
 			return nil, err
 		}
 
-		if err == io.EOF && r.isFinalBoundary(line) {
-			// If the buffer ends in "--boundary--" without the
-			// trailing "\r\n", ReadSlice will return an error
-			// (since it's missing the '\n'), but this is a valid
-			// multipart EOF so we need to return io.EOF instead of
-			// a fmt-wrapped one.
+		ok, close := r.delimiterLine(line)
+		if err == io.EOF && ok && close {
+			// "--boundary--" at the end of the input needs no line ending.
+			r.noteBefore(start)
 			return nil, io.EOF
 		}
 		if err != nil {
 			return nil, fmt.Errorf("multipart: NextPart: %w", err)
 		}
-
-		if r.isBoundaryDelimiterLine(line) {
-			r.partsRead++
-			bp, err := newPart(r)
-			if err != nil {
-				return nil, err
+		if ok {
+			r.noteBefore(start)
+			r.ends.note(end, start+int64(len(line)))
+			if close {
+				return nil, io.EOF
 			}
-			r.currentPart = bp
-			return bp, nil
+			return r.startPart()
 		}
-
-		if r.isFinalBoundary(line) {
-			// Expected EOF
-			return nil, io.EOF
-		}
-
-		if expectNewPart {
-			return nil, fmt.Errorf("multipart: expecting a new Part; got line %q", string(line))
-		}
-
-		if r.partsRead == 0 {
-			// skip line
-			continue
-		}
-
-		// Consume the "\n" or "\r\n" separator between the
-		// body of the previous part and the boundary line we
-		// now expect will follow. (either a new part or the
-		// end boundary)
-		if bytes.Equal(line, r.nl) {
-			expectNewPart = true
-			continue
-		}
-
-		return nil, fmt.Errorf("multipart: unexpected line in Next(): %q", line)
+		r.lastEnd, r.lastEndAt = end, start+int64(len(line))
 	}
 }
 
-// isFinalBoundary reports whether line is the final boundary line
-// indicating that all parts are over.
-// It matches `^--boundary--[ \t]*(\r\n)?$`
-func (mr *MultipartReader) isFinalBoundary(line []byte) bool {
-	if !bytes.HasPrefix(line, mr.dashBoundaryDash) {
-		return false
+// noteBefore records, for a delimiter line found by reading framing lines, the
+// line ending of the line before it, if a line came before it.
+func (r *MultipartReader) noteBefore(start int64) {
+	if r.lastEnd != 0 && r.lastEndAt < start {
+		r.ends.note(r.lastEnd, r.lastEndAt)
 	}
-	rest := line[len(mr.dashBoundaryDash):]
-	rest = skipLWSPChar(rest)
-	return len(rest) == 0 || bytes.Equal(rest, mr.nl)
+	r.lastEnd = 0
 }
 
-func (mr *MultipartReader) isBoundaryDelimiterLine(line []byte) (ret bool) {
-	// https://tools.ietf.org/html/rfc2046#section-5.1
-	//   The boundary delimiter line is then defined as a line
-	//   consisting entirely of two hyphen characters ("-",
-	//   decimal value 45) followed by the boundary parameter
-	//   value from the Content-Type header field, optional linear
-	//   whitespace, and a terminating CRLF.
-	if !bytes.HasPrefix(line, mr.dashBoundary) {
-		return false
+// startPart begins the part a delimiter line just consumed introduces.
+func (r *MultipartReader) startPart() (*Part, error) {
+	r.partsRead++
+	bp, err := newPart(r)
+	if err != nil {
+		return nil, err
 	}
-	rest := line[len(mr.dashBoundary):]
-	rest = skipLWSPChar(rest)
-
-	// On the first part, see our lines are ending in \n instead of \r\n
-	// and switch into that mode if so. This is a violation of the spec,
-	// but occurs in practice.
-	if mr.partsRead == 0 && len(rest) == 1 && rest[0] == '\n' {
-		mr.nl = mr.nl[1:]
-		mr.nlDashBoundary = mr.nlDashBoundary[1:]
-	}
-	return bytes.Equal(rest, mr.nl)
+	r.currentPart = bp
+	return bp, nil
 }
 
-// skipLWSPChar returns b with leading spaces and tabs removed.
-// RFC 822 defines:
-//
-//	LWSP-char = SPACE / HTAB
-func skipLWSPChar(b []byte) []byte {
-	for len(b) > 0 && (b[0] == ' ' || b[0] == '\t') {
-		b = b[1:]
+// isBoundaryDelimiterLine reports whether line, a framing line with its line
+// ending, is a delimiter line that is not the closing one.
+func (mr *MultipartReader) isBoundaryDelimiterLine(line []byte) bool {
+	for _, e := range []string{"\r\n", "\n", "\r"} {
+		if bytes.HasSuffix(line, []byte(e)) {
+			ok, close := mr.delimiterLine(line[:len(line)-len(e)])
+			return ok && !close
+		}
 	}
-	return b
+	return false
 }
 
 // A MultipartWriter generates multipart messages.

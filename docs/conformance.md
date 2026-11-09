@@ -59,8 +59,19 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
 - **Whitespace before the colon.** `Subject : value` — spaces/tabs between the
   key and colon are trimmed. ([`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
 - **Empty keys are skipped**, not treated as an error. ([`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
-- **Bare LF line endings.** Headers terminated by `\n` (no `\r`) are accepted and
-  normalized to CRLF in the stored raw bytes. ([`textproto/header.go`](../textproto/header.go) · `readContinuedLineSlice`)
+- **Bare LF, bare CR and mixed header line endings** (`ROB-010-002`). A header line ends at `\r\n` (one ending even when split
+  across reads), at a bare `\n`, or at a bare `\r`; a stray `\r` inside a value
+  stays content unless the next line begins a field (`name:`), so
+  `Subject: a\rb` keeps its value `a\rb`. A bare `\r` at the start of a line is
+  the empty line ending the header, `A: 1\r\r\n` is field A then the empty line
+  `\r\n`, and a `\r` right before end of input is a complete line ending. The
+  stored raw bytes end every physical line with CRLF — only a complete CRLF
+  field is byte-exact — and `textproto.Header.LineEndings` reports what the
+  input used. Under `Parse` the endings are diagnosed (`header.bare_lf`,
+  `header.bare_cr`, `header.mixed_line_endings` once per parse;
+  `header.truncated_line` per block), and `ProfileStrict` refuses only the
+  entity whose header has a bare-CR ending or no final line ending.
+  ([`textproto/header.go`](../textproto/header.go) · `ReadHeader`, [`line_endings.go`](../line_endings.go))
 - **Folded values** are unfolded and whitespace-collapsed for the parsed value;
   the original raw bytes are preserved separately. ([`textproto/header.go`](../textproto/header.go) · `trimAroundNewlines`)
 - **Empty and header-only input** is framed identically under every `Profile`
@@ -76,8 +87,8 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   cancellation or no-progress stop there leaves no entity, as for any header. A
   header-only multipart with a usable boundary has no part (`NextPart`: an error
   wrapping `io.EOF`, then `io.EOF`; the empty-container policy is
-  `ROB-060-009`'s). Other line endings are `ROB-010-002`'s; a malformed or
-  whitespace-only first line is `ROB-020`'s.
+  `ROB-060-009`'s). Other line endings are described above (`ROB-010-002`); a
+  malformed or whitespace-only first line is `ROB-020`'s.
   ([`parse.go`](../parse.go) · `Parse`, [`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
 - **Over-long header keys** do not crash the line-folder (a naive fold width would
   go negative; it falls back to the hard limit). ([`textproto/header.go`](../textproto/header.go) · `formatHeaderField`)
@@ -103,11 +114,28 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
 
 - **Consecutive boundaries** produce an empty part (with an empty header) rather
   than a parse error. ([`textproto/multipart.go`](../textproto/multipart.go) · `populateHeaders`)
-- **Bare LF boundary lines.** If the first boundary ends in a lone `\n`, the
-  reader switches to LF mode for the rest of the body. ([`textproto/multipart.go`](../textproto/multipart.go) · `isBoundaryDelimiterLine`)
+- **CRLF, bare LF, bare CR and mixed delimiter lines** (`ROB-010-002`). A
+  delimiter is the line ending before it (`\r\n` matched whole, else a bare `\n`
+  or `\r`; none at the start of a body), `--`, the boundary, `--` for the
+  closing one, spaces and tabs, and its own line ending — or, for a closing one,
+  the end of input. There is no mode: each delimiter's endings are its own.
+  Anything that only begins like a delimiter (`--B-x`, `--B--x`, `--B junk`)
+  is body, every byte; a delimiter a read failure cut short is body followed by
+  that failure. A `\r` before a line that is exactly a delimiter makes it one —
+  the inherent reading of CR-delimited input. White space before the ending may
+  run to `MaxLineBytes`; with no line budget the line must fit in 4 KiB, as
+  before. That budget is charged on the candidate's valid prefix however the
+  input arrives, so one past it is refused before the byte that breaks it. Under
+  `Parse`, `multipart.bare_lf`, `multipart.bare_cr` and
+  `multipart.mixed_line_endings` are recorded once per parse, and
+  `ProfileStrict` refuses the rest of a multipart with a bare-CR delimiter
+  ending — also after a call that met it failed for another reason, such as a
+  malformed part header, which that call reports first; LF and LF+CRLF are
+  accepted.
+  ([`textproto/multipart.go`](../textproto/multipart.go) · `Part.Read`, [`line_endings.go`](../line_endings.go))
 - **Missing closing boundary.** On EOF before the final `--boundary--`, buffered
   bytes are flushed as body and an `ErrMissingBoundaryClose` is reported, instead
-  of dropping data or looping forever. ([`textproto/multipart.go`](../textproto/multipart.go) · `scanUntilBoundary`)
+  of dropping data or looping forever. ([`textproto/multipart.go`](../textproto/multipart.go) · `scanBody` / `bodyFailure`)
 - **Preamble** before the first boundary is skipped. ([`textproto/multipart.go`](../textproto/multipart.go) · `nextPart`)
 - **Trailing whitespace** after a boundary delimiter is tolerated. ([`textproto/multipart.go`](../textproto/multipart.go) · `skipLWSPChar`)
 - **Malformed/empty `boundary` parameter on write** is re-synchronized: the writer

@@ -27,7 +27,12 @@ const (
 	// ProfileStrict stops the current entity when an RFC violation affects
 	// framing or semantics. Already parsed parents and siblings remain
 	// available. Features that are syntactically valid but unsupported are
-	// not violations; their raw form stays usable.
+	// not violations; their raw form stays usable. A header written with bare
+	// LF line endings is accepted, as it always has been; one with a line
+	// ended by a bare CR, or a last line the input ended before any line
+	// ending, is refused for that entity, and a multipart with a bare CR
+	// before or after a delimiter line is refused for its remaining parts
+	// (ROB-010-002).
 	ProfileStrict
 
 	// ProfileForensic includes every tolerant result and diagnostic, and

@@ -141,7 +141,24 @@ func TestHeaderBudget_countBoundary(t *testing.T) {
 // refuses the next candidate from its first byte, with every byte budget off,
 // however long the candidate would be.
 func TestHeaderBudget_preflightEndlessCandidate(t *testing.T) {
-	for _, prefix := range []string{"X: ", ":", "X-no-colon", "\r", "\x00"} {
+	// A bare '\r' at the start of a line is the empty line that ends the block
+	// (ROB-010-002), so "\r" then 'x' for ever is no candidate: the block ends
+	// after the '\r', empty and unrefused, having read at most one buffer.
+	t.Run(`"\r"`, func(t *testing.T) {
+		b := NewHeaderBudget(0, 1)
+		if _, err := ReadHeaderLimits(bufio.NewReader(strings.NewReader("A: 1\r\n\r\n")), HeaderLimits{Total: b}); err != nil {
+			t.Fatal(err)
+		}
+		src := &cappedEndless{prefix: "\r"}
+		h, err := ReadHeaderLimits(bufio.NewReader(src), HeaderLimits{Total: b})
+		if err != nil || h.Len() != 0 {
+			t.Fatalf("(%v, %v), want an empty header and no error", h.Map(), err)
+		}
+		if src.n > 4096 {
+			t.Errorf("read %d bytes, want at most one buffer", src.n)
+		}
+	})
+	for _, prefix := range []string{"X: ", ":", "X-no-colon", "\x00"} {
 		t.Run(fmt.Sprintf("%q", prefix), func(t *testing.T) {
 			b := NewHeaderBudget(0, 1)
 			if _, err := ReadHeaderLimits(bufio.NewReader(strings.NewReader("A: 1\r\n\r\n")), HeaderLimits{Total: b}); err != nil {

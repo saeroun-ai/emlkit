@@ -120,8 +120,14 @@ func emptyAtDepth(depth int, eol string) originFixture {
 // the header block that proved the child existed.
 func checkDepthDiagnostic(t *testing.T, session *ParseSession, limit int64, path []int, offset int64) {
 	t.Helper()
+	checkDepthDiagnosticIn(t, session.Diagnostics(), limit, path, offset)
+}
 
-	diags := session.Diagnostics()
+// checkDepthDiagnosticIn is checkDepthDiagnostic holding diags, rather than
+// everything the session recorded, to exactly the one entry.
+func checkDepthDiagnosticIn(t *testing.T, diags []Diagnostic, limit int64, path []int, offset int64) {
+	t.Helper()
+
 	if len(diags) != 1 {
 		t.Fatalf("Diagnostics() = %v, want exactly one limit.mime_depth entry", codesOfDiags(diags))
 	}
@@ -257,7 +263,7 @@ func TestParse_mimeDepth_boundary(t *testing.T) {
 								if want := []string{"leaf"}; !reflect.DeepEqual(got.bodies, want) {
 									t.Errorf("bodies = %v, want %v", got.bodies, want)
 								}
-								if d := session.Diagnostics(); d != nil {
+								if d := takeLineNotes(t, "", eol, f.text, session.Diagnostics(), true); len(d) != 0 {
 									t.Errorf("Diagnostics() = %v, want none", codesOfDiags(d))
 								}
 								return
@@ -267,7 +273,7 @@ func TestParse_mimeDepth_boundary(t *testing.T) {
 							if got.bodies != nil {
 								t.Errorf("bodies = %v, want none recovered: the only leaf is the refused one", got.bodies)
 							}
-							checkDepthDiagnostic(t, session, limit, chainPath(levels), offset)
+							checkDepthDiagnosticIn(t, takeLineNotes(t, "", eol, f.text, session.Diagnostics(), true), limit, chainPath(levels), offset)
 						})
 					}
 				})
@@ -304,7 +310,7 @@ func TestParse_mimeDepth_chunkInvariance(t *testing.T) {
 					if want := []string{"leaf"}; !reflect.DeepEqual(got.bodies, want) {
 						t.Errorf("%s: bodies = %v, want %v", label, got.bodies, want)
 					}
-					if d := session.Diagnostics(); d != nil {
+					if d := takeLineNotes(t, label, eol, f.text, session.Diagnostics(), true); len(d) != 0 {
 						t.Errorf("%s: Diagnostics() = %v, want none", label, codesOfDiags(d))
 					}
 					continue
@@ -317,7 +323,7 @@ func TestParse_mimeDepth_chunkInvariance(t *testing.T) {
 				if got.bodies != nil {
 					t.Errorf("%s: bodies = %v, want none recovered", label, got.bodies)
 				}
-				checkDepthDiagnostic(t, session, limit, chainPath(levels), offset)
+				checkDepthDiagnosticIn(t, takeLineNotes(t, label, eol, f.text, session.Diagnostics(), true), limit, chainPath(levels), offset)
 			}
 		}
 	}
@@ -363,7 +369,7 @@ func TestParse_mimeDepth_emptyContainerAtTheBudgetIsEOF(t *testing.T) {
 				if _, err := mr.NextPart(); err != io.EOF {
 					t.Errorf("NextPart() on the empty container at the budget = %v, want io.EOF", err)
 				}
-				if d := session.Diagnostics(); d != nil {
+				if d := takeLineNotes(t, "", eol, f.text, session.Diagnostics(), true); len(d) != 0 {
 					t.Errorf("Diagnostics() = %v, want none: the container had no child to refuse", codesOfDiags(d))
 				}
 			})

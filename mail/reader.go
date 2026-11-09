@@ -153,9 +153,10 @@ func CreateReader(r io.Reader) (*Reader, error) {
 // stop, and later calls report it again rather than continue. The one
 // FatalError that ends less is the refusal of one part under
 // message.ProfileStrict, when its Content-Type or Content-Disposition has a
-// valid base but malformed parameters: that part is not returned, the parse is
-// not stopped (Entity.ParseStop stays nil), and the next call continues with
-// the part after it. A part whose own body budget refused the eager read of a
+// valid base but malformed parameters, or when its header has a line ended by
+// a bare CR or a last line with no line ending: that part is not returned, the
+// parse is not stopped (Entity.ParseStop stays nil), and the next call
+// continues with the part after it. A part whose own body budget refused the eager read of a
 // CharsetReader building its decoder is refused the same way. A failure of the
 // message's source is returned with no part too; the source is not read again,
 // so later calls report the failure rather than reach another part. In each
@@ -163,6 +164,19 @@ func CreateReader(r io.Reader) (*Reader, error) {
 // call, and a caller that wants the following parts calls it again. A
 // multipart message with a usable boundary whose body is empty returns no part
 // and an error wrapping io.EOF, then io.EOF (see message.MultipartReader).
+//
+// A refusal under message.ProfileStrict of a multipart's delimiter line with a
+// bare CR line ending before or after it is scoped to that multipart's
+// iteration, not to one part: NextPart returns a message.FatalError carrying
+// multipart.bare_cr and no Part, and every later call returns the same error
+// again. Unlike the refusal of one part above, it does not continue: the
+// Reader reaches no later part of that multipart, and since it stays on that
+// multipart, none of an enclosing one either. The parse is not stopped, and
+// the parts already returned stay valid. When the call that reached that
+// delimiter fails first for another reason — a malformed header of the part
+// after it, a failure of the source — it returns that failure, and the refusal
+// is what every later call returns. Under every other profile such a
+// delimiter is framed on and recorded as a diagnostic.
 //
 // Under every other profile such a field is repaired by the parse — its valid
 // base and well-formed parameters kept, the defect recorded as a diagnostic —

@@ -231,7 +231,10 @@ func (d *dispositionSnapshot) isAttachment() bool {
 // it is not interpreted: the media type is empty, the parameters nil, and the
 // error the entity-scoped FatalError that construction returned, which does not
 // stop the parse. Because the Content-Type is read before any decoder is
-// chosen, such an entity's body is exactly the bytes of the input.
+// chosen, such an entity's body is exactly the bytes of the input. An entity
+// ProfileStrict refused for its header's line endings — a line ended by a bare
+// '\r', or a last line with no line ending (ROB-010-002) — is reported the same
+// way, whatever its Content-Type says: nothing of the field is interpreted.
 //
 // The result is a snapshot from construction rather than a reading of the
 // current header: an edit to Entity.Header after construction does not change

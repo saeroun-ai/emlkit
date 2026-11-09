@@ -210,9 +210,55 @@ type ParseOptions struct {
 // entity. A multipart with a usable boundary and an empty body has no part:
 // MultipartReader.NextPart returns an error wrapping io.EOF and then io.EOF,
 // and Walk ends with that error after the root (empty-multipart policy is
-// ROB-060-009's). WriteTo does not reproduce such an input; see there. Bare CR,
-// bare LF, mixed line endings and an unterminated last line are ROB-010-002's,
-// and a malformed or whitespace-only first line is ROB-020's.
+// ROB-060-009's). WriteTo does not reproduce such an input; see there. A
+// malformed or whitespace-only first line is ROB-020's.
+//
+// Every header block — the message's and each part's — ends its lines at
+// "\r\n", at a bare '\n' or at a bare '\r', a stray '\r' inside a value staying
+// content (ROB-010-002; see textproto.ReadHeader for the exact rule, and
+// line_endings.go). That framing is the same for Read and ReadWithOptions; what
+// Parse adds is reporting it. A block with a line ended by a bare LF records
+// header.bare_lf (SeverityInfo), one by a bare CR header.bare_cr
+// (SeverityRecovered), and one mixing kinds header.mixed_line_endings — each
+// at most once per parse, at the first such line ending; a block whose last
+// line io.EOF ended before any line ending records header.truncated_line
+// (SeverityIncomplete). A header ended by "\r\n" throughout records nothing.
+// ProfileStrict accepts LF, as it always has, and refuses an entity whose
+// header has a line ended by a bare '\r' or a last line with no line ending, on
+// the terms of a refused Content-Type below: the entity is returned with an
+// entity-scoped FatalError, its Content-Type is not interpreted and its body is
+// kept as read, and the parse and the siblings go on. Raw fields store every
+// line ending as CRLF, so such a header is not written back byte for byte. A
+// header whose last line ending is a bare '\r' is still being read until the
+// byte after it, or io.EOF, arrives; Limits.MaxInputBytes of exactly such a
+// header's length, with a body after it, leaves no entity.
+//
+// Multipart delimiter lines are framed on the same three line endings, before
+// and after each delimiter, in any mix (see textproto.MultipartReader). A
+// delimiter line is the ending before it, "--", the boundary, "--" for the
+// closing one, spaces and tabs, and its own ending, or for a closing one the
+// end of the input; anything that only begins like one — "--B-x", "--B--x" —
+// is body, every byte. A '\r' before a line that is exactly a delimiter makes
+// it one: that is the only way a multipart written with bare CRs can be
+// framed, and RFC 2046 forbids the boundary at the start of any line of a
+// body. A delimiter cut short by a failure of the input is body, followed by
+// that failure. Under Parse the iterator records multipart.bare_lf
+// (SeverityInfo) and multipart.bare_cr (SeverityRecovered) at the first such
+// ending, and multipart.mixed_line_endings when one multipart's delimiters use
+// more than one kind (SeverityInfo, SeverityRecovered with a CR) — each at
+// most once per parse, at the container's path and the ending's position in
+// the input. These are observed by NextPart, including the call that ends the
+// iteration with io.EOF: a delimiter a Body read reached is recorded, or
+// refused, by the next NextPart, not by the read. ProfileStrict accepts LF and
+// LF with CRLF, and refuses a multipart with a bare CR before or after a
+// delimiter: the NextPart that observes it returns, then and on every later
+// call, the iterator's FatalError carrying multipart.bare_cr — the parts
+// already returned stay valid, the part that delimiter introduced is not
+// returned, an enclosing multipart goes on, and the parse is not stopped. A
+// stop of the session, and whatever the input or a budget failed with, come
+// first. With no line budget a delimiter line must fit in 4 KiB, as framing
+// lines always had to, and one that does not is an ordinary framing error;
+// under Limits.MaxLineBytes its white space may run to that budget.
 //
 // A header block that exceeds Limits.MaxHeaderBytes, MaxHeaderFieldBytes,
 // MaxHeaderCount or MaxLineBytes is refused, and refused wherever it is found:

@@ -65,13 +65,33 @@ import (
 //
 // A header block, the framing between parts and the body of a part are read
 // from buffers of at most 4 KiB — the reader of the message and the reader of
-// each multipart — and every refill of one is a read of the gated input or of
-// the gated body of the enclosing container. A line or field longer than the
-// buffer is accumulated across refills, so a single header field, even under
-// disabled header budgets, is crossed at most one buffer between two points
-// where cancellation is seen. What is done with a block once it has been read —
+// each multipart — and every refill of one is a read of the gated input, of
+// the enclosing container's body as its own framing reads it, which reaches
+// the input only through that same gate, or of a replaced Body through the
+// gate MultipartReader puts on it. A line or field longer than the buffer is
+// accumulated across refills, so a single header field, even under disabled
+// header budgets, is crossed at most one buffer between two points where
+// cancellation is seen. What is done with a block once it has been read —
 // splitting it into fields — is one pass over bytes the budgets bound. No
 // textproto API is needed for this.
+//
+// The framing of a multipart is not a caller's read, and is not gated by the
+// container's own Body gate. Once cancellation has been seen nothing more is
+// read from the input, so framing can only work through bytes the parse
+// already admitted, and only inside a read a caller had already started,
+// since every later read of a Body and every NextPart report the stop first.
+// What a container's reader can hold is more than its 4 KiB buffer: a
+// delimiter candidate whose white space runs past the buffer is held up to
+// Limits.MaxLineBytes plus one buffer (one buffer with that budget disabled),
+// and is delivered as body if it turns out not to be one, and a framing line
+// is accumulated to the same bound; every enclosing container, Limits.MaxMIMEDepth
+// of them at most, holds its own. That is the work framing can still do in
+// that read; it is not bounded by 4 KiB per container. That is what lets the framing see
+// an enclosing scope's end the parse has already proven: the line ending after
+// an inner closing delimiter is the outer delimiter's, so the inner body ends
+// only where the outer part ends, and a body the cancellation cut ends exactly
+// where the same body ends when an ordinary failure of the input cuts it at
+// the same point. See Entity.framing.
 //
 // A read already in progress when the context is cancelled is never preempted:
 // a source blocked in Read, a CharsetReader or decoder, a DiagnosticSink, a
@@ -99,7 +119,11 @@ import (
 // context.AfterFunc to watch the context: a source blocked in Read stays
 // blocked until the caller makes it return, for example by closing what it
 // owns from a context.AfterFunc of its own. A Body the caller replaced is the
-// caller's reader and is not gated.
+// caller's reader and is not gated as a field: reading it directly reads the
+// caller's reader. The parse's own reads of it are: MultipartReader frames a
+// replaced Body through the cancellation gate, so once the parse is cancelled
+// neither that framing nor the framing of any part inside it reads the
+// caller's reader again. No input budget applies to such a reader.
 //
 // # Compatibility
 //

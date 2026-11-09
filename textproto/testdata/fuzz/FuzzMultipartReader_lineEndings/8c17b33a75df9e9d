@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("--B\r\n\r\none\r\n--B                                                                                                                                                                                                                       \x7f\xff                                                                                   \r\n\r\ntwo\r\n--B*-\r\n")

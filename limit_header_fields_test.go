@@ -187,8 +187,14 @@ func limitFixtures(eol string, extra func(eol string) [][2]string) []limitCase {
 // and the exact position of the line or field that was refused.
 func checkFieldsDiagnostic(t *testing.T, session *ParseSession, code Code, limit int64, path []int, offset int64) {
 	t.Helper()
+	checkFieldsDiagnosticIn(t, session.Diagnostics(), code, limit, path, offset)
+}
 
-	diags := session.Diagnostics()
+// checkFieldsDiagnosticIn is checkFieldsDiagnostic holding diags, rather than
+// everything the session recorded, to exactly the one budget diagnostic.
+func checkFieldsDiagnosticIn(t *testing.T, diags []Diagnostic, code Code, limit int64, path []int, offset int64) {
+	t.Helper()
+
 	if len(diags) != 1 {
 		t.Fatalf("Diagnostics() = %v, want exactly one %s entry", codesOfDiags(diags), code)
 	}
@@ -392,7 +398,10 @@ func TestParse_headerLimits_boundary(t *testing.T) {
 										if !reflect.DeepEqual(got.bodies, tc.all) {
 											t.Errorf("bodies = %v, want %v", got.bodies, tc.all)
 										}
-										if d := session.Diagnostics(); d != nil {
+										// An LF fixture records its root's one header.bare_lf
+										// note and, the whole tree read, the root's
+										// multipart.bare_lf (ROB-010-002), and nothing else.
+										if d := takeLineNotes(t, "", eol, tc.fixture.text, session.Diagnostics(), true); len(d) != 0 {
 											t.Errorf("Diagnostics() = %v, want none", codesOfDiags(d))
 										}
 										return
@@ -403,7 +412,14 @@ func TestParse_headerLimits_boundary(t *testing.T) {
 										stopped = got.err
 									}
 									checkFieldsFatal(t, stopped, spec.code, spec.sentinel, tc.path, unit)
-									checkFieldsDiagnostic(t, session, spec.code, limit, tc.path, unit)
+									// A refused root header records no line-ending note; a
+									// refused part's root was read first, and the root's
+									// first delimiter line framed before any part.
+									diags := session.Diagnostics()
+									if len(tc.path) > 0 {
+										diags = takeLineNotes(t, "", eol, tc.fixture.text, diags, true)
+									}
+									checkFieldsDiagnosticIn(t, diags, spec.code, limit, tc.path, unit)
 
 									if !reflect.DeepEqual(got.bodies, tc.upTo) {
 										t.Errorf("bodies = %v, want %v recovered before the refusal", got.bodies, tc.upTo)
@@ -771,12 +787,22 @@ func TestParse_headerLimits_chunkInvariance(t *testing.T) {
 							if stopped == nil {
 								stopped = got.err
 							}
+							// An LF fixture whose root header was read records its one
+							// header.bare_lf note there first (ROB-010-002): at the end
+							// of the root's first line, "Mime-Version: 1.0". Its
+							// first delimiter line is then framed before any part,
+							// refused or not, so its multipart.bare_lf follows.
+							diags := session.Diagnostics()
+							if eol == "\n" && (delta == 0 || len(tc.path) > 0) {
+								diags = takeBareLFNote(t, label, diags, int64(len("Mime-Version: 1.0")))
+								diags = takeMultipartLFNote(t, label, diags, rootDelimiterLF(tc.fixture.text))
+							}
 							if delta == 0 {
 								if stopped != nil {
 									t.Errorf("%s: %v", label, stopped)
 								}
-								if d := session.Diagnostics(); d != nil {
-									t.Errorf("%s: Diagnostics() = %v, want none", label, codesOfDiags(d))
+								if len(diags) != 0 {
+									t.Errorf("%s: Diagnostics() = %v, want none", label, codesOfDiags(diags))
 								}
 								continue
 							}
@@ -784,7 +810,7 @@ func TestParse_headerLimits_chunkInvariance(t *testing.T) {
 								t.Errorf("%s: err = %v, want a FatalError", label, stopped)
 								continue
 							}
-							checkFieldsDiagnostic(t, session, spec.code, limit, tc.path, unit)
+							checkFieldsDiagnosticIn(t, diags, spec.code, limit, tc.path, unit)
 						}
 					}
 				}
@@ -1261,7 +1287,7 @@ func TestParse_headerLimits_emptyBlockIsNotAField(t *testing.T) {
 				if !reflect.DeepEqual(got.bodies, tc.bodies) {
 					t.Errorf("bodies = %v, want %v", got.bodies, tc.bodies)
 				}
-				if d := session.Diagnostics(); d != nil {
+				if d := takeLineNotes(t, "", eol, tc.text, session.Diagnostics(), true); len(d) != 0 {
 					t.Errorf("Diagnostics() = %v, want none: no budget was reached", codesOfDiags(d))
 				}
 			})

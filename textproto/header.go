@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/textproto"
 	"sort"
 	"strings"
@@ -55,6 +56,12 @@ type Header struct {
 	// cheap.
 	l []*headerField
 	m map[string][]*headerField
+
+	// ends is the line endings of the block this header was read from, or nil
+	// when it was not read whole by this package or has been changed since. It
+	// is never modified once set, so a Copy shares it; every mutation drops it.
+	// See LineEndings.
+	ends *LineEndings
 }
 
 func makeHeaderMap(fs []*headerField) map[string][]*headerField {
@@ -117,6 +124,7 @@ func (h *Header) AddRaw(kv []byte) {
 	k := textproto.CanonicalMIMEHeaderKey(string(trim(kv[:colon])))
 	v := trimAroundNewlines(kv[colon+1:])
 
+	h.ends = nil
 	if h.m == nil {
 		h.m = make(map[string][]*headerField)
 	}
@@ -134,6 +142,7 @@ func (h *Header) AddRaw(kv []byte) {
 func (h *Header) Add(k, v string) {
 	k = textproto.CanonicalMIMEHeaderKey(k)
 
+	h.ends = nil
 	if h.m == nil {
 		h.m = make(map[string][]*headerField)
 	}
@@ -198,6 +207,7 @@ func (h *Header) Set(k, v string) {
 func (h *Header) Del(k string) {
 	k = textproto.CanonicalMIMEHeaderKey(k)
 
+	h.ends = nil
 	delete(h.m, k)
 
 	// Delete existing keys
@@ -219,7 +229,7 @@ func (h *Header) Copy() Header {
 	l := make([]*headerField, len(h.l))
 	copy(l, h.l)
 	m := makeHeaderMap(l)
-	return Header{l: l, m: m}
+	return Header{l: l, m: m, ends: h.ends}
 }
 
 // Len returns the number of fields in the header.
@@ -322,6 +332,7 @@ func (fs *headerFields) Del() {
 		panic("message: field not found in Header.m")
 	}
 
+	fs.h.ends = nil
 	fs.h.l = append(fs.h.l[:fs.index()], fs.h.l[fs.index()+1:]...)
 	fs.cur--
 }
@@ -391,6 +402,7 @@ func (fs *headerFieldsByKey) Del() {
 		panic("message: field not found in Header.l")
 	}
 
+	fs.h.ends = nil
 	fs.h.m[fs.k] = append(fs.h.m[fs.k][:fs.index()], fs.h.m[fs.k][fs.index()+1:]...)
 	if len(fs.h.m[fs.k]) == 0 {
 		delete(fs.h.m, fs.k)
@@ -739,13 +751,26 @@ type headerScan struct {
 	lineStart int64
 	lineBytes int64
 
-	// pendingCR records a '\r' at the end of the bytes read so far that is not
-	// yet known to be data: it is the first byte of a CRLF terminator when the
-	// next byte is '\n', and an ordinary byte of the line otherwise. It is
-	// charged to lineBytes as soon as the next read decides which it was, so
-	// that a terminator split across two reads is never counted as content and
-	// never miscounted as one byte short.
-	pendingCR bool
+	// ends is the line endings of this block so far; see LineEndings.
+	ends LineEndings
+
+	// crKey is set when the physical line just read ended with a bare '\r'
+	// whose next byte can begin a field name, which is the one place a bare
+	// '\r' is not yet known to be a line ending; see the stray carriage return
+	// rule on ReadHeader. probePrev is crKey taken up by the candidate that
+	// follows, while its first line is probed.
+	crKey, probePrev crLine
+
+	// probe is the state of that probe: off, or how much of "name *WSP :" the
+	// candidate's first line has shown so far.
+	probe probeState
+
+	// lineRejoined reports that the line being read is a probed candidate whose
+	// '\r' turned out to be content, so that it continues the previous line.
+	// rejoined reports the same for the logical field readContinuedLineSlice
+	// returns, and dropPrev that a failure cut such a line, or one whose '\r'
+	// it left undecided, so the previous line is cut with it.
+	lineRejoined, rejoined, dropPrev bool
 
 	// count is the logical field candidates charged to this block so far.
 	count int64
@@ -766,17 +791,40 @@ type headerScan struct {
 	// fail is the first error a read of this block returned, io.EOF included,
 	// or nil. bufio.Reader hands a read error out once and then forgets it, so
 	// the scanner keeps it: once it is set no read of the block refills the
-	// reader, and only bytes it already holds are read. See peek and readSlice.
+	// reader, and only bytes it already holds are read. See peek and nextChunk.
 	fail error
 }
+
+// A crLine is what a line ended by a bare '\r' that may still prove to be
+// content left behind: where that line and its field began, what they had been
+// charged, and where the '\r' was.
+type crLine struct {
+	ok                     bool
+	lineStart, lineBytes   int64
+	fieldStart, fieldBytes int64
+	cr                     int64
+}
+
+// probeState is how far a probed candidate's first line has matched
+// 1*name-byte *WSP ":".
+type probeState uint8
+
+const (
+	probeOff   probeState = iota
+	probeName             // name bytes so far
+	probeSpace            // name bytes, then white space
+)
 
 // peek is r.Peek(n) for the scanner. It records the first error a peek
 // returns, and once a read of the block has failed it looks only at bytes r
 // already holds, returning those with the failure when they are fewer than n.
 //
-// The scanner peeks at most two bytes and a bufio.Reader holds at least 16, so
-// Peek's own bufio.ErrBufferFull cannot occur here: that value, too, is the
-// input's own failure and is recorded like any other.
+// The scanner never peeks more than r's buffer holds — at most two bytes past
+// what is buffered, or one more byte than is buffered while that is less than
+// the whole buffer, and a bufio.Reader holds at least 16 — so Peek's own
+// bufio.ErrBufferFull cannot occur here: that value is the input's own failure
+// and is recorded like any other. It is never mistaken for a line longer than
+// the buffer, and never read on without bytes.
 func (s *headerScan) peek(r *bufio.Reader, n int) ([]byte, error) {
 	if s.fail == nil {
 		b, err := r.Peek(n)
@@ -793,44 +841,113 @@ func (s *headerScan) peek(r *bufio.Reader, n int) ([]byte, error) {
 	return r.Peek(n)
 }
 
-// readSlice is r.ReadSlice('\n') for the scanner, on the terms of peek: it
-// records the first error a read returns, and once a read of the block has
-// failed it reads only what r already holds — through the next '\n' if there
-// is one there, and otherwise all of it together with the failure, which is the
-// shape ReadSlice returns a stopped input in.
-//
-// bufio.ErrBufferFull is two things that share one value: ReadSlice's report
-// of a line longer than r's whole buffer, which means read on, and an input
-// that failed with that error itself, which an io.Reader may. ReadSlice reports
-// the first with exactly the whole buffer, so only that is read on (see
-// refill); with fewer bytes the value is the input's failure and is recorded.
-// An input that fails with it after exactly filling the buffer cannot be told
-// apart through bufio: that one buffer is read on, and the read after it either
-// meets the failure again — a source that keeps failing, as every source under
-// message.Parse does — and records it, or reads on with what the source sends.
-// Either way it ends: nothing here reads on without bytes.
-func (s *headerScan) readSlice(r *bufio.Reader) ([]byte, error) {
-	if s.fail == nil {
-		l, err := r.ReadSlice('\n')
-		if err != nil && !(err == bufio.ErrBufferFull && len(l) == r.Size()) {
-			s.fail = err
-		}
-		return l, err
-	}
-	buf, _ := r.Peek(r.Buffered())
-	if i := bytes.IndexByte(buf, '\n'); i >= 0 {
-		r.Discard(i + 1)
-		return buf[:i+1], nil
-	}
-	r.Discard(len(buf))
-	return buf, s.fail
-}
+// lineEnd is how the bytes nextChunk returned end.
+type lineEnd uint8
 
-// refill reports whether err, from readSlice, is a line longer than the
-// buffer, to be read on, rather than a failure — including an input's own
-// bufio.ErrBufferFull, which readSlice has recorded by then.
-func (s *headerScan) refill(err error) bool {
-	return err == bufio.ErrBufferFull && s.fail == nil
+const (
+	// endNone: the line goes on past these bytes, all of them content.
+	endNone lineEnd = iota
+	// endLF, endCRLF: the bytes end with that line ending.
+	endLF
+	endCRLF
+	// endCR: the bytes end with a '\r' not followed by '\n'. Whether it ends
+	// the line is the caller's to decide from what follows it, which nextChunk
+	// reports and does not consume.
+	endCR
+	// endInput: the input stopped after these bytes, with io.EOF or a failure.
+	endInput
+)
+
+// eofNext is what nextChunk reports as the byte after a '\r' that io.EOF
+// followed.
+const eofNext = -1
+
+// nextChunk reads the next bytes of the current physical line out of r, on
+// the terms of peek: the first failure is recorded, and once a read of the
+// block has failed only what r already holds is read.
+//
+// What it returns ends at the first line ending, or at a full buffer, or where
+// the input stopped, whichever comes first — the bytes ReadSlice('\n') would
+// return, except that a '\r' not followed by '\n' also ends them. Which bytes
+// come back therefore depends on the input and on r's buffer size alone, not
+// on how the input chunks its reads.
+//
+// A '\r' is never consumed before the byte after it has been seen, because
+// that byte is what says whether it is the first byte of a CRLF. When the '\r'
+// is the last byte r holds, the bytes before it are returned as content of a
+// line that goes on, and the next call looks one byte further, which a
+// bufio.Reader of at least 16 bytes always can. That is the scanner's whole
+// look-ahead: one byte past a '\r'. With endCR, next is that byte, or eofNext
+// when io.EOF followed the '\r'. A '\r' that any other failure followed is
+// returned with endInput and the failure, as the last byte of a line the
+// failure cut.
+func (s *headerScan) nextChunk(r *bufio.Reader) (b []byte, end lineEnd, next int, err error) {
+	// scanned is how many held bytes are known to hold neither '\r' nor '\n',
+	// so that holding on for more bytes never searches the same ones again.
+	scanned := 0
+	for {
+		n := r.Buffered()
+		if n == 0 {
+			if _, err := s.peek(r, 1); err != nil {
+				return nil, endInput, 0, err
+			}
+			continue
+		}
+		w, _ := r.Peek(n)
+		i := bytes.IndexAny(w[scanned:], "\r\n")
+		if i >= 0 {
+			i += scanned
+		} else {
+			scanned = n
+		}
+		switch {
+		case i >= 0 && w[i] == '\n':
+			// No '\r' comes before it, or it would have been found first.
+			r.Discard(i + 1)
+			return w[:i+1], endLF, 0, nil
+		case i >= 0 && i+1 < n:
+			if w[i+1] == '\n' {
+				r.Discard(i + 2)
+				return w[:i+2], endCRLF, 0, nil
+			}
+			r.Discard(i + 1)
+			return w[:i+1], endCR, int(w[i+1]), nil
+		}
+
+		// Nothing held decides where the line ends. Hold on, as ReadSlice
+		// would, until something does or the buffer is full. The peek is for one
+		// byte more than is held, which is at most the whole buffer.
+		if s.fail == nil && n < r.Size() {
+			if i >= 0 {
+				// The '\r' that is the last byte held is where to look again.
+				scanned = i
+			}
+			s.peek(r, n+1)
+			continue
+		}
+
+		// The buffer is full, or the input has stopped.
+		if i < 0 {
+			r.Discard(n)
+			if s.fail != nil {
+				return w, endInput, 0, s.fail
+			}
+			return w, endNone, 0, nil
+		}
+		// A '\r' is the last byte held: the bytes before it are content
+		// either way, and the next call decides the '\r'.
+		if i > 0 {
+			r.Discard(i)
+			return w[:i], endNone, 0, nil
+		}
+		// The '\r' is all that is held and the input has stopped: a full
+		// buffer holds at least 16 bytes, so s.fail is set here.
+		r.Discard(1)
+		if s.fail == io.EOF {
+			return w[:1], endCR, eofNext, nil
+		}
+		return w[:1], endInput, 0, s.fail
+	}
 }
 
 // refuseShared records the shared budget's refusal e as this block's.
@@ -884,7 +1001,7 @@ func (s *headerScan) beginBlockEnd() {
 func (s *headerScan) beginLine() {
 	s.lineStart = s.consumed
 	s.lineBytes = 0
-	s.pendingCR = false
+	s.lineRejoined = false
 }
 
 // chargeField charges one logical field candidate to the field count.
@@ -926,20 +1043,21 @@ func (s *headerScan) preflightField() error {
 	return nil
 }
 
-// consume charges the bytes just read out of the input by one ReadSlice, whose
-// result was l and err, to every budget of this block.
+// charge charges n bytes just read out of the input, data of which are content
+// of the current physical line rather than its line ending, to every budget of
+// this block.
 //
 // It is called before those bytes are kept, so that nothing beyond a budget is
 // ever accumulated: what a refused line or field appends is at most one of the
 // reader's buffers past the budget, and a refused block keeps nothing at all.
+// Only bytes read out of the input are charged; the byte nextChunk looked at
+// past a '\r' is charged when it is read, as part of whatever it begins.
 //
 // No sum of a budget and a usage is ever computed. Each charge is compared
 // against the headroom that remains instead, which is exact for every value in
 // range, so a budget of math.MaxInt64 is an ordinary finite budget here rather
 // than one that wraps into an accepted one.
-func (s *headerScan) consume(l []byte, err error) error {
-	data, ended := s.classify(l, err)
-
+func (s *headerScan) charge(data, n int64) error {
 	// The physical line, first: it bounds the smallest scope.
 	if s.lim.MaxLineBytes > 0 {
 		if data > s.lim.MaxLineBytes-s.lineBytes {
@@ -950,7 +1068,6 @@ func (s *headerScan) consume(l []byte, err error) error {
 	// charged what was read rather than what the line kept. A line that belongs
 	// to no field — the empty line that ends the block — is charged to no field
 	// and can refuse none; see inField.
-	n := int64(len(l))
 	if s.inField && s.lim.MaxFieldBytes > 0 {
 		if n > s.lim.MaxFieldBytes-s.fieldBytes {
 			return s.refuse(HeaderLimitFieldBytes, s.lim.MaxFieldBytes, s.fieldStart)
@@ -974,130 +1091,219 @@ func (s *headerScan) consume(l []byte, err error) error {
 		s.fieldBytes += n
 	}
 	s.consumed += n
-	if ended {
-		s.pendingCR = false
+	return nil
+}
+
+// take charges the content bytes c of the current line, and then term bytes
+// of the line ending that follows them, to every budget of this block; ends
+// reports that the line ends after them, by that line ending or by io.EOF.
+//
+// While a candidate's first line is probed (see crLine), c is also matched
+// against 1*name-byte *WSP ":". A colon settles that the candidate is a field
+// and the '\r' before it ended the previous line: nothing charged changes. A
+// byte that cannot continue that match, or the end of the line before any
+// colon, settles that the '\r' was content: the bytes before that point are
+// charged to the candidate as read, and from there on this line and this field
+// are the previous ones continued, charged together; see rejoin. Where that
+// happens depends on the bytes alone, so it is the same however they were
+// chunked.
+func (s *headerScan) take(c []byte, term int64, ends bool) error {
+	if s.probe != probeOff {
+		k, settled, field := s.probeStep(c)
+		if !settled && ends {
+			settled, field = true, false
+		}
+		if settled && field {
+			s.probe = probeOff
+			s.ends.note(LineEndingCR, s.probePrev.cr)
+		} else if settled {
+			if err := s.charge(int64(k), int64(k)); err != nil {
+				return err
+			}
+			c = c[k:]
+			if err := s.rejoin(); err != nil {
+				return err
+			}
+		}
+	}
+	return s.charge(int64(len(c)), int64(len(c))+term)
+}
+
+// probeStep matches c against what the probed candidate's first line has
+// shown so far. It returns the index of the byte that settled the probe, and
+// whether that byte made the candidate a field; or, when nothing in c settled
+// it, len(c) and settled false.
+func (s *headerScan) probeStep(c []byte) (k int, settled, field bool) {
+	for k, b := range c {
+		switch {
+		case b == ':':
+			return k, true, true
+		case s.probe == probeName && validHeaderKeyByte(b):
+		case isSpace(b):
+			s.probe = probeSpace
+		default:
+			return k, true, false
+		}
+	}
+	return len(c), false, false
+}
+
+// rejoin makes the probed candidate the continuation of the line the '\r'
+// ended: that '\r' is content, so the physical line is the previous one, the
+// '\r' and what the candidate has read, and the field is the previous field
+// and the candidate together. Both are charged as such from here on, and both
+// are checked at once, line first, against what they now hold: a line or field
+// the rejoin makes too long is refused here, where it began.
+//
+// Nothing is refunded. The '\r' was charged to the field and the block when it
+// was read; it is now also content of the line. The shared field budget was
+// never charged for the candidate, which is charged as a field only once it has
+// been read whole as one; see readHeader.
+func (s *headerScan) rejoin() error {
+	p := s.probePrev
+	s.probe = probeOff
+	s.lineRejoined = true
+	s.rejoined = true
+
+	s.lineStart = p.lineStart
+	s.lineBytes = satAdd(satAdd(p.lineBytes, 1), s.lineBytes)
+	s.fieldStart = p.fieldStart
+	s.fieldBytes = satAdd(p.fieldBytes, s.fieldBytes)
+
+	if s.lim.MaxLineBytes > 0 && s.lineBytes > s.lim.MaxLineBytes {
+		return s.refuse(HeaderLimitLineBytes, s.lim.MaxLineBytes, s.lineStart)
+	}
+	if s.lim.MaxFieldBytes > 0 && s.fieldBytes > s.lim.MaxFieldBytes {
+		return s.refuse(HeaderLimitFieldBytes, s.lim.MaxFieldBytes, s.fieldStart)
 	}
 	return nil
 }
 
-// classify reports how many of the bytes just read belong to the content of the
-// current physical line, and whether that line ended.
-//
-// A terminator is not content. Telling one apart takes a little care, because
-// ReadSlice stops at '\n' or at a full buffer, so a "\r\n" can arrive as a '\r'
-// at the end of one read and a '\n' at the start of the next — and the same
-// '\r' is an ordinary byte of the line when what follows it is not '\n', or
-// when nothing follows it at all. The '\r' is therefore held back by pendingCR
-// and charged as soon as the next read settles what it was.
-func (s *headerScan) classify(l []byte, err error) (data int64, ended bool) {
-	n := int64(len(l))
-
-	if s.pendingCR {
-		if len(l) > 0 && l[0] == '\n' {
-			// The held-back '\r' was the first byte of this terminator.
-			s.pendingCR = false
-		} else {
-			// It was content after all.
-			data++
-			s.pendingCR = false
-		}
+// satAdd returns a+b for non-negative a and b, or math.MaxInt64 when that
+// would not fit.
+func satAdd(a, b int64) int64 {
+	if b > math.MaxInt64-a {
+		return math.MaxInt64
 	}
-
-	switch {
-	case err == nil:
-		// l ends with the '\n' that terminated this line.
-		n--
-		if len(l) >= 2 && l[len(l)-2] == '\r' {
-			n--
-		}
-		return data + n, true
-
-	case s.refill(err):
-		// No terminator yet. A trailing '\r' may be the start of one, so it is
-		// held back rather than charged.
-		if len(l) > 0 && l[len(l)-1] == '\r' {
-			s.pendingCR = true
-			n--
-		}
-		return data + n, false
-
-	default:
-		// The input stopped. Nothing here is a terminator, including a trailing
-		// '\r' and any '\r' that was held back.
-		return data + n, true
-	}
+	return a + b
 }
 
-// readLineSlice appends the next physical line of r to line, without its
-// terminator, and charges every byte it consumes to scan.
+// readLineSlice appends the next physical line of r to line, without its line
+// ending, and charges every byte it consumes to scan.
 //
-// It reads through ReadSlice rather than bufio.Reader.ReadLine because a budget
-// has to be charged what was actually consumed, and ReadLine reports a line
-// whose terminator it has already stripped — leaving no way to tell a line
-// ended by "\n" from one ended by "\r\n" or by the end of the input. Reading
-// the raw bytes and stripping the terminator from the accumulated result is
-// what ReadLine does internally, so what this returns is what it returned: the
-// same bytes for a "\r\n" that straddles the buffer, and the same last line for
-// an input that ends without a terminator at all.
+// A line ends at "\r\n", at a '\n', or at a '\r' that is not followed by '\n'
+// when that '\r' is the first byte of the line, comes right before io.EOF, or
+// is followed by white space (a folded line), by another '\r' (an empty line
+// next), or by a byte that can begin a field name — in that last case the
+// next candidate is probed, and the '\r' may still turn out to be content; see
+// take. Any other '\r' is content of the line, as it always was. Each line
+// ending is recorded in scan.ends once it is known to be one.
 //
-// A line a read failure other than io.EOF cut short is not a line: it is
-// returned as line was given, without the bytes of the cut line, together with
-// that failure, so that nothing the input did not terminate is read as though
-// it had been, and the failure is not left for a later read that bufio would
-// not repeat. Its bytes are still charged first, so a budget they exceed is
-// what is reported.
+// It reads the raw bytes rather than through bufio.Reader.ReadLine because a
+// budget has to be charged what was actually consumed, and ReadLine reports a
+// line whose line ending it has already stripped.
+//
+// A line the input ended with io.EOF before any line ending is kept, and
+// recorded as unterminated. A line a read failure other than io.EOF cut short
+// is not a line: it is returned as line was given, without the bytes of the cut
+// line, together with that failure, so that nothing the input did not end is
+// read as though it had been, and the failure is not left for a later read
+// that bufio would not repeat. A '\r' whose next byte that failure prevented
+// reading is a byte of the cut line. Its bytes are still charged first, so a
+// budget they exceed is what is reported.
 func readLineSlice(r *bufio.Reader, line []byte, scan *headerScan) ([]byte, error) {
-	// appended bounds how much of line belongs to this call, so that the
-	// terminator stripped below cannot reach into continuation lines a caller
-	// accumulated before it.
-	appended := 0
 	given := len(line)
 
 	scan.beginLine()
 
 	for {
-		l, err := scan.readSlice(r)
+		b, end, next, err := scan.nextChunk(r)
 
 		// The budgets are charged before the bytes are kept, so a line longer
 		// than a budget is refused after one buffer rather than accumulated:
 		// what this appends never exceeds the budget by more than that buffer.
-		if berr := scan.consume(l, err); berr != nil {
-			return line, berr
-		}
-
-		if scan.refill(err) {
-			// The line is longer than r's buffer; keep going. An input's own
-			// bufio.ErrBufferFull is not this, and ends the line below.
-			line = append(line, l...)
-			appended += len(l)
-			continue
-		}
-
-		if err != nil {
-			if err != io.EOF {
-				// Cut by a read failure, possibly after earlier buffers of the
-				// same long line: none of it is kept.
-				return line[:given], err
+		switch end {
+		case endNone:
+			if terr := scan.take(b, 0, false); terr != nil {
+				return line, terr
 			}
-			if len(l) == 0 {
-				return line, err
+			line = append(line, b...)
+
+		case endLF, endCRLF:
+			kind, term := LineEndingLF, 1
+			if end == endCRLF {
+				kind, term = LineEndingCRLF, 2
 			}
-			// The input ended without a terminator. The last line is reported
-			// with the bytes it did read and the end is left for the next read,
-			// which the scanner answers from its recorded io.EOF. There is no
-			// terminator to strip.
-			return append(line, l...), nil
-		}
+			content := b[:len(b)-term]
+			if terr := scan.take(content, int64(term), true); terr != nil {
+				return line, terr
+			}
+			scan.ends.note(kind, scan.consumed-int64(term))
+			return append(line, content...), nil
 
-		line = append(line, l...)
-		appended += len(l)
+		case endCR:
+			content := b[:len(b)-1]
+			atStart := len(content) == 0 && scan.consumed == scan.lineStart
+			nb := byte(next)
+			ending := atStart || next == eofNext || nb == '\r' || isSpace(nb) || validHeaderKeyByte(nb)
+			if !ending {
+				// Content, as a '\r' inside a line always was.
+				if terr := scan.take(b, 0, false); terr != nil {
+					return line, terr
+				}
+				line = append(line, b...)
+				continue
+			}
+			if terr := scan.take(content, 1, true); terr != nil {
+				return line, terr
+			}
+			cr := scan.consumed - 1
+			if !atStart && next != eofNext && validHeaderKeyByte(nb) {
+				// Whether this '\r' ended the line is settled by the next
+				// candidate; it is recorded then, if it did.
+				scan.crKey = crLine{
+					ok:         true,
+					lineStart:  scan.lineStart,
+					lineBytes:  scan.lineBytes,
+					fieldStart: scan.fieldStart,
+					fieldBytes: scan.fieldBytes,
+					cr:         cr,
+				}
+			} else {
+				scan.ends.note(LineEndingCR, cr)
+			}
+			return append(line, content...), nil
 
-		// err is nil, so l ends with the '\n' that terminated this line.
-		drop := 1
-		if appended > 1 && line[len(line)-2] == '\r' {
-			drop = 2
+		case endInput:
+			if err == io.EOF {
+				if len(b) == 0 && scan.consumed == scan.lineStart {
+					// Nothing of a line: the input ended between lines.
+					return line, err
+				}
+				// The input ended without a line ending. The last line is
+				// reported with the bytes it did read, and the end is left for
+				// the next read, which the scanner answers from its recorded
+				// io.EOF.
+				if terr := scan.take(b, 0, true); terr != nil {
+					return line, terr
+				}
+				scan.ends.unterminated = true
+				scan.ends.untermStart, scan.ends.untermEnd = scan.lineStart, scan.consumed
+				return append(line, b...), nil
+			}
+			// Cut by a read failure, possibly after earlier buffers of the
+			// same long line: none of it is kept.
+			if terr := scan.take(b, 0, false); terr != nil {
+				return line, terr
+			}
+			if scan.probe != probeOff || scan.lineRejoined {
+				// The '\r' before this line was content, or was never settled:
+				// the line it ended is cut with this one.
+				scan.dropPrev = true
+			}
+			scan.probe = probeOff
+			return line[:given], err
 		}
-		return line[:len(line)-drop], nil
 	}
 }
 
@@ -1147,9 +1353,11 @@ func hasContinuationLine(r *bufio.Reader, scan *headerScan) bool {
 // budget must be refused while it is read and not once it is whole.
 //
 // At most two bytes decide it, and neither is consumed. A '\n' ends an empty
-// line on its own; a '\r' ends one when a '\n' follows it. Anything else is the
-// first byte of a field's first line, including a '\r' that the input never
-// follows with anything, which is content and is read as content.
+// line on its own, and so does a '\r': with the '\n' after it as "\r\n", and
+// otherwise — whatever byte follows it, or io.EOF — as a bare '\r', since no
+// field can begin with one. Anything else is the first byte of a field's first
+// line. A '\r' whose next byte could not be looked at is not known to end
+// anything, so it begins a candidate, whose read then meets the failure.
 //
 // Nothing is read ahead here that the parser was not about to read anyway:
 // these are the first bytes of the line it goes on to read either way, and Peek
@@ -1170,14 +1378,23 @@ func atBlockEnd(r *bufio.Reader, scan *headerScan) (end, candidate bool) {
 		return true, false
 	case '\r':
 		b, err := scan.peek(r, 2)
-		if err == nil && len(b) == 2 && b[1] == '\n' {
+		if len(b) == 2 || (err == io.EOF && len(b) == 1) {
 			return true, false
 		}
 	}
 	return false, true
 }
 
-func readContinuedLineSlice(r *bufio.Reader, scan *headerScan) ([]byte, error) {
+// readContinuedLineSlice reads the next logical field of the block — its first
+// physical line and every continuation line — or the empty line that ends the
+// block, and returns it with every physical line ended by "\r\n", together with
+// where its last physical line begins in what it returns.
+//
+// A candidate that follows a line ended by a '\r' that may be content is probed
+// while its first line is read (see take); when that '\r' turns out to be
+// content, scan.rejoined reports that what is returned continues the previous
+// field rather than beginning one.
+func readContinuedLineSlice(r *bufio.Reader, scan *headerScan) ([]byte, int, error) {
 	// The empty line that ends the block is a line of the block but not a
 	// logical field, so it is read outside any field's budget. Settling that
 	// here — from bytes that are looked at and not consumed — is what keeps a
@@ -1185,15 +1402,21 @@ func readContinuedLineSlice(r *bufio.Reader, scan *headerScan) ([]byte, error) {
 	end, candidate := atBlockEnd(r, scan)
 	if end {
 		scan.beginBlockEnd()
-		return readLineSlice(r, nil, scan)
+		line, err := readLineSlice(r, nil, scan)
+		return line, 0, err
 	}
 
 	// A candidate that the shared field budget has no room for is refused here,
 	// from the byte that proves it exists, rather than after it has been read
 	// whole: no per-block budget may be in force to bound how long it is.
+	//
+	// A candidate that a '\r' may still prove to be content is refused here
+	// like any other, so an exhausted shared field budget also refuses such a
+	// '\r' and what follows it, even where they would have continued the
+	// previous field: a budget is never spent later than it would have been.
 	if candidate {
 		if err := scan.preflightField(); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 
@@ -1201,24 +1424,34 @@ func readContinuedLineSlice(r *bufio.Reader, scan *headerScan) ([]byte, error) {
 	// covers this line and every continuation line read below.
 	scan.beginField()
 
+	// The line before ended with a '\r' that only this candidate can settle,
+	// so its first line is probed while it is read.
+	scan.probePrev, scan.crKey = scan.crKey, crLine{}
+	if scan.probePrev.ok {
+		scan.probe = probeName
+	}
+
 	// Read the first line. We preallocate slice that it enough
 	// for most fields.
 	line, err := readLineSlice(r, make([]byte, 0, 256), scan)
+	scan.probe = probeOff
 	if err == io.EOF && len(line) == 0 {
 		// Header without a body
-		return nil, nil
+		return nil, 0, nil
 	} else if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	if len(line) == 0 { // blank line - no continuation
-		return line, nil
+		return line, 0, nil
 	}
 
 	line = append(line, '\r', '\n')
+	last := 0
 
 	// Read continuation lines.
 	for hasContinuationLine(r, scan) {
+		start := len(line)
 		line, err = readLineSlice(r, line, scan)
 		if err != nil {
 			if isBudgetExhausted(err) {
@@ -1227,7 +1460,7 @@ func readContinuedLineSlice(r *bufio.Reader, scan *headerScan) ([]byte, error) {
 				// is not handed back half read. A read failure is not such a
 				// stop, however it presents itself, and keeps the long-standing
 				// behavior below.
-				return nil, err
+				return nil, 0, err
 			}
 			// A read failure cut this continuation line. The field is kept
 			// with the lines read whole before it — line holds exactly those —
@@ -1237,9 +1470,10 @@ func readContinuedLineSlice(r *bufio.Reader, scan *headerScan) ([]byte, error) {
 		}
 
 		line = append(line, '\r', '\n')
+		last = start
 	}
 
-	return line, nil
+	return line, last, nil
 }
 
 func writeContinued(b *strings.Builder, l []byte) {
@@ -1306,12 +1540,56 @@ func trimAroundNewlines(v []byte) string {
 // empty line, so a block io.EOF ended is written with one (ROB-010-001).
 //
 // A source may fail with bufio.ErrBufferFull itself, the value ReadSlice also
-// uses for a line longer than r's buffer. It is the source's failure whenever
-// fewer bytes than the whole buffer came with it. A source that fails so just
-// as it fills the buffer exactly cannot be told apart through bufio: that
-// buffer is read as part of a long line, and the read after it decides — a
-// source that keeps failing is then reported as above, and one that sends more
-// is read on.
+// uses for a line longer than r's buffer. The scanner never asks r for more
+// than its buffer holds, so that value is always the source's failure and is
+// reported as above, never read on.
+//
+// # Line endings
+//
+// A physical line ends at "\r\n" — one line ending even when its two bytes
+// arrive in different reads — or at a bare '\n', or at a bare '\r' (one not
+// followed by '\n'). Which one ended each line, and where, is reported by
+// Header.LineEndings; the raw bytes of every field end each of its physical
+// lines with "\r\n" whatever ended it in the input. A complete field ended by
+// "\r\n" keeps its bytes exactly; one ended otherwise is normalized and is not
+// a byte-exact copy of its input.
+//
+// A bare '\r' ends a line when it begins the line (the empty line that ends
+// the block), when io.EOF follows it (so "A: 1\r" at the end of the input is a
+// complete field), and when it is followed by white space (the next line
+// continues the field) or by another '\r' (so "A: 1\r\r\n" is field A ended by
+// a '\r', then the empty line "\r\n"). Any other bare '\r' is content of the
+// line, as it always was — with one case decided by what follows: a '\r'
+// followed by a byte that can begin a field name ends the line only if the
+// next line begins a field, 1*name-byte *WSP ":". Otherwise that '\r' and the
+// next line are content of the line it was in, so "Subject: a\rb" stays one
+// field whose value is "a\rb", exactly as before. That is how a header whose
+// lines all end with '\r' is read as fields, while a stray '\r' in a value
+// keeps its long-standing meaning. A stray '\r' before text that looks like a
+// field, "Subject: a\rTo: b", is a line ending: no rule can tell such a line
+// from a field of a header whose lines end with '\r'.
+//
+// One byte after a '\r' is looked at before it is consumed, and only that
+// byte: so a header whose last line ending is a bare '\r' is still being read
+// until the byte after it, or io.EOF, arrives, and a failure there is reported
+// as a failure of the block. A '\r' that a failure other than io.EOF follows is
+// a byte of the line the failure cut, and so is a '\r' the next line was still
+// deciding when the failure came.
+//
+// Budgets count the input's own bytes. A line ending is not content of its
+// line; it is counted as bytes of its field and of the block. A '\r' that is
+// content is content of its line, and a line it joins to the next is one
+// physical line, counted whole: when the next line turns out to continue it,
+// the line's and the field's running totals become the aggregate of both — the
+// line's bytes, the '\r' as content, and the next line's — which is rechecked
+// at once, refusing where the line or the field began if it exceeds
+// MaxLineBytes or MaxFieldBytes, and goes on being charged as one. No byte is
+// charged twice: the block and shared budgets saw each byte once, when it was
+// read, and the '\r' only moves from line ending to content. A next line that is still
+// deciding is charged as a line of its own until it decides, so it never
+// reads more than one such line past a budget. Field counts are never
+// refunded: an exhausted shared field budget refuses the next line before any
+// of it is read, even one that would have continued the previous field.
 //
 // bufio.Reader hands out a read error once. After ReadHeader has returned one,
 // r no longer holds it, and reading r again reads its source again; a caller
@@ -1366,7 +1644,15 @@ func ReadHeaderLimit(r *bufio.Reader, maxBytes int64) (Header, error) {
 // no header at all rather than the fields that happened to fit; the budgets are
 // checked while the block is read rather than after it has been built, so no
 // more than one of r's buffers past a budget is ever read and nothing beyond a
-// budget is retained; and a block that overran leaves r where the failure
+// budget is retained — with one qualification for a line after a bare '\r'
+// that is still deciding whether it continues the field before it (see
+// ReadHeader): while it decides, the previous line and field and that one
+// candidate line are each held to MaxLineBytes and MaxFieldBytes on their own,
+// and their joined total is checked once the candidate proves to continue the
+// field, so up to one such candidate (itself bounded by those budgets and one
+// buffer) may be read past the joined line's or field's budget before that
+// refusal; MaxBytes and the shared budget count every byte as it is read and
+// are never exceeded by more than one buffer; and a block that overran leaves r where the failure
 // happened, unsynchronized, not to be read on as though it could be.
 //
 // What each budget counts is stated on HeaderLimits, and which one a refusal
@@ -1436,8 +1722,30 @@ func readHeader(r *bufio.Reader, scan *headerScan) (Header, error) {
 		return headerResult(fs, fmt.Errorf("message: malformed MIME header initial line: %v", string(line)))
 	}
 
+	// The last field read is held as pending rather than built at once, because
+	// the next candidate may still continue it (a '\r' that turns out to be
+	// content; see take). It is built exactly once, when what follows settles
+	// that it is complete, so a run of such continuations costs one pass over
+	// its bytes. skipping reports that the last candidate was skipped for an
+	// empty name, whose continuations are skipped with it.
+	var pend pendingField
+	skipping := false
+	finish := func() {
+		if pend.kv != nil {
+			fs = append(fs, pend.field())
+			pend = pendingField{}
+		}
+	}
+
 	for {
-		kv, err := readContinuedLineSlice(r, scan)
+		kv, last, err := readContinuedLineSlice(r, scan)
+		rejoined, dropPrev := scan.rejoined, scan.dropPrev
+		scan.rejoined, scan.dropPrev = false, false
+		if dropPrev && !skipping {
+			// A failure cut the line a '\r' that was content, or was never
+			// settled, ended: that line is cut with the line after it.
+			pend.dropLastLine()
+		}
 		if len(kv) == 0 {
 			if err == nil && scan.fail != nil && scan.fail != io.EOF {
 				// A read of this block failed, and nothing since has reported
@@ -1446,7 +1754,23 @@ func readHeader(r *bufio.Reader, scan *headerScan) (Header, error) {
 				// block was never observed and belongs to what follows.
 				err = scan.fail
 			}
-			return headerResult(fs, err)
+			finish()
+			h, err := headerResult(fs, err)
+			if err == nil {
+				ends := scan.ends
+				ends.known = true
+				h.ends = &ends
+			}
+			return h, err
+		}
+
+		if rejoined {
+			// Not a field: the rest of the field before it, read whole. It
+			// was never charged to the field count, and is not now.
+			if !skipping {
+				pend.join(kv, last)
+			}
+			continue
 		}
 
 		// One logical field candidate has been read, so it is charged to the
@@ -1471,6 +1795,7 @@ func readHeader(r *bufio.Reader, scan *headerScan) (Header, error) {
 			// the field separator; accept it as a fallback.
 			i = bytes.IndexByte(kv, ';')
 			if i < 0 {
+				finish()
 				return headerResult(fs, fmt.Errorf("message: malformed MIME header line: %v", string(kv)))
 			}
 		}
@@ -1481,29 +1806,77 @@ func readHeader(r *bufio.Reader, scan *headerScan) (Header, error) {
 		// See RFC 5322 Section 2.2
 		for _, c := range keyBytes {
 			if !validHeaderKeyByte(c) {
+				finish()
 				return headerResult(fs, fmt.Errorf("message: malformed MIME header key: %v", string(keyBytes)))
 			}
 		}
 
 		key := textproto.CanonicalMIMEHeaderKey(string(keyBytes))
 
+		// The field before this one is complete now.
+		finish()
+
 		// As per RFC 7230 field-name is a token, tokens consist of one or more
 		// chars. We could return a an error here, but better to be liberal in
 		// what we accept, so if we get an empty key, skip it.
 		if key == "" {
+			skipping = true
 			continue
 		}
+		skipping = false
 
-		i++ // skip colon or semicolon
-		v := kv[i:]
-
-		value := trimAroundNewlines(v)
-		fs = append(fs, newHeaderField(key, value, kv))
+		pend = pendingField{key: key, kv: kv, valueStart: i + 1, lastLine: last}
 
 		if err != nil {
+			finish()
 			return headerResult(fs, err)
 		}
 	}
+}
+
+// A pendingField is a field read whole but not yet built, because the next
+// candidate may still continue it.
+type pendingField struct {
+	key string
+
+	// kv is the raw field so far, every physical line ended by "\r\n";
+	// valueStart is where its value begins, after the colon or semicolon, and
+	// lastLine where its last physical line begins.
+	kv         []byte
+	valueStart int
+	lastLine   int
+}
+
+// join appends cand, a candidate that a '\r' made the continuation of this
+// field's last physical line, to the field: the "\r\n" that line was given is
+// replaced by the '\r' that was content, followed by cand as it was read. cand
+// is copied once; nothing the field already holds is copied again but by the
+// growth of its buffer.
+func (p *pendingField) join(cand []byte, candLast int) {
+	if p.kv == nil {
+		return
+	}
+	base := len(p.kv) - len("\r\n")
+	p.kv = append(p.kv[:base], '\r')
+	p.kv = append(p.kv, cand...)
+	if candLast > 0 {
+		p.lastLine = base + 1 + candLast
+	}
+}
+
+// dropLastLine removes the field's last physical line, which a failure cut;
+// a field left with no line is no field.
+func (p *pendingField) dropLastLine() {
+	if p.lastLine == 0 {
+		*p = pendingField{}
+		return
+	}
+	p.kv = p.kv[:p.lastLine]
+}
+
+// field builds the field, once.
+func (p *pendingField) field() *headerField {
+	return newHeaderField(p.key, trimAroundNewlines(p.kv[p.valueStart:]), p.kv)
 }
 
 func foldLine(v string, maxlen int) (line, next string, ok bool) {

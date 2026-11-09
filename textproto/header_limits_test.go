@@ -226,8 +226,18 @@ func TestReadHeaderLimits_lineBytesAcrossBufferBoundary(t *testing.T) {
 			line: "A: " + strings.Repeat("x", bufSize-len("A: ")-1) + "\rmore",
 		},
 		{
+			// A '\r' followed by ':' is content (ROB-010-002), so every one of
+			// these is charged to the line, across every buffer edge. A run of
+			// '\r' alone would end the line at its first '\r' and the block at
+			// the second.
 			name: "many carriage returns",
-			line: "A: " + strings.Repeat("\r", bufSize),
+			line: "A: " + strings.Repeat("\r:", bufSize/2),
+		},
+		{
+			// A '\r' before a byte that cannot begin a field name, right at the
+			// buffer boundary, is content.
+			name: "a bare cr before a non-name byte at the boundary is content",
+			line: "A: " + strings.Repeat("x", bufSize-len("A: ")-1) + "\r\x01more",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

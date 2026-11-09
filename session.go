@@ -159,6 +159,11 @@ type ParseSession struct {
 	headerTotal     *textproto.HeaderBudget
 	headerTotalInit bool
 
+	// lineNotes is the set of header line-ending notes this parse has already
+	// claimed, each recorded at most once per parse; see line_endings.go.
+	// Guarded by mu.
+	lineNotes lineNote
+
 	// cancelCtx and cancelDone are the context of a parse started by
 	// ParseContext and the channel its Done method returned, or nil for a parse
 	// that cannot be cancelled. They are written once, by setContext, before the

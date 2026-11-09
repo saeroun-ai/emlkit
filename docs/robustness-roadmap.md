@@ -356,6 +356,8 @@ specific codes, but must not reuse an existing code for another meaning.
 - `multipart.close_truncated`
 - `multipart.invalid_delimiter_suffix`
 - `multipart.mixed_line_endings`
+- `multipart.bare_cr` (added by ROB-010-002)
+- `multipart.bare_lf` (added by ROB-010-002)
 - `multipart.empty`
 - `multipart.empty_part`
 - `multipart.part_header_missing`
@@ -1286,7 +1288,7 @@ empty permission-denial arrays.
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
 | ROB-010-001 | Done | Treat empty input and header-only input deterministically: an empty input, an empty line alone, and complete CRLF fields ended by `io.EOF` or by the empty line are framed identically under every profile and compatibility as a usable entity with exactly those fields and an empty body or the bytes after the empty line, the framing adding no error or diagnostic of its own while the fields' MIME metadata is interpreted as usual; documented and pinned, no parser change. See "ROB-010-001 — empty and header-only input" below. | All profiles and round-trip tests; see below. |
-| ROB-010-002 | Planned | Handle CRLF, bare LF, bare CR, mixed endings, and a missing final newline. | Chunk boundary matrix. |
+| ROB-010-002 | Done | Handle CRLF, bare LF, bare CR, mixed endings, and a missing final newline in headers and multipart delimiters, preserving false-candidate body bytes and source errors within the budgets. Parse records original-byte locations; Strict refuses the affected entity or iterator locally. See "ROB-010-002 — line endings" below. | Independent chunk, source-error, budget, cancellation and profile matrices; bounded native fuzzing; full unit/race/386/build checks. |
 | ROB-010-003 | Planned | Detect and preserve BOMs without letting them corrupt a field name. | UTF-8/16/32 BOM fixtures. |
 | ROB-010-004 | Planned | Optionally recognize a leading mbox envelope line and preserve it separately. | Valid/invalid/mid-header `From ` fixtures. |
 | ROB-010-005 | Planned | Detect concatenated messages or trailing unassigned bytes in forensic mode. | Two-message and trailing-junk fixtures. |
@@ -1542,6 +1544,209 @@ preserved in `/tmp/emlkit-empty-final-failure.out`, comparison evidence in
 `/tmp/emlkit-empty-allocation-investigation.json` and `.out`, and stabilization
 is tracked separately in [issue #59](https://github.com/saeroun-ai/emlkit/issues/59).
 The passing final run does not claim that intermittent failure has been fixed.
+
+#### ROB-010-002 — line endings (Done)
+
+Status: implemented, independently reviewed and verified by Codex for
+[issue #19](https://github.com/saeroun-ai/emlkit/issues/19). This covers header
+blocks, multipart delimiter framing, and their Parse diagnostics and Strict
+policy. BOM handling and unassigned/trailing input remain separate open items;
+this does not complete issue #19.
+
+**Rule, every entry point.** A header line ends at `"\r\n"` (one ending even
+across reads), at a bare `'\n'`, or at a bare `'\r'`. A bare `'\r'` ends the
+line when it begins it (the empty line ending the block), comes right before
+`io.EOF`, or is followed by white space (a fold) or another `'\r'` (so
+`"A: 1\r\r\n"` is field A, then the empty line `"\r\n"` — never one three-byte
+ending). Followed by a byte that can begin a field name, it ends the line only
+if the next line begins `1*name-byte *WSP ":"`; otherwise it and that line are
+content of the line it was in, so a stray `'\r'` in a value (`"Subject: a\rb"`)
+keeps its long-standing value. Any other bare `'\r'` is content. This is the
+same for `Read`, `ReadWithOptions`, `textproto.ReadHeader(Limits)` and part
+headers; only `Parse` reports and refuses.
+
+**Look-ahead and input errors.** Exactly one byte after a `'\r'` is looked at
+before it is consumed (`Peek` of at most the buffer, so a source's own
+`bufio.ErrBufferFull` is always its failure and never read on). A `'\r'` whose
+next byte a failure other than `io.EOF` prevented reading, or that the next line
+was still settling, is a byte of the line the failure cut: it is charged as
+content and dropped with that line, and the failure is returned as itself
+(`ROB-010-006`). A wrapped `io.EOF` is such a failure. A header whose last
+ending is a bare `'\r'` is still being read until one more byte or `io.EOF`:
+`MaxInputBytes` of exactly its length with a body after it leaves no entity,
+and legacy `ReadOptions.MaxHeaderBytes` of exactly its length refuses it.
+
+**Budgets.** Charged on the input's own bytes before they are kept; a line
+ending is not line content but is field and block bytes; nothing is refunded.
+A next line that a `'\r'` is still settling is charged as a line and field of
+its own until it settles; if it continues the field, the line (previous line,
+the `'\r'` as content, and it) and the field are charged whole at once and
+refused where they began if that exceeds `MaxLineBytes` or `MaxFieldBytes`. Such
+a line is not charged to any field count; an exhausted shared count refuses it
+at its first byte, like any candidate. The joined field is built once.
+
+**Report.** `textproto.Header.LineEndings` (`LineEnding`, `LineEndings`) reports
+per kind the count and first offset, and an unterminated last line's range,
+relative to the block. Known only for a header read whole and its `Copy`;
+`Add`, `AddRaw`, `Set`, `Del` and `HeaderFields.Del` make it unknown; built
+headers have none; invalid kinds report nothing; counts saturate.
+
+**Parse policy** (`line_endings.go`): `header.bare_lf` Info, `header.bare_cr`
+Recovered, `header.mixed_line_endings` Info (Recovered with a CR) once per
+parse; `header.truncated_line` Incomplete per block; ordered by offset; locked
+claims, no lock held while recording. `ProfileStrict` keeps accepting LF and
+CRLF+LF, and refuses an entity with a bare-CR ending or no final ending through
+the existing Content-Type refusal: entity plus local `FatalError` (recorded
+`SeverityInvalidMetadata` per refused entity regardless of the once-per-parse
+notes, carried even when `MaxDiagnosticCount` omits it), Content-Type not
+interpreted, raw leaf body, siblings continue, no session stop. Sink stops and
+cancellation keep their precedence. Forensic records what Tolerant records; no
+replay is claimed: LF, CR and missing endings are stored as CRLF, and only
+complete CRLF fields stay byte-exact.
+
+**Multipart framing (textproto).** The multipart
+reader frames delimiter lines on the same endings with no first-line mode: a
+delimiter is the line ending before it (`"\r\n"` matched whole, else a bare
+`'\n'` or `'\r'`; none at the start of a body), `"--"`, the boundary, `"--"`
+for the closing one, spaces and tabs, and its own ending — or the end of input
+for a closing one. Candidates that do not fit are body, every byte (the ending
+before them too); `"--B--x"` is such a candidate. Because the line ending after
+a nested multipart's inner closing delimiter is the outer delimiter's, the
+inner body ends only where the outer part ends; under `ParseContext` a framed
+container's own framing therefore reads its body behind no cancellation gate of
+its own (`Entity.framing`), reaching the input only through the input's gate,
+so a cancellation that arrives while the outer delimiter is decided cuts the
+inner body exactly where an ordinary failure at the same point would. Every
+caller-visible `Body`, the raw `WriteTo` body and `NextPart` stay gated. After
+a cancellation that framing reads nothing new, but may still work, inside a read
+a caller already started, through what every enclosing container's reader
+holds: its 4 KiB buffer, a held or released candidate up to `MaxLineBytes`
+plus one buffer (one buffer with that budget disabled), and its framing-line
+accumulator to the same bound, for up to `MaxMIMEDepth` containers — not a
+4 KiB-per-container bound. A `Body` the caller replaced is not framed through
+`Entity.framing`: `MultipartReader` frames it through the parse's cancellation
+gate (the field itself stays the caller's ungated reader, with no input budget
+and no origin), so neither it nor the framing of any multipart inside it reads
+the caller's reader after a cancellation. A candidate whose white space runs past the buffer is held
+outside it, bounded by `MaxLineBytes` on the line content (endings excluded);
+past it the body ends before the candidate and `NextPart` returns the reader's
+own `*LineLimitError`; with no budget a delimiter line must fit one buffer,
+its own ending included, as before, else the reader's own error wrapping
+`bufio.ErrBufferFull` (at the `Parse` layer an ordinary framing error, not a
+diagnosed budget: no new fatal API for it). The candidate's valid prefix —
+`"--"`, the boundary, `"--"` and white space, up to the byte that decides it —
+is charged before that byte is acted on, whether it then fails, waits for more,
+or the input failed, so the decision does not depend on how the bytes arrive: a
+prefix of exactly the budget followed by an invalid byte is body, one byte more
+is refused at the line's `"--"` even when the invalid byte is already buffered,
+and a prefix past the budget is refused ahead of an input failure after it. The
+invalid byte is not counted, and opaque body lines and candidates that stay
+within the budget are never line-limited (found by
+`FuzzMultipartReader_lineEndings`; the input is kept in
+`textproto/testdata/fuzz` with a literal regression beside it). A failure other than `io.EOF`
+while a candidate is undecided makes it body, followed by the failure;
+`io.EOF` decides it. An empty-header part needs a whole delimiter line.
+Preamble lines keep their line budget and now end at a bare `'\r'` too.
+`MultipartReader.DelimiterEndings` reports the endings of proven delimiters;
+the near-miss diagnostics and suffix policies of `ROB-060-007` are not done
+here.
+
+**Multipart policy (Parse).** Registry
+adds `multipart.bare_cr` and `multipart.bare_lf`; `multipart.mixed_line_endings`
+is used only for an actual mix. The report is cumulative and is updated by
+`Part.Read` as soon as a body reaches its delimiter, which can be before
+`NextPart` is called, so each root iterator keeps the endings it has already
+looked at and inspects what was added after every low-level `NextPart`
+(including the `io.EOF` of a close), unless the session has stopped:
+`multipart.bare_lf` Info, `multipart.bare_cr` Recovered, mixed Info or
+Recovered with a CR, once per parse each, at the first such ending's input
+offset (container body offset added) and the container's path; none for a
+caller-replaced body. `ProfileStrict` accepts LF and LF+CRLF; on a framed part
+or `io.EOF` with a newly observed bare CR it records `multipart.bare_cr` of
+`SeverityInvalidMetadata` for that iterator (whatever the once-per-parse
+notes did) and returns a sticky iterator-scoped `FatalError` carrying a
+`SeverityFatal` copy, even past `MaxDiagnosticCount`; the part that delimiter
+introduced is not returned, earlier parts stay valid, an enclosing multipart
+continues, `ParseStop` stays nil. A session stop (sink, budget, cancellation,
+or the shared header total refused on that call, which is not inspected)
+outranks it. A low-level failure of the call that met the bare CR — an input
+error, a malformed part header — is returned by that call as itself, with the
+refusal recorded there and kept as the iterator's sticky failure, so every later
+call returns the refusal instead of the part the low-level reader would resume
+to (Tolerant and Forensic resume). An own part-header or framing-line budget
+refusal on that call is returned and replaces it as the sticky failure; the
+`multipart.bare_cr` diagnostic is still recorded before it. Body reads alone
+never record: the diagnostic or refusal is observed at the next `NextPart`.
+`mail.Reader.NextPart` returns the refusal with no part, again on every later
+call, and so reaches no later part of that multipart or of one enclosing it.
+
+**Not done here:** CR-aware transfer-encoding line counting and
+quoted-printable CR soft breaks (`ROB-070`), raw line-ending replay
+(`ROB-020-007`, #41), BOMs (`ROB-010-003`), `ROB-060-007`'s near-miss
+diagnostics.
+
+**Tests added or updated.** `textproto/line_endings_test.go`;
+`framing_lineend_test.go`; expectations updated, never filtered, in
+`textproto/header_budget_test.go`, `textproto/header_limits_test.go`,
+`limit_header_total_test.go`, `limit_header_fields_test.go`,
+`limit_input_test.go`, `limit_part_count_test.go`, `limit_mime_depth_test.go` and
+`limit_line_bytes_test.go` (LF variants now assert the root's one
+`header.bare_lf` note; a leading `"\r"` is now the empty line).
+
+**Phase 1 QA (Codex, bounded, one job at a time).** Unit, race, GOARCH=386,
+build and filtered vet passed in all six packages, with formatting and diff
+checks clean. Independent probes passed 6,962 framing/profile/compatibility/chunk
+cases (29,290 assertions), 130 Strict-sibling/mail/serialization assertions,
+1,139 input-error/`bufio.ErrBufferFull`/wrapped-`io.EOF`/read-timing/budget/
+buffer-edge cases (3,234 assertions), and the earlier empty-input QA (24,399
+assertions, 265 exceptions); a finite one-byte-source scan-cost probe from 2 KiB to
+64 KiB showed approximately linear scaling. Evidence: `/tmp/emlkit-lineend-header-verification.json`,
+`/tmp/emlkit-lineend-header-platform.json`,
+`/tmp/emlkit-lineend-error-budget-qa.out`,
+`/tmp/emlkit-lineend-scan-cost-before.out`. Those earlier runs covered the header phase. The final combined checks below
+include all later code and regression additions.
+
+**Final Codex review and verification (2026-11-10, Linux amd64, Go 1.26.10).**
+The full six-package unit, race and GOARCH=386 suites, build, formatting,
+whitespace and vet excluding the documented baseline `composites` and
+`stdmethods` categories passed. Plain vet still reports the same 13 unkeyed
+composite-literal warnings and one existing WriteTo-signature warning
+(`/tmp/emlkit-lineend-final-plain-vet.out`); it is not a clean plain-vet run.
+The fresh independent matrices passed: 144
+candidate-prefix budget cases; 432 Strict retry/mail/profile/cap/sink cases
+(3,536 assertions); 1,299 multipart-policy cases (7,226 assertions); 531
+replacement-body cancellation cases; 5,879 multipart-byte/framing cases
+(87,623 assertions); 840 long-boundary/buffer-edge cases; 514 multipart
+source-error/budget cases (3,410 assertions); 6,962 header cases (29,290
+assertions); 1,139 header-error/budget cases (3,234 assertions); and 130
+Strict-header/serialization assertions. The prior empty-input matrix passed
+24,399 assertions and its exception probe passed 265 checks. Evidence is in
+`/tmp/emlkit-lineend-final-verification.json` and
+`/tmp/emlkit-lineend-final-platform.json`, with their `.out` logs.
+
+Both finite-input fuzz targets passed fresh 30-second runs with two workers:
+`FuzzMultipartReader_lineEndings` executed 698,156 inputs and
+`FuzzReadHeader_lineEndings` 927,306. The earlier multipart fuzz failure is
+preserved in `textproto/testdata/fuzz/FuzzMultipartReader_lineEndings/8c17b33a75df9e9d`
+and a literal regression. The correction charges the valid candidate prefix
+consistently before a later invalid byte, including one-buffer legacy limits;
+opaque body lines remain outside framing-line limits. Review also corrected a
+Strict refusal lost after a malformed-header error, the cancellation gate for
+caller-replaced container bodies, and cancellation at nested closing
+delimiters. A premature-close shortcut was rejected because `--B--x` lost body
+bytes; the final full delimiter grammar passes the independent byte oracle.
+Existing budget tests now require diagnostic presence and exact fixture-derived
+offsets instead of conditionally accepting whatever was recorded.
+
+All execution used one bounded service at a time (RAM 1,536 MiB, no swap,
+two-core CPU quota, 128 tasks and a deadline). Final matrix/fuzz/platform
+services peaked at 451.8 MiB / 470 MiB / about 1.2 GiB, respectively, with
+successful exits. Claude made code/test changes and ran no Go verification;
+Codex inspected the changes and ran the checks. The final correction result
+reported no permission denials. An early header implementation hit its runtime
+deadline; edits were retained and independently checked before continuation.
+No Windows or physical-device validation, raw non-CRLF replay, or differential
+parity with another MIME engine is claimed.
 
 ### ROB-020 — Raw header framing and preservation
 

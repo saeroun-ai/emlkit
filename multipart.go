@@ -48,6 +48,10 @@ type multipartReader struct {
 	// again is told the same thing rather than handed a second interpretation
 	// of an input the reader can no longer place itself in.
 	fatal error
+
+	// ends is the delimiter line endings of r already looked at; see
+	// delimiterEndings in line_endings.go.
+	ends textproto.LineEndings
 }
 
 // NextPart implements MultipartReader.
@@ -69,6 +73,25 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 	}
 
 	p, err := r.r.NextPart()
+
+	// The delimiter lines the reader proved since this iterator last looked —
+	// while a part's Body was read, or by this call — are looked at after
+	// every call, the closing delimiter's included, unless the session has
+	// stopped or this call ran out of the parse's shared header budget, which
+	// stops it below. A call that framed a part or ended with io.EOF is refused
+	// for them at once. One that failed otherwise reports that failure as it
+	// always did; a Strict refusal they owe is kept as this iterator's sticky
+	// failure, which the next call returns, unless the failure is a budget
+	// refusal of this iterator's own, which then takes its place. A stop of
+	// the session a diagnostic here caused is returned first either way.
+	framed := err == nil || err == io.EOF
+	_, totalRefused := r.parent.session.headerTotalRefusal(err)
+	if (framed || r.parent.fatalErr() == nil) && !totalRefused {
+		if lerr := r.delimiterEndings(framed); lerr != nil {
+			return nil, lerr
+		}
+	}
+
 	if err != nil {
 		// The input budget is counted at the source this iterator reads, so it
 		// can end the whole parse in the middle of this call — while a part the
