@@ -104,12 +104,25 @@ import (
 // the body's input returned it, directly for the root and joined first by the
 // multipart framing of each enclosing part. The guard calls no Is, As or
 // Unwrap of an error a caller's source returned and never replaces one, so it
-// adds no call into such an error's methods. A decoder may still report a
-// source error in its own words, as it always has — quoted-printable rewords an
-// ordinary read error — and only the parser's own input-budget failure is
-// restored after the decoders end. A stop published for another reason is not
-// looked up, and nothing is claimed about what an arbitrary decoder does with
-// the errors it is given.
+// adds no call into such an error's methods. A stop published for another
+// reason is not looked up.
+//
+// An ordinary failure of the source is not the parser's to restore as a stop,
+// but it is not the decoders' to lose either (ROB-010-006). The first error the
+// body's input returned that is neither io.EOF nor one of the parse's own
+// stops is kept by the same provenance, as the identical value — the source's
+// own at the root, the framing's join under a part — and once the decoders end
+// it is reported: as itself when they passed it on, or ended with io.EOF as
+// though the input had been complete (a CharsetReader that masks it); and
+// together with their own error otherwise, in one errors.Join with the input's
+// failure first, so that quoted-printable's wording of a cut soft break, or a
+// corruption base64 found in bytes before the failure, is kept beside it rather
+// than either hiding the other. The two are compared by value alone, a
+// comparison that would panic counting as different. What the body delivered
+// before is what the decoders made of the bytes they were given; nothing
+// claims every wire byte before the failure was decoded. A failure still
+// buffered ahead of what the decoders asked for has not reached the body and
+// is not pulled out early.
 //
 // The built-in decoders end once their input fails. A CharsetReader a caller
 // installed is only bounded from outside: what it reads is held to the encoded
@@ -153,11 +166,47 @@ const (
 // provenance (see rawBody.note), so that the guard can report it whatever a
 // decoder made of it.
 //
+// ioErr is the first other error the body's input returned, other than
+// io.EOF and the session's published stop: an ordinary failure of the caller's
+// source as it reached this body — the identical value at the root, the
+// framing's join under a part — kept by provenance alone so that the guard can
+// report it however a decoder ended (ROB-010-006; see bodyGuard.end).
+//
 // It is read and written by the one goroutine reading the body, as the stream
 // is, and holds no lock.
 type bodySlot struct {
-	err error
-	src error
+	err   error
+	src   error
+	ioErr error
+}
+
+// inputEnd is what a body whose input failed with ioErr reports when its
+// decoders ended with decErr: ioErr itself when the decoders passed it on or
+// ended as though the input had ended cleanly, and otherwise both, the input's
+// failure first, because the decoders' report is then a finding of its own —
+// a corruption, or their wording of a cut — that the failure does not make
+// untrue. Nothing of either error is asked: the two are compared by sameError
+// only. A decoder that wrapped ioErr in an error of its own is not recognized
+// as passing it on, so the join then holds ioErr twice, once inside the
+// decoder's error.
+func (s *bodySlot) inputEnd(decErr error) error {
+	if decErr == io.EOF || sameError(decErr, s.ioErr) {
+		return s.ioErr
+	}
+	return errors.Join(s.ioErr, decErr)
+}
+
+// sameError reports whether a and b are the same error value. It calls no
+// method of either. Comparing two interface values of one dynamic type that is
+// not comparable panics; that is recovered and read as different, as
+// sameReader does.
+func sameError(a, b error) (same bool) {
+	defer func() {
+		if recover() != nil {
+			same = false
+		}
+	}()
+	return a == b
 }
 
 // refuseBody fills slot with the failure d describes, unless it is already
@@ -345,25 +394,44 @@ func (l *rawBody) Read(p []byte) (int, error) {
 // Unwrap is called, so only the standard library's own method runs, and only
 // the first element of each is compared. Comparing an error with inputStop,
 // whose dynamic type is a pointer, cannot panic.
+//
+// Any other error but io.EOF is the input's ordinary failure as it reached
+// this body, and the first one is kept as ioErr, unless it is the session's
+// published stop — a cancellation seen under the body, say — which is the
+// parse's own and not the source's. That too is decided by comparing with a
+// pointer of this parse.
 func (l *rawBody) note(err error) {
 	if err == nil || err == io.EOF || l.slot.src != nil {
 		return
 	}
+	if l.isInputStop(err) {
+		l.slot.src = err
+		return
+	}
+	if l.slot.ioErr == nil {
+		if stop := l.ctx.session.publishedStop(); stop == nil || err != stop {
+			l.slot.ioErr = err
+		}
+	}
+}
+
+// isInputStop reports whether err is the input's failure of this parse as it
+// reached this body; see note.
+func (l *rawBody) isInputStop(err error) bool {
 	stop := l.ctx.session.inputFailure()
 	if stop == nil {
-		return
+		return false
 	}
 	for e, level := err, int64(0); ; level++ {
 		if e == stop {
-			l.slot.src = err
-			return
+			return true
 		}
 		if level >= l.ctx.depth || reflect.TypeOf(e) != joinErrorType {
-			return
+			return false
 		}
 		errs := e.(interface{ Unwrap() []error }).Unwrap()
 		if len(errs) == 0 {
-			return
+			return false
 		}
 		e = errs[0]
 	}
@@ -516,12 +584,19 @@ func (g *bodyGuard) Read(p []byte) (int, error) {
 // with, io.EOF included: the body's local failure when there is one, else a
 // MaxInputBytes failure as the body's input returned it, each sticky from then
 // on, and err itself otherwise.
+//
+// After those two, an ordinary failure of the body's input (ioErr) is
+// reported however the decoders ended — as itself when they passed it on or
+// ended as though the input had ended cleanly, joined with their own report
+// otherwise — and is sticky like them. See bodySlot.inputEnd.
 func (g *bodyGuard) end(err error) error {
 	switch {
 	case g.slot.err != nil:
 		g.err = g.slot.err
 	case g.slot.src != nil:
 		g.err = g.slot.src
+	case g.slot.ioErr != nil:
+		g.err = g.slot.inputEnd(err)
 	default:
 		return err
 	}

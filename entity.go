@@ -188,6 +188,10 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 		local = mediaErr
 	}
 
+	// inputErr is an ordinary failure of the body's input that an eager
+	// CharsetReader ran into; see the charset stage below.
+	var inputErr error
+
 	// QUIRK: RFC 2045 section 6.4 specifies that multipart messages can't have
 	// a Content-Transfer-Encoding other than "7bit", "8bit" or "binary".
 	// However some messages in the wild are non-conformant and have it set to
@@ -259,11 +263,27 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 				// nothing it already read can be given back. Nothing was
 				// published before the hook ran, so a stop found here is one it
 				// ran into. See cancel.go and progress.go.
+				//
+				// A hook that failed because the body's own input failed under it
+				// is not an unknown charset either (ROB-010-006). Nothing read
+				// this body before the hook, so whatever its slot holds now the
+				// hook ran into. A local refusal of the body — its encoded budget —
+				// is returned as the entity's own FatalError, scoped like a strict
+				// refusal: the parse and the siblings go on. An ordinary failure of
+				// the source is returned as itself, or joined with the hook's own
+				// error when the hook did not simply pass it on; it is not made a
+				// stop. Either way the body stays as the input held it, and what
+				// the hook consumed is gone. A hook that built its decoder anyway
+				// is kept, and its body reports the failure when it ends.
 				if stop := ctx.fatalErr(); stop != nil {
 					fatal = stop
 					if charsetErr == nil {
 						body = converted
 					}
+				} else if hookErr, ok := charsetErr.(UnknownCharsetError); ok && leaf != nil && leaf.slot.err != nil {
+					local = leaf.slot.err
+				} else if ok && leaf != nil && leaf.slot.ioErr != nil {
+					inputErr = leaf.slot.inputEnd(hookErr.e)
 				} else if charsetErr != nil {
 					warning := UnknownCharsetError{charsetErr}
 					err = warning
@@ -334,6 +354,9 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	}
 	if local != nil {
 		return e, local
+	}
+	if inputErr != nil {
+		return e, inputErr
 	}
 	return e, err
 }

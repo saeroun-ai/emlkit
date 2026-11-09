@@ -35,7 +35,9 @@ import (
 //     an earlier published stop wins with nothing recorded, a sink refusing the
 //     diagnostic wins, MaxDiagnosticCount may drop the diagnostic but not the
 //     stop. The input is never read again, and a leaf body recognizes the stop
-//     by identity as it recognizes the input budget's (see rawBody.note).
+//     by identity as it recognizes the input budget's (see rawBody.note). The
+//     same reader also makes the input's own first error final, io.EOF
+//     included, without making it a stop (ROB-010-006; see progressReader).
 //   - The decoders of a leaf body (bodyGuard). A CharsetReader's reader may
 //     return (0, nil) without reading anything. Reads in which the decoders
 //     delivered nothing are counted unless a stage took input during them: a
@@ -79,9 +81,16 @@ func (s *ParseSession) watchProgress(r io.Reader) io.Reader {
 	return &progressReader{r: r, session: s}
 }
 
-// A progressReader applies the no-progress rule to the input of a parse. It
-// implements io.Reader alone, and is read by one goroutine at a time, as the
-// stream of a parse is.
+// A progressReader applies the no-progress rule to the input of a parse, and
+// makes the input's first error final (ROB-010-006): the read that returned it
+// returns it with its bytes, and every later read returns the identical value,
+// io.EOF included, without asking the input again. io.Reader promises nothing
+// about a read after an error, and the buffered readers above forget an error
+// once they have handed it out, so without this a failure they reported once
+// could be followed by more input, as though it had not happened. It is not a
+// stop of the parse: no diagnostic is recorded, and the error stays the
+// input's own value. It implements io.Reader alone, and is read by one
+// goroutine at a time, as the stream of a parse is.
 type progressReader struct {
 	r       io.Reader
 	session *ParseSession
@@ -89,6 +98,7 @@ type progressReader struct {
 	empty  int   // consecutive (0, nil) results to nonempty requests
 	offset int64 // bytes the input has delivered
 	failed error // the sticky stop, once there is one
+	srcErr error // the input's own first error, once there is one
 }
 
 // Read implements io.Reader.
@@ -96,10 +106,16 @@ func (g *progressReader) Read(p []byte) (int, error) {
 	if g.failed != nil {
 		return 0, g.failed
 	}
+	if g.srcErr != nil {
+		return 0, g.srcErr
+	}
 	if len(p) == 0 {
 		return 0, nil
 	}
 	n, err := g.r.Read(p)
+	if err != nil {
+		g.srcErr = err
+	}
 	switch {
 	case n > 0 && n <= len(p):
 		g.empty = 0
@@ -160,8 +176,10 @@ func (g *bodyGuard) progress() int64 {
 // again.
 //
 // A stall reports, in order, the body's own local failure, the input's failure
-// as the body received it, or else this body's own refusal, which a stop of
-// the whole parse published earlier outranks (see refuseBody).
+// of this parse as the body received it, an ordinary failure of the input the
+// decoders swallowed (with no diagnostic: the input failed, nothing stalled
+// it), or else this body's own refusal, which a stop of the whole parse
+// published earlier outranks (see refuseBody).
 func (g *bodyGuard) noProgress(before int64) error {
 	if g.progress() != before {
 		g.empty = 0
@@ -176,6 +194,8 @@ func (g *bodyGuard) noProgress(before int64) error {
 		g.err = g.slot.err
 	case g.slot.src != nil:
 		g.err = g.slot.src
+	case g.slot.ioErr != nil:
+		g.err = g.slot.ioErr
 	default:
 		g.err = g.ctx.refuseBody(g.slot, Diagnostic{
 			Code:     CodeBodyDecoderNoProgress,

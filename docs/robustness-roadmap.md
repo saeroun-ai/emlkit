@@ -1290,7 +1290,149 @@ empty permission-denial arrays.
 | ROB-010-003 | Planned | Detect and preserve BOMs without letting them corrupt a field name. | UTF-8/16/32 BOM fixtures. |
 | ROB-010-004 | Planned | Optionally recognize a leading mbox envelope line and preserve it separately. | Valid/invalid/mid-header `From ` fixtures. |
 | ROB-010-005 | Planned | Detect concatenated messages or trailing unassigned bytes in forensic mode. | Two-message and trailing-junk fixtures. |
-| ROB-010-006 | Planned | Preserve bytes returned with EOF and partial bytes before injected I/O errors. | Custom-reader tests. |
+| ROB-010-006 | Done | Preserve bytes returned with EOF and partial bytes before injected I/O errors: under `Parse` the input's first error is final and reported where the parse reaches it, a body reports it however its decoders ended, an eager `CharsetReader` failing on it returns it with the entity; every entry point's header scanner keeps a block's first read failure and the fields read whole before it. See "ROB-010-006 — input errors" below. | Custom-reader tests at every cut, chunk and buffer size, sticky and resuming sources; see below. |
+
+#### ROB-010-006 — input errors (Done)
+
+Status: Done for [issue #7](https://github.com/saeroun-ai/emlkit/issues/7),
+taken first in `ROB-010` by the reviewed dependency note in §8. Codex reviewed
+the implementation, requested corrections, and independently verified the
+result under enforced host limits. Remote inclusion is tracked in the issue.
+
+**An input error is not a stop.** An error the caller's reader returns is an
+ordinary failure of the input, not a defect of the message: no diagnostic, no
+`FatalError` made for it, `ParseStop` nil. A foreign `FatalError` or
+`io.ErrNoProgress` the reader returns stays that ordinary value. The parser's
+own stops (budgets, no-progress, cancellation, sink) keep their precedence.
+
+**First error final, under `Parse`.** The innermost reader of a parse
+(`progressReader`) delivers the bytes that came with an error and makes the
+first error, `io.EOF` included, the answer to every later read, as the
+identical value, without asking the reader again. `Read`, `ReadWithOptions`
+and `New` do not.
+
+**Header scanner, every entry point.** `textproto`'s header scanner keeps the
+first error any read of a block returned (`headerScan.fail`): every `Peek`,
+`ReadSlice` and the continuation look go through it. An internal full-buffer
+result means read on; a source's own `bufio.ErrBufferFull` is handled as
+described below. Once a read failed only bytes the `bufio.Reader` already
+holds are read, with no refill. A failure other than `io.EOF` is returned as
+the reader's own value with every field whose lines were read whole — a whole
+field whose next byte could not be looked at included, a field whose
+continuation line was cut kept with its earlier lines — and a line the failure
+cut is dropped, with no terminator supplied. Bytes already read are charged
+first, so a budget they exceed is what is reported. A failure still buffered
+past the block's empty line was never observed by the block and is left for
+the next read. `io.EOF` keeps its meaning (a header-only message; an
+unterminated last line at EOF is still accepted, which is `ROB-010-002`'s to
+revisit). Compatibility outside `Parse`: `ReadHeader`, `ReadHeaderLimit(s)`,
+part headers and legacy `Read` now report a block's read failure as itself
+instead of losing a one-shot failure, reading past it, or calling a cut line
+malformed, and no longer return the cut line as a field. `bufio.Reader` forgets
+an error once handed out, so a caller of the public functions that reads its
+reader again after an error may reach the source again; that is the caller's to
+avoid. A root header cut by a failure still yields no entity (`ROB-020`/#10).
+A source may fail with `bufio.ErrBufferFull` itself, the value `ReadSlice`
+also uses for a line longer than the buffer: the header and framing scanners
+read on only when that value came with exactly the whole buffer, and otherwise
+record it as the source's failure (the first implementation read on for ever
+there; Codex's bounded QA caught it). The one indistinguishable case, a source
+failing so just as it fills the buffer, reads that buffer on and is decided by
+the next read: reported when the source keeps failing, as it does under
+`Parse`, and read on when a source passed to the public functions resumes.
+
+**Where a failure surfaces.** By `Parse` while the root header is read, with
+no entity. Otherwise lazily: a header that ended before the failure gives an
+entity and a nil error, and the first `Body` or part read needing input past
+what was buffered delivers those bytes and then the failure; nothing returned
+is withdrawn, and a failure after a tail nothing reads (an epilogue after the
+closing delimiter) is never reported. A root body reports the identical value;
+a part reports the framing's existing `errors.Join(err,
+ErrMissingBoundaryClose)`; `NextPart` reports textproto's wrapping of it.
+
+**Through decoders.** `rawBody.note` keeps the first error of the body's input
+that is neither `io.EOF` nor the parse's own stop (`bodySlot.ioErr`, by
+identity only). After the body's local failure and the parse's own input stop,
+`bodyGuard.end` reports it however the decoders ended: as itself when they
+passed it on (compared by `sameError`, a recovered `==`) or ended with
+`io.EOF`, and otherwise in one sticky `errors.Join(ioErr, decoderErr)` — so
+quoted-printable's wording of a cut soft break and a hook's own error are kept
+beside it. A decoder corruption found before the failure reached the body is
+reported alone, and a failure still in read-ahead is not pulled out; no chunk
+invariance is claimed for malformed base64 (#34). Only what the decoders
+produced is delivered. A decoder that swallows the failure and stops making
+progress reports it, with no `body.decoder_no_progress`. A source error whose
+type cannot be compared appears twice in the join; a decoder that wrapped it
+does too. No `Is`, `As`, `Unwrap`, `Error` or `Format` of a source error is
+called.
+
+**Eager `CharsetReader`.** A hook that fails while the body's input failed
+under it records no `charset.unknown`: `Parse` or `NextPart` returns the usable
+entity with the input's error, or a join with the hook's own (the hook's error
+is taken only from this package's own `UnknownCharsetError`). That value is
+whatever the source returned, so the public predicates answer about what it
+holds, a genuine warning or `FatalError` replayed by the source included. A hook that
+failed because the body's own budget refused the read returns the entity with
+that local `FatalError`, scoped like a Strict refusal: `NextPart` continues
+with the next part, `mail.Reader.NextPart` returns no part and the next call
+continues, `Walk` ends. A hook that built a decoder anyway gives `(entity,
+nil)` and the body reports the failure. What a hook consumed is not replayed
+(#41).
+
+**Not changed.** `lenientQPReader` and the standard base64 newline filter
+drop or re-read after an error; under `Parse` the final input error and the
+body's provenance make that harmless, and outside `Parse` it is unchanged.
+Completion state (#10), raw replay (#41), header healing (`ROB-020`) and
+illegal read counts (`ROB-120-001`) are separate. A genuine warning value a
+source hands back is indistinguishable from one the parser made (the
+`ROB-120-007` boundary).
+
+**Tests verified.** `textproto/header_ioerror_test.go` (every cut of a block
+with a long line and a continuation, buffers 16/4096, chunks 1/7/4096, error
+with or after the data, sticky and resuming sources, `ReadHeader` and
+`ReadHeaderLimits`: whole-line prefix byte for byte, the identical error, no
+read after it, lazy body error; named look-ahead points; budget first; part
+headers), `io_error_test.go` (a root header/body/multipart matrix over
+profiles and default/disabled limits; lazy boundary; legacy `Read`; decoders
+passing, masking, swallowing, adding their own error; quoted-printable at the
+root and in a part; unreached corruption; a non-comparable error; eager hooks
+at the root and in a part, input error and local refusal; `WriteTo` into
+`ReaderFrom` and plain writers; own stops first; foreign `FatalError` and
+`io.ErrNoProgress`; hostile errors in a subprocess; header round trip),
+`mail/reader_ioerror_test.go`, and the updated plain-input-error case of
+`TestParse_bodyInputStopNotMasked`.
+
+**Codex review and independent QA.** The initial implementation hung when a
+source returned `bufio.ErrBufferFull`: the sticky source error was mistaken for
+an internal full-buffer result. A separate three-second probe caught it; the
+same finite probe on `92eaec1` terminated (but lost the error). The correction
+qualifies full buffers in both header and multipart framing, including pending
+CR accounting. Small, exactly 4096-byte, and multi-buffer cut lines now end.
+Two failing test expectations were corrected to the reviewed contract: a
+source error is final rather than counted toward a later no-progress stop,
+and the sibling in a local-budget test must itself fit that budget.
+
+The final fifteen-step bounded run passed: uncached tests and race checks in
+all six packages, build, filtered vet (`-composites=false -stdmethods=false`;
+the existing unkeyed-composite and WriteTo-signature warnings are not claimed
+fixed), all six packages on GOARCH=386, formatting and whitespace. Independent
+input QA covered 3,840 Parse combinations with zero source rereads, zero
+sticky/resuming result differences and zero lost injected errors, 150 header
+checks, 605 decoder checks and 22 hostile/error-collision subprocess probes.
+The 7,680 legacy/public-buffer observations retain their documented differences;
+this does not claim to make legacy body readers sticky. The prior 2,320
+no-progress checks, 15,813 cancellation combinations plus contract/lifecycle
+checks, live-context regressions, header/input/body/diagnostic/healing matrices
+and 235 error-predicate checks passed. Thirty-second fuzz runs completed
+937,615 input-budget and 501,990 total-header executions without failure.
+
+Evidence: `/tmp/emlkit-ioerror-verification.json` and `.out`, the per-step logs,
+`/tmp/emlkit-ioerror-initial-snapshot.json`, and
+`/tmp/emlkit-ioerror-bufferfull-baseline.out`. The service
+`emlkit-bounded-27e92ceb9e` enforced 1,536 MiB RAM, no swap, two CPU cores,
+128 tasks and a deadline; observed peak memory was 1,433,858,048 bytes. Jobs
+ran sequentially, with finite sources and short subprocess deadlines for hangs.
+Every Claude invocation for this ID returned an empty permission-denial array.
 
 ### ROB-020 — Raw header framing and preservation
 

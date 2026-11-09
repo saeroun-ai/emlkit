@@ -509,6 +509,13 @@ func (r *MultipartReader) readFramingLine() ([]byte, error) {
 	var pendingCR bool
 	for {
 		l, err := r.bufReader.ReadSlice('\n')
+		// ReadSlice reports a line longer than the buffer with
+		// bufio.ErrBufferFull and exactly the whole buffer. The same value with
+		// fewer bytes is the input's own failure, which an io.Reader may return:
+		// the line ends there rather than being read on without bytes. An input
+		// failing so after exactly filling the buffer cannot be told apart; the
+		// read after it meets the failure again, since src keeps it, and ends.
+		full := err == bufio.ErrBufferFull && len(l) == r.bufReader.Size()
 
 		n := int64(len(l))
 		if pendingCR {
@@ -525,7 +532,7 @@ func (r *MultipartReader) readFramingLine() ([]byte, error) {
 			if len(l) >= 2 && l[len(l)-2] == '\r' {
 				n--
 			}
-		case err == bufio.ErrBufferFull:
+		case full:
 			// No terminator yet. A trailing '\r' may begin one, so it is held
 			// back rather than charged.
 			if len(l) > 0 && l[len(l)-1] == '\r' {
@@ -542,7 +549,7 @@ func (r *MultipartReader) readFramingLine() ([]byte, error) {
 		data += n
 
 		line = append(line, l...)
-		if err == bufio.ErrBufferFull {
+		if full {
 			continue
 		}
 		r.lineBuf = line

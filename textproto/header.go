@@ -762,6 +762,75 @@ type headerScan struct {
 	// shared is the refusal of the shared budget that refused this block, which
 	// the callers of readHeader return as it is rather than building another.
 	shared *HeaderLimitError
+
+	// fail is the first error a read of this block returned, io.EOF included,
+	// or nil. bufio.Reader hands a read error out once and then forgets it, so
+	// the scanner keeps it: once it is set no read of the block refills the
+	// reader, and only bytes it already holds are read. See peek and readSlice.
+	fail error
+}
+
+// peek is r.Peek(n) for the scanner. It records the first error a peek
+// returns, and once a read of the block has failed it looks only at bytes r
+// already holds, returning those with the failure when they are fewer than n.
+//
+// The scanner peeks at most two bytes and a bufio.Reader holds at least 16, so
+// Peek's own bufio.ErrBufferFull cannot occur here: that value, too, is the
+// input's own failure and is recorded like any other.
+func (s *headerScan) peek(r *bufio.Reader, n int) ([]byte, error) {
+	if s.fail == nil {
+		b, err := r.Peek(n)
+		if err != nil {
+			s.fail = err
+		}
+		return b, err
+	}
+	if avail := r.Buffered(); avail < n {
+		// Peeking no more than is buffered never refills.
+		b, _ := r.Peek(avail)
+		return b, s.fail
+	}
+	return r.Peek(n)
+}
+
+// readSlice is r.ReadSlice('\n') for the scanner, on the terms of peek: it
+// records the first error a read returns, and once a read of the block has
+// failed it reads only what r already holds — through the next '\n' if there
+// is one there, and otherwise all of it together with the failure, which is the
+// shape ReadSlice returns a stopped input in.
+//
+// bufio.ErrBufferFull is two things that share one value: ReadSlice's report
+// of a line longer than r's whole buffer, which means read on, and an input
+// that failed with that error itself, which an io.Reader may. ReadSlice reports
+// the first with exactly the whole buffer, so only that is read on (see
+// refill); with fewer bytes the value is the input's failure and is recorded.
+// An input that fails with it after exactly filling the buffer cannot be told
+// apart through bufio: that one buffer is read on, and the read after it either
+// meets the failure again — a source that keeps failing, as every source under
+// message.Parse does — and records it, or reads on with what the source sends.
+// Either way it ends: nothing here reads on without bytes.
+func (s *headerScan) readSlice(r *bufio.Reader) ([]byte, error) {
+	if s.fail == nil {
+		l, err := r.ReadSlice('\n')
+		if err != nil && !(err == bufio.ErrBufferFull && len(l) == r.Size()) {
+			s.fail = err
+		}
+		return l, err
+	}
+	buf, _ := r.Peek(r.Buffered())
+	if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+		r.Discard(i + 1)
+		return buf[:i+1], nil
+	}
+	r.Discard(len(buf))
+	return buf, s.fail
+}
+
+// refill reports whether err, from readSlice, is a line longer than the
+// buffer, to be read on, rather than a failure — including an input's own
+// bufio.ErrBufferFull, which readSlice has recorded by then.
+func (s *headerScan) refill(err error) bool {
+	return err == bufio.ErrBufferFull && s.fail == nil
 }
 
 // refuseShared records the shared budget's refusal e as this block's.
@@ -943,7 +1012,7 @@ func (s *headerScan) classify(l []byte, err error) (data int64, ended bool) {
 		}
 		return data + n, true
 
-	case err == bufio.ErrBufferFull:
+	case s.refill(err):
 		// No terminator yet. A trailing '\r' may be the start of one, so it is
 		// held back rather than charged.
 		if len(l) > 0 && l[len(l)-1] == '\r' {
@@ -970,16 +1039,24 @@ func (s *headerScan) classify(l []byte, err error) (data int64, ended bool) {
 // what ReadLine does internally, so what this returns is what it returned: the
 // same bytes for a "\r\n" that straddles the buffer, and the same last line for
 // an input that ends without a terminator at all.
+//
+// A line a read failure other than io.EOF cut short is not a line: it is
+// returned as line was given, without the bytes of the cut line, together with
+// that failure, so that nothing the input did not terminate is read as though
+// it had been, and the failure is not left for a later read that bufio would
+// not repeat. Its bytes are still charged first, so a budget they exceed is
+// what is reported.
 func readLineSlice(r *bufio.Reader, line []byte, scan *headerScan) ([]byte, error) {
 	// appended bounds how much of line belongs to this call, so that the
 	// terminator stripped below cannot reach into continuation lines a caller
 	// accumulated before it.
 	appended := 0
+	given := len(line)
 
 	scan.beginLine()
 
 	for {
-		l, err := r.ReadSlice('\n')
+		l, err := scan.readSlice(r)
 
 		// The budgets are charged before the bytes are kept, so a line longer
 		// than a budget is refused after one buffer rather than accumulated:
@@ -988,20 +1065,27 @@ func readLineSlice(r *bufio.Reader, line []byte, scan *headerScan) ([]byte, erro
 			return line, berr
 		}
 
-		if err == bufio.ErrBufferFull {
-			// The line is longer than r's buffer; keep going.
+		if scan.refill(err) {
+			// The line is longer than r's buffer; keep going. An input's own
+			// bufio.ErrBufferFull is not this, and ends the line below.
 			line = append(line, l...)
 			appended += len(l)
 			continue
 		}
 
 		if err != nil {
+			if err != io.EOF {
+				// Cut by a read failure, possibly after earlier buffers of the
+				// same long line: none of it is kept.
+				return line[:given], err
+			}
 			if len(l) == 0 {
 				return line, err
 			}
-			// ReadLine reports the bytes it did read and leaves the error for
-			// the next read, and so does this. There is no terminator to strip:
-			// ReadSlice only stops without one at the end of the input.
+			// The input ended without a terminator. The last line is reported
+			// with the bytes it did read and the end is left for the next read,
+			// which the scanner answers from its recorded io.EOF. There is no
+			// terminator to strip.
 			return append(line, l...), nil
 		}
 
@@ -1040,13 +1124,15 @@ func trim(s []byte) []byte {
 	return s[i:n]
 }
 
-func hasContinuationLine(r *bufio.Reader) bool {
-	c, err := r.ReadByte()
-	if err != nil {
-		return false // bufio will keep err until next read.
+// hasContinuationLine reports whether the next byte of r begins a continuation
+// line, without consuming it. A failed look is no continuation: the scanner has
+// recorded the failure, and the next read of the block reports it.
+func hasContinuationLine(r *bufio.Reader, scan *headerScan) bool {
+	b, err := scan.peek(r, 1)
+	if err != nil || len(b) == 0 {
+		return false
 	}
-	r.UnreadByte()
-	return isSpace(c)
+	return isSpace(b[0])
 }
 
 // atBlockEnd reports whether the next bytes of r are the empty line that ends a
@@ -1072,9 +1158,10 @@ func hasContinuationLine(r *bufio.Reader) bool {
 //
 // candidate reports the other outcome of the same look: a byte is there and it
 // does not begin that empty line, so a field candidate begins here. An input
-// with no byte left — its end, or a failed read — is neither.
-func atBlockEnd(r *bufio.Reader) (end, candidate bool) {
-	b, err := r.Peek(1)
+// with no byte left — its end, or a failed read — is neither. A failed look is
+// recorded by the scanner, and the read that follows reports it.
+func atBlockEnd(r *bufio.Reader, scan *headerScan) (end, candidate bool) {
+	b, err := scan.peek(r, 1)
 	if err != nil || len(b) == 0 {
 		return false, false
 	}
@@ -1082,7 +1169,7 @@ func atBlockEnd(r *bufio.Reader) (end, candidate bool) {
 	case '\n':
 		return true, false
 	case '\r':
-		b, err := r.Peek(2)
+		b, err := scan.peek(r, 2)
 		if err == nil && len(b) == 2 && b[1] == '\n' {
 			return true, false
 		}
@@ -1095,7 +1182,7 @@ func readContinuedLineSlice(r *bufio.Reader, scan *headerScan) ([]byte, error) {
 	// logical field, so it is read outside any field's budget. Settling that
 	// here — from bytes that are looked at and not consumed — is what keeps a
 	// field budget from being spent on a field that is not there.
-	end, candidate := atBlockEnd(r)
+	end, candidate := atBlockEnd(r, scan)
 	if end {
 		scan.beginBlockEnd()
 		return readLineSlice(r, nil, scan)
@@ -1131,7 +1218,7 @@ func readContinuedLineSlice(r *bufio.Reader, scan *headerScan) ([]byte, error) {
 	line = append(line, '\r', '\n')
 
 	// Read continuation lines.
-	for hasContinuationLine(r) {
+	for hasContinuationLine(r, scan) {
 		line, err = readLineSlice(r, line, scan)
 		if err != nil {
 			if isBudgetExhausted(err) {
@@ -1142,7 +1229,11 @@ func readContinuedLineSlice(r *bufio.Reader, scan *headerScan) ([]byte, error) {
 				// behavior below.
 				return nil, err
 			}
-			break // bufio will keep err until next read.
+			// A read failure cut this continuation line. The field is kept
+			// with the lines read whole before it — line holds exactly those —
+			// and the scanner has recorded the failure, which the next read of
+			// the block reports.
+			break
 		}
 
 		line = append(line, '\r', '\n')
@@ -1191,6 +1282,34 @@ func trimAroundNewlines(v []byte) string {
 // headers, or the header should be read with ReadHeaderLimit or
 // ReadHeaderLimits, which bound the block itself — its bytes, its fields, its
 // lines — and leave what follows it alone.
+//
+// A read of r that fails is reported, never skipped. The first error any read
+// of the block returns, io.EOF included, is remembered for the rest of the
+// block: from then on nothing more is asked of r's source, and only the bytes r
+// already holds are read. A failure other than io.EOF is returned as the very
+// value r returned, with the fields read before it — every field all of whose
+// lines were read whole, including one whose next line could not be looked at,
+// and a field whose continuation line the failure cut, kept with its lines
+// before that one. A line the failure cut is not kept, and no terminator is
+// supplied for it. A block that ended before the failure was reached, with the
+// failure still among bytes r holds past the empty line, is read normally, and
+// the failure is what the next read of r returns. io.EOF keeps its
+// long-standing meaning: a block that ends at the end of the input is a header
+// with no body, and its last line may lack a terminator. Before this, a failed
+// look-ahead was ignored and the source read again, so a one-shot failure could
+// vanish, or a cut line be reported as a malformed one.
+//
+// A source may fail with bufio.ErrBufferFull itself, the value ReadSlice also
+// uses for a line longer than r's buffer. It is the source's failure whenever
+// fewer bytes than the whole buffer came with it. A source that fails so just
+// as it fills the buffer exactly cannot be told apart through bufio: that
+// buffer is read as part of a long line, and the read after it decides — a
+// source that keeps failing is then reported as above, and one that sends more
+// is read on.
+//
+// bufio.Reader hands out a read error once. After ReadHeader has returned one,
+// r no longer holds it, and reading r again reads its source again; a caller
+// that must not do so stops reading r, or gives it a source that keeps failing.
 func ReadHeader(r *bufio.Reader) (Header, error) {
 	return readHeader(r, &headerScan{})
 }
@@ -1287,7 +1406,8 @@ func ReadHeaderLimits(r *bufio.Reader, limits HeaderLimits) (Header, error) {
 // Nothing else changes. Every other way a block can end mid-way — a malformed
 // line, a read failure, an input that stops — keeps returning what it read,
 // which is what those paths have always done and what callers of ReadHeader
-// already rely on.
+// already rely on. For a read failure, what it read is the fields whose lines
+// were read whole; see ReadHeader.
 func headerResult(fs []*headerField, err error) (Header, error) {
 	if isBudgetExhausted(err) {
 		return newHeader(nil), err
@@ -1298,8 +1418,9 @@ func headerResult(fs []*headerField, err error) (Header, error) {
 func readHeader(r *bufio.Reader, scan *headerScan) (Header, error) {
 	fs := make([]*headerField, 0, 32)
 
-	// The first line cannot start with a leading space.
-	if buf, err := r.Peek(1); err == nil && isSpace(buf[0]) {
+	// The first line cannot start with a leading space. A failed look is
+	// recorded by the scanner and reported by the read below.
+	if buf, err := scan.peek(r, 1); err == nil && isSpace(buf[0]) {
 		scan.beginField()
 		line, err := readLineSlice(r, nil, scan)
 		if err != nil {
@@ -1312,6 +1433,13 @@ func readHeader(r *bufio.Reader, scan *headerScan) (Header, error) {
 	for {
 		kv, err := readContinuedLineSlice(r, scan)
 		if len(kv) == 0 {
+			if err == nil && scan.fail != nil && scan.fail != io.EOF {
+				// A read of this block failed, and nothing since has reported
+				// it. Only a failure a read of the block itself observed is
+				// meant: one still buffered past the empty line that ends the
+				// block was never observed and belongs to what follows.
+				err = scan.fail
+			}
 			return headerResult(fs, err)
 		}
 

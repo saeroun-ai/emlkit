@@ -75,7 +75,9 @@ type ParseOptions struct {
 // for Parse is a header that could not be read; a warning that accompanies a
 // perfectly usable entity, which is what an unknown transfer encoding or
 // charset is; or a fatal error — a DiagnosticSink that stopped the parse, or a
-// resource budget the message ran past.
+// resource budget the message ran past. One more accompanies a usable entity
+// without being either: the input's own error, when a CharsetReader building
+// the entity's decoder ran into it; see the input errors below.
 //
 // Parse is the entry point that gives a caller a ParseSession. Read and
 // ReadWithOptions keep their signatures and their behavior; they simply have
@@ -152,6 +154,40 @@ type ParseOptions struct {
 // encoded-word decoder stalls (header.decoder_no_progress). Nothing turns it
 // off, and a reader blocked or looping inside one call is not interrupted.
 // Read and ReadWithOptions do not apply it. See progress.go.
+//
+// An error r returns is an ordinary failure of the input, not a defect of the
+// message and not a stop: no diagnostic is recorded for it and ParseStop stays
+// nil (ROB-010-006). Bytes r returns together with an error are delivered, and
+// r's first error is final: r is never read again after it, io.EOF included,
+// and every later read of the input returns that identical value. It is
+// reported where the parse reaches it, never earlier and never lost:
+//
+//   - while the message header is read, by Parse, with no entity, as the very
+//     value r returned;
+//   - after a header that ended before it, by the first read of Body or of the
+//     parts that needs input past what was already buffered, after the bytes
+//     buffered before it — so Parse may return an entity and a nil error for a
+//     message whose input failed in its body. Nothing already returned is
+//     taken back;
+//   - by a body as the identical value at the root and inside the framing's
+//     errors.Join under a part, whatever its decoders made of it: a decoder
+//     that masks it as io.EOF or swallows it does not hide it, and a decoder
+//     error of its own — quoted-printable's wording of a cut soft break, a
+//     corruption base64 found — is joined to it rather than reported instead;
+//   - by Parse or MultipartReader.NextPart together with the usable entity,
+//     when a CharsetReader building the entity's decoder failed because the
+//     input failed under it: the input's error itself, or joined with the
+//     hook's, with no charset.unknown recorded for the entity. The value is
+//     whatever the input returned, so a public predicate such as
+//     IsUnknownCharset or IsFatal answers about what that value holds. What
+//     the hook consumed is gone, and the input is not read again. Walk ends
+//     with such an error, and mail.Reader.NextPart returns it with no part.
+//
+// io.EOF still ends a header block, a body or a part's framing as it always
+// has. Read and ReadWithOptions do not make r's error final; the header
+// reader underneath all of them reports the first error a read of a header
+// block returned, keeps the fields read whole before it, and keeps a line the
+// failure cut out of them (see textproto.ReadHeader).
 //
 // A header block that exceeds Limits.MaxHeaderBytes, MaxHeaderFieldBytes,
 // MaxHeaderCount or MaxLineBytes is refused, and refused wherever it is found:

@@ -126,6 +126,17 @@ an encoded-word parameter keeps the raw value (`header.decoder_no_progress`).
 `Read`, `ReadWithOptions` and the `Header` accessors are unchanged, and a
 reader that blocks or loops inside one call is not interrupted.
 
+An error your reader returns is an ordinary input failure, not a stop and not a
+diagnostic. Under `Parse` the bytes returned with it are delivered, the reader
+is never read again after its first error (`io.EOF` included), and the error
+surfaces where the parse reaches it: from `Parse` while the header is read,
+otherwise from the `Body` or part read that needs the missing input — so
+`Parse` may succeed and a body report the failure later. A body reports it
+however its decoders ended, joined with a decoder's own error when there is
+one. Every entry point's header reader reports the first read failure of a
+header block as itself, with the fields read whole before it, rather than as a
+malformed line.
+
 Errors and diagnostics answer different questions, so read both: an error says
 whether a scope could continue, the session says what was observed. `Parse`
 enforces **fifteen** budgets today — `MaxInputBytes`, `MaxHeaderBytes`,

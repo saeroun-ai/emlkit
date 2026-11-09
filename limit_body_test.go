@@ -1110,13 +1110,17 @@ func TestParse_bodyInputStopNotMasked(t *testing.T) {
 	})
 
 	t.Run("plain input error", func(t *testing.T) {
+		// An ordinary input error is not a stop, but since ROB-010-006 it is
+		// not the decoder's to lose either: quoted-printable's own wording of
+		// the cut is kept, joined after the input's failure.
 		_, raw, _ := strings.Cut(qpCutText, "\r\n\r\n")
 		_, e, err := Parse(&failingSource{s: header + "\r\n" + raw[:5], err: errCut}, &ParseOptions{Limits: onlyBody("", 0)})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if b, err := io.ReadAll(e.Body); string(b) != "foo" || err == errCut || IsFatal(err) {
-			t.Errorf("(%q, %v), want the decoder's own report: only a FatalError of the input is restored", b, err)
+		b, err := io.ReadAll(e.Body)
+		if string(b) != "foo" || err == errCut || !errors.Is(err, errCut) || IsFatal(err) || e.ParseStop() != nil {
+			t.Errorf("(%q, %v), want the input's failure joined with the decoder's report, and no stop", b, err)
 		}
 	})
 }

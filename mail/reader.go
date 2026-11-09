@@ -147,7 +147,12 @@ func CreateReader(r io.Reader) (*Reader, error) {
 // message.ProfileStrict, when its Content-Type or Content-Disposition has a
 // valid base but malformed parameters: that part is not returned, the parse is
 // not stopped (Entity.ParseStop stays nil), and the next call continues with
-// the part after it.
+// the part after it. A part whose own body budget refused the eager read of a
+// CharsetReader building its decoder is refused the same way. A failure of the
+// message's source is returned with no part too; the source is not read again,
+// so later calls report the failure rather than reach another part. In each
+// case NextPart returns at once: it does not skip ahead or retry within the
+// call, and a caller that wants the following parts calls it again.
 //
 // Under every other profile such a field is repaired by the parse — its valid
 // base and well-formed parameters kept, the defect recorded as a diagnostic —

@@ -224,17 +224,28 @@ func TestProgressReader_resetsAndPassThrough(t *testing.T) {
 		}
 	})
 
-	t.Run("an error neither counts nor resets", func(t *testing.T) {
+	t.Run("an error ends the input, whatever came before it", func(t *testing.T) {
+		// Since ROB-010-006 the input's first error is final: the zeros before
+		// it are passed on, the error is returned as itself, and every later read
+		// returns it again without asking the source, which is never counted as
+		// a stall and records nothing.
 		steps := append(zeroSteps(60), scriptStep{"", errX})
 		steps = append(steps, zeroSteps(40)...)
 		steps = append(steps, scriptStep{"late", nil})
 		s := progressSession()
 		src := &scriptReader{steps: steps}
 		got, errs := read(s.watchProgress(src), 300)
-		if got != "" || len(errs) != 2 || errs[0] != errX || !IsFatal(errs[1]) || src.calls != 101 {
-			t.Fatalf("read %q, %v after %d calls; want the source error passed on and the stop at the 100th zero", got, errs, src.calls)
+		if got != "" || len(errs) != 300-60 || src.calls != 61 {
+			t.Fatalf("read %q, %d errors after %d calls; want 240 repeats of the source error after 61 calls", got, len(errs), src.calls)
 		}
-		noProgressStop(t, errs[1], CodeInputNoProgress)
+		for _, err := range errs {
+			if err != errX {
+				t.Fatalf("Read() = %v, want the source error itself every time", err)
+			}
+		}
+		if s.fatalErr() != nil || s.Len() != 0 {
+			t.Errorf("session stop %v, %d diagnostics; want none", s.fatalErr(), s.Len())
+		}
 	})
 
 	t.Run("bytes with an error", func(t *testing.T) {

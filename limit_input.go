@@ -30,8 +30,9 @@ import (
 // said is passed on unchanged, so an io.EOF stays the end of a message of
 // exactly N bytes, an I/O error stays that I/O error, and a read that returned
 // (0, nil) returns (0, nil) rather than being retried here. Repeated (0, nil)
-// reads are judged under this limiter, at the source, proof reads included;
-// see progress.go.
+// reads are judged under this limiter, at the source, proof reads included,
+// and so is the source's first error, which is final from then on: no read
+// after it reaches the source; see progress.go.
 //
 // Reads before the budget is reached are only shortened to what is left of it,
 // so nothing is read past N to learn that N was reached, and the bytes before N
