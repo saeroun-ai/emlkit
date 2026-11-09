@@ -107,12 +107,13 @@ message.
 
 Errors and diagnostics answer different questions, so read both: an error says
 whether a scope could continue, the session says what was observed. `Parse`
-enforces **ten** budgets today — `MaxInputBytes`, `MaxHeaderBytes`,
+enforces **thirteen** budgets today — `MaxInputBytes`, `MaxHeaderBytes`,
 `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`, `MaxParameterCount`,
-`MaxParameterSegments`, `MaxMIMEDepth`, `MaxPartCount` and
-`MaxDiagnosticCount`. `MaxDiagnosticCount` (default 1000) caps diagnostics, not
-parsing: the diagnostic that reaches it is replaced by one
-`limit.diagnostic_count` diagnostic, later diagnostics are neither retained nor
+`MaxParameterSegments`, `MaxMIMEDepth`, `MaxPartCount`, `MaxDiagnosticCount`,
+`MaxEncodedBodyBytes`, `MaxDecodedBodyBytes` and `MaxTotalDecodedBytes`.
+`MaxDiagnosticCount` (default 1000) caps diagnostics, not parsing: the
+diagnostic that reaches it is replaced by one `limit.diagnostic_count`
+diagnostic, later diagnostics are neither retained nor
 delivered to a sink, and the cap alone does not stop the parse — metadata is
 still healed and bodies and parts still returned, while every other budget or
 Strict refusal still fails with its own `FatalError` and diagnostic. `MaxInputBytes` is
@@ -120,11 +121,18 @@ counted once at the input, on the raw bytes actually read from it — including
 body bytes buffered ahead while the header was read — so a body or epilogue
 never read from the input is never checked. One byte past the budget ends the
 whole parse with a `FatalError` and one `limit.input_bytes` diagnostic rather
-than a successful `io.EOF`. The other `Limits` fields — encoded/decoded body
-bytes and the rest — are validated but **not enforced
-yet**, and there is no cancellation support yet. `Read` and `ReadWithOptions`
-have no total input budget; only their message-header cap
-(`ReadOptions.MaxHeaderBytes`) applies. See
+than a successful `io.EOF`. The body budgets bound leaf bodies (entities whose
+`MultipartReader` is nil) as they stream: wire bytes per body (default 128 MiB),
+decoded bytes per body (128 MiB, counted in bytes, so a cut may split a UTF-8
+character) and decoded bytes of all leaves (512 MiB). A per-body overflow keeps
+the header and the delivered prefix and ends that body with a `FatalError`; its
+parent can go on to the next part unless another limit or a sink stops it. The
+total ends the parse. A framed multipart container's raw body is outside them
+and bounded by `MaxInputBytes`. Nothing is replayed: raw bytes a body consumed
+are gone. The other `Limits` fields are validated but **not enforced yet**, and
+there is no cancellation support yet. `Read` and `ReadWithOptions` have no total
+input budget; only their message-header cap (`ReadOptions.MaxHeaderBytes`)
+applies. See
 [docs/conformance.md](docs/conformance.md).
 
 ## Features

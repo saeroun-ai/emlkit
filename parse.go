@@ -95,7 +95,7 @@ type ParseOptions struct {
 //   - The session is never nil, including when the header could not be read at
 //     all, so there is always somewhere to look. What it holds, though, is what
 //     some producer has been implemented to record, which today is the two
-//     decoding warnings below, the ten enforced resource budgets, and the
+//     decoding warnings below, the thirteen enforced resource budgets, and the
 //     repair of a valid media type or disposition with malformed parameters,
 //     up to Limits.MaxDiagnosticCount, whose last slot holds one terminal
 //     limit.diagnostic_count diagnostic in place of the rest. A framing

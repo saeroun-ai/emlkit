@@ -1433,6 +1433,10 @@ func TestParse_otherBudgetsStayUnenforced(t *testing.T) {
 		// ROB-001-008. The fixture records no diagnostic, so pinching it to 1
 		// would pass without saying anything; it is enforced and listed here.
 		"MaxDiagnosticCount": true,
+		// ROB-001-005.
+		"MaxEncodedBodyBytes":  true,
+		"MaxDecodedBodyBytes":  true,
+		"MaxTotalDecodedBytes": true,
 	}
 
 	limits := DefaultLimits()

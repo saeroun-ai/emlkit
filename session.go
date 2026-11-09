@@ -129,6 +129,24 @@ type ParseSession struct {
 	// between waits here rather than being shown an answer that is about to
 	// change. See ParseSession.chargePart and resolvePart in limit_tree.go.
 	partPending chan struct{}
+
+	// decodedUsed is how many bytes the leaf bodies of this parse have
+	// delivered, the usage side of Limits.MaxTotalDecodedBytes. It never passes
+	// that budget, and stays zero while the budget is disabled.
+	decodedUsed int64
+
+	// decodedStop is set, once, when a byte past MaxTotalDecodedBytes has been
+	// proven: it is the published stop, which every leaf body reports from then
+	// on instead of delivering more. It is kept apart from stop because a stop
+	// published for another reason does not end reading a body already
+	// returned, while this one does. See limit_body.go.
+	decodedStop FatalError
+
+	// inputStop is the exact value the input limiter fails every read with
+	// once Limits.MaxInputBytes was exceeded — its own stop, or a stop
+	// published before it that it adopted — and nil before that. A leaf body
+	// recognizes the input's failure by this identity alone; see rawBody.note.
+	inputStop error
 }
 
 // newParseSession returns an empty session that records the profile and

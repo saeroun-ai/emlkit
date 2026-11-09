@@ -28,7 +28,7 @@ import (
 // encoded body that contains no line terminator is not one enormous line: it is
 // streamed, is never accumulated into a line buffer, and is never refused for
 // its length alone. What bounds it is MaxEncodedBodyBytes and
-// MaxDecodedBodyBytes, which a later item enforces.
+// MaxDecodedBodyBytes; see limit_body.go.
 //
 // That distinction is what shapes the transfer-encoding side of this. A decoder
 // is handed a stream, not a line; whether the stream contains a line at all is
@@ -134,12 +134,18 @@ func framedEncoding(enc string) bool {
 // A parse that budgets nothing, a disabled budget, and an encoding with no line
 // framing all return r itself, so nothing is wrapped that would only pass bytes
 // through.
-func (c parseContext) watchCTELines(enc string, r io.Reader) io.Reader {
+//
+// slot is the leaf's shared body failure under Parse, and nil for an entity
+// built without a parse; see bodySlot. A refusal fills it, so that the body's
+// guard reports it even when the decoder above turned it into an error of its
+// own, and a body that has already failed is reported as that failure rather
+// than refused a second time.
+func (c parseContext) watchCTELines(enc string, r io.Reader, slot *bodySlot) io.Reader {
 	limits, ok := c.limits()
 	if !ok || limits.MaxLineBytes <= 0 || !framedEncoding(enc) {
 		return r
 	}
-	return &cteLineMonitor{r: r, ctx: c, enc: enc, limit: limits.MaxLineBytes}
+	return &cteLineMonitor{r: r, ctx: c, enc: enc, limit: limits.MaxLineBytes, slot: slot}
 }
 
 // A cteLineMonitor passes a transfer-encoded body through unchanged while
@@ -178,6 +184,10 @@ type cteLineMonitor struct {
 	// produced, returned unchanged by every later read. The diagnostic behind it
 	// is recorded once, when it is set.
 	stopped error
+
+	// slot is the body's shared failure, or nil without a parse. See
+	// watchCTELines.
+	slot *bodySlot
 }
 
 // Read implements io.Reader.
@@ -268,6 +278,14 @@ func (m *cteLineMonitor) inspect(b []byte) int {
 // refuse records the one diagnostic of this refusal and sets the sticky error
 // every later read returns.
 func (m *cteLineMonitor) refuse() {
+	if m.slot != nil {
+		if m.slot.err != nil {
+			// The body has already failed; that failure is what it reports.
+			m.stopped = m.slot.err
+			return
+		}
+		defer func() { m.slot.err = m.stopped }()
+	}
 	d := Diagnostic{
 		Code:     CodeLimitLineBytes,
 		Severity: SeverityLimitExceeded,

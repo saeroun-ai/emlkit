@@ -908,10 +908,19 @@ func TestParse_inputBytesDefaultAndDisabled(t *testing.T) {
 		if testing.Short() {
 			t.Skip("reads 512 MiB")
 		}
+		// The body budgets are disabled so that this isolates the input budget:
+		// with every default, a single body this large is stopped first by
+		// MaxEncodedBodyBytes at 128 MiB (TestParse_bodyBudgetsRealDefaults).
+		// Only MaxInputBytes is left at its default.
+		bodyOff := &ParseOptions{Limits: Limits{
+			MaxEncodedBodyBytes:  LimitDisabled,
+			MaxDecodedBodyBytes:  LimitDisabled,
+			MaxTotalDecodedBytes: LimitDisabled,
+		}}
 		for _, extra := range []int64{0, 1} {
 			size := int64(defaultMaxInputBytes) + extra
 			meter := &inputMeter{r: &repeatReader{header: header, size: size}}
-			session, e, err := Parse(meter, nil)
+			session, e, err := Parse(meter, bodyOff)
 			if err != nil {
 				t.Fatalf("Parse() = %v", err)
 			}

@@ -175,15 +175,15 @@ const (
 // DefaultLimits returns those values resolved, so a caller can read one, adjust
 // it, or compare against it without repeating a number from this table.
 //
-// Ten budgets are enforced, and only under Parse. MaxDiagnosticCount bounds the
-// diagnostics a parse records and delivers, and by itself stops no parsing: the
-// request that reaches it is replaced by one terminal limit.diagnostic_count
+// Thirteen budgets are enforced, and only under Parse. MaxDiagnosticCount bounds
+// the diagnostics a parse records and delivers, and by itself stops no parsing:
+// the request that reaches it is replaced by one terminal limit.diagnostic_count
 // diagnostic in the last slot and every later request is omitted; see the field.
-// The "exactly one" or "one" diagnostic each of the other nine records below is
-// recorded only while that budget has a slot left. The failure it describes
+// The "exactly one" or "one" diagnostic each of the other twelve records below
+// is recorded only while that budget has a slot left. The failure it describes
 // happens whether or not it is recorded, with the same FatalError carrying the
-// same Diagnostic. Those nine fall into four groups by what a failure costs, and
-// the grouping is part of the contract:
+// same Diagnostic. Those twelve fall into five groups by what a failure costs,
+// and the grouping is part of the contract:
 //
 //   - MaxInputBytes bounds the bytes read from the input for the whole message,
 //     shared by every read of the parse.
@@ -195,10 +195,14 @@ const (
 //   - MaxMIMEDepth and MaxPartCount bound the shape of the MIME tree: how far
 //     the parser descends through nested multipart containers, and how many
 //     child parts it discovers in the whole message.
+//   - MaxEncodedBodyBytes, MaxDecodedBodyBytes and MaxTotalDecodedBytes bound
+//     the bodies of the leaves of the tree as they are read: the wire bytes of
+//     one body, what one body delivers once decoded, and what all of them
+//     deliver together.
 //
 // An input past MaxInputBytes ends the whole parse with one limit.input_bytes
-// diagnostic; see the field for exactly when that is decided. The other three
-// groups fail differently from each other. A header block past one of its budgets is
+// diagnostic; see the field for exactly when that is decided. The other groups
+// fail differently from each other. A header block past one of its budgets is
 // all or nothing: it yields no header, records exactly one limit.* diagnostic at
 // SeverityLimitExceeded, and ends that scope with a FatalError, because a block
 // that overran leaves the input somewhere that cannot be resynchronized to. A
@@ -209,7 +213,9 @@ const (
 // child is not returned and nothing but its header block was ever read, one
 // diagnostic names it, and a FatalError ends a scope — one multipart iterator
 // for MaxMIMEDepth, and the whole parse for MaxPartCount, which is one budget
-// the entire tree shares.
+// the entire tree shares. A body past one of its budgets keeps everything it
+// already delivered: a per-body budget ends that body alone and its parent goes
+// on to the next part, while MaxTotalDecodedBytes ends the whole parse.
 //
 // Read and ReadWithOptions keep the behavior they always had: MaxHeaderBytes
 // reaches the message header alone, a part's header is not budgeted, no other
@@ -378,16 +384,71 @@ type Limits struct {
 	// MaxEpilogueBytes bounds the text after a multipart closing delimiter.
 	MaxEpilogueBytes int64
 
-	// MaxEncodedBodyBytes bounds one entity's body as it appears in the input,
-	// before any transfer decoding.
+	// MaxEncodedBodyBytes bounds the wire bytes of one leaf body, before any
+	// transfer decoding, counted as they are read for that body — by its
+	// decoders or by WriteTo's verbatim copy.
+	//
+	// A leaf is an entity whose MultipartReader returns nil when it is
+	// constructed: every entity that is not multipart/*, message/* parts
+	// included, and a multipart entity whose damaged Content-Type was repaired
+	// with no boundary that may be used. A framed multipart container has a raw
+	// body too, but it is outside the leaf budgets: reading it directly or
+	// copying it verbatim is bounded by MaxInputBytes alone, and iterating it
+	// holds each part to its own budgets.
+	//
+	// A budget of N admits N bytes. Only a byte that exists past them is an
+	// overflow; proving it reads that one byte, which no decoder ever sees.
+	// Within the decoded budgets, the body then delivers what its decoders make
+	// of the N admitted bytes, including output they had already buffered, and
+	// then reports a FatalError carrying one limit.encoded_body_bytes
+	// diagnostic, located at the first byte not admitted. What a cut leaves is the decoders' own
+	// reading of a truncated stream: an incomplete base64 quantum is dropped,
+	// and a cut quoted-printable escape is kept literally, as a malformed one
+	// is. The failure is the body's alone: the header and the delivered prefix
+	// stay valid, ParseStop stays nil, and the parent multipart can drain the
+	// unread raw tail, under MaxInputBytes, and continue with the next part
+	// unless another limit or a DiagnosticSink stops it.
+	// Body returns that FatalError from then on, unless MaxTotalDecodedBytes
+	// later ends the parse, after which it returns the parse's stop; the value
+	// already returned stays valid. Bytes consumed by the body, its decoders'
+	// read-ahead and the drained tail are not replayed (#41), and no raw API is
+	// added: the existing verbatim WriteTo path stays a conditional one-shot
+	// copy, available only before Body is read.
 	MaxEncodedBodyBytes int64
 
-	// MaxDecodedBodyBytes bounds what one entity's body decodes to, which is
-	// what bounds decoding expansion for that entity.
+	// MaxDecodedBodyBytes bounds the bytes one leaf's Body delivers, after
+	// every decoding stage that ran, including a CharsetReader the caller
+	// installed. It counts bytes, not characters, so a body cut by it may end
+	// inside a UTF-8 sequence.
+	//
+	// A budget of N permits at most N bytes; a shorter body, or one that
+	// fails earlier, delivers fewer. Reaching exactly N is not an overflow:
+	// only a byte that exists past them is, and proving it reads that one byte
+	// from the decoders and discards it. The failure is local, on the
+	// same terms as MaxEncodedBodyBytes, with one limit.decoded_body_bytes
+	// diagnostic located at the start of the body: decoded bytes have no
+	// position in the input. A body reports one local failure, the first
+	// proven. Decoders read ahead, so when the encoded and decoded budgets of
+	// a body are nearly reached together, which of the two is proven first may
+	// depend on how the body is read.
 	MaxDecodedBodyBytes int64
 
-	// MaxTotalDecodedBytes bounds the decoded bytes of every entity of one
-	// message together.
+	// MaxTotalDecodedBytes bounds the bytes every leaf Body of one message
+	// delivers together, on the same terms as MaxDecodedBodyBytes. Headers,
+	// framing, the bytes an iterator drains past a part, and WriteTo's verbatim
+	// copies are not counted, and nothing is counted twice.
+	//
+	// Exceeding it ends the whole parse: it records one
+	// limit.total_decoded_bytes diagnostic for the leaf that proved it, and
+	// publishes the session's FatalError, which every scope of the parse
+	// reports and which every leaf Body — one already returned, or one that
+	// already failed on its own budget, included — returns instead of
+	// delivering further decoded output. A verbatim WriteTo copy is not decoded
+	// output and is not stopped by it. When one byte exceeds both this and a
+	// body's MaxDecodedBodyBytes, this is the failure. A stop published before
+	// an overflow — by a DiagnosticSink or by another budget — outranks it and
+	// nothing is recorded; such an earlier stop does not by itself end reading
+	// a body already returned.
 	MaxTotalDecodedBytes int64
 
 	// MaxDiagnosticCount bounds how many diagnostics one parse records and

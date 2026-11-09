@@ -47,6 +47,9 @@ type Entity struct {
 	// unchanged, preserving the exact bytes (e.g. for DKIM body hashes).
 	// originalBody shares the underlying reader with Body, so reading Body
 	// consumes it too: call WriteTo before reading Body to keep this working.
+	// Under Parse a leaf's originalBody is its encoded body limiter, so the
+	// verbatim copy is held to Limits.MaxEncodedBodyBytes and not to the
+	// decoded budgets; see limit_body.go.
 	originalBody io.Reader
 	encoding     string
 	charset      string
@@ -124,7 +127,6 @@ const (
 // IsUnknownCharset and IsUnknownEncoding behave exactly as they always have;
 // the session is where a caller finds everything that was observed.
 func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bool, ctx parseContext) (*Entity, error) {
-	originalBody := body
 	var encoding, charset string
 
 	var err error
@@ -136,6 +138,21 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// budgets, which is every entry point but Parse.
 	ct := ctx.contentType(header)
 	mediaType, mediaParams, mediaErr := ct.value, ct.params, ct.err
+
+	// A leaf body — one MultipartReader will not frame into parts — is held to
+	// the body budgets of this parse. Its wire bytes go through the encoded
+	// limiter, which is also what WriteTo copies verbatim, and whatever the
+	// decoders below make of them goes through the guard set up at the end,
+	// which also reports what ended the body whatever the decoders made of it.
+	// A leaf is exactly an entity MultipartReader will return nil for. A framed
+	// multipart body is a raw view of its parts and is left alone: its parts
+	// are leaves of their own. A parse that budgets nothing — every entry point
+	// but Parse — gets body unchanged. See limit_body.go.
+	var leaf *leafBody
+	if !strings.HasPrefix(mediaType, "multipart/") || ct.unframed {
+		body, leaf = ctx.limitBody(body)
+	}
+	originalBody := body
 
 	// The disposition is captured now, as it is, and interpreted only if
 	// something asks: the charset stage below when it has to know whether this
@@ -181,7 +198,7 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 			// input's; see parseContext.watchCTELines, which returns body
 			// unchanged when this parse has no such budget or the encoding has
 			// no line framing.
-			body = ctx.watchCTELines(encoding, body)
+			body = ctx.watchCTELines(encoding, body, leaf.shared())
 			if decoded, encErr := encodingReader(encoding, body); encErr != nil {
 				warning := UnknownEncodingError{encErr}
 				err = warning
@@ -240,6 +257,10 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 			}
 		}
 	}
+
+	// The guard goes over whatever stages ran, including none, so that what
+	// Body delivers is what the decoded budgets count.
+	body = ctx.guardBody(body, leaf)
 
 	e := &Entity{
 		Header:                     header,
@@ -489,6 +510,12 @@ func Read(r io.Reader) (*Entity, error) {
 // type EffectiveContentType reports is still the multipart one the field
 // declares. A diagnostic of SeverityInvalidMetadata was recorded for it. See
 // metadata_repair.go.
+//
+// Under Parse the body of an entity this frames is a raw view of its parts,
+// outside the per-body and total decoded budgets: the parts it yields are held
+// to those budgets one by one, and reading Body directly instead is bounded by
+// Limits.MaxInputBytes alone. A body kept opaque as above is a leaf, held to the
+// body budgets like any other. See Limits.MaxEncodedBodyBytes.
 func (e *Entity) MultipartReader() MultipartReader {
 	if !strings.HasPrefix(e.mediaType, "multipart/") || e.unframed {
 		return nil

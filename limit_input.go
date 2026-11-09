@@ -177,6 +177,12 @@ func (l *inputLimiter) Read(p []byte) (int, error) {
 	// One did, so the input exceeds the budget whatever err says. The byte is
 	// dropped here and never handed on.
 	l.failed = l.session.inputOverflow(l.limit)
+	// The value every later read returns is noted, so that a leaf body can
+	// recognize it by identity when a decoder ends with something else; see
+	// rawBody.note.
+	l.session.mu.Lock()
+	l.session.inputStop = l.failed
+	l.session.mu.Unlock()
 	return 0, l.failed
 }
 

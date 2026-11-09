@@ -501,8 +501,94 @@ returns a session carrying the requested profile and policy.
 five more — `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`,
 `MaxParameterCount` and `MaxParameterSegments`. `ROB-001-004` added the two tree
 budgets, `MaxMIMEDepth` and `MaxPartCount`. `ROB-001-009` added
-`MaxInputBytes`. `ROB-001-008` added `MaxDiagnosticCount`, so **ten** budgets
-are enforced, all of them under `Parse` alone.
+`MaxInputBytes`. `ROB-001-008` added `MaxDiagnosticCount`. `ROB-001-005` added
+the three body budgets, so **thirteen** budgets are enforced, all of them under
+`Parse` alone.
+
+`MaxEncodedBodyBytes`, `MaxDecodedBodyBytes` and `MaxTotalDecodedBytes`
+(`ROB-001-005`, [issue #4](https://github.com/saeroun-ai/emlkit/issues/4)) bound
+**leaf** bodies: entities whose `MultipartReader` returns nil at construction —
+everything not `multipart/*`, `message/*` included, and a multipart whose
+damaged `Content-Type` was repaired with no usable boundary (the `unframed`
+repair; a clean multipart with a missing boundary is still framed and is other
+pending work). A framed container has a raw body too, but that raw view is
+outside the leaf budgets: read directly or copied verbatim by `WriteTo` it is
+bounded by `MaxInputBytes` alone, and iterating it holds each leaf to its own
+budgets, so an oversized part never makes its container overflow before the
+parser can step past it, and no byte is charged twice.
+
+The encoded budget counts a leaf's wire bytes as they are read for that body,
+by its decoders or by `WriteTo`'s verbatim copy. The decoded budgets count the
+bytes `Entity.Body` delivers after every stage that ran, a caller's
+`CharsetReader` included — bytes, not characters, so a cut may fall inside a
+UTF-8 sequence. `N` admits `N`; only a byte that exists past it is an overflow,
+proven by reading exactly that one byte (one wire byte, which no decoder sees,
+or one decoded byte), which is never delivered or counted. A read that brings
+no byte passes `io.EOF`, an error or `(0, nil)` through unchanged.
+
+A per-body overflow is local: one diagnostic for the leaf (`encoded` located at
+the first byte not admitted, `decoded` at the body start, since decoded bytes
+have no input position), a sticky `FatalError` from that `Body`, `ParseStop`
+nil, the header and delivered prefix kept, and the parent iterator draining the
+unread raw tail under `MaxInputBytes` to continue with the next sibling. A body
+reports one local failure, the first proven among the encoded limiter, the
+encoded line monitor and the decoded guard; when encoded and decoded budgets are
+nearly reached together, which is proven first can depend on decoder read-ahead
+and read sizes. A total overflow ends the parse: one diagnostic for the leaf
+that proved it, the session's stop published (a sink refusing it wins), and no
+leaf `Body` delivers further decoded output. That includes one that already
+failed locally: the local error a caller holds stays valid, but a later read of
+that body returns the total stop, with no input read and nothing recorded. A
+byte over both the total and a body's decoded budget is the total's failure. A
+stop published earlier by a sink or another budget outranks a later body
+refusal, which then records nothing; that earlier stop alone does not end
+reading a body already returned. Every failure is enforced past
+`MaxDiagnosticCount`.
+
+Decoders cannot hide what ended a body. Under `Parse` every leaf `Body` is
+guarded, whether or not any body budget is enforced: the guard lets the
+decoders deliver, within the decoded budgets, the output they made of what they
+were given, including output buffered when the failing read happened, and then
+reports the body's local
+failure or, failing that, this parse's `MaxInputBytes` failure when that is
+what the body's input returned, instead of the `io.EOF` or error the decoders
+ended with. The input's failure is recognized by provenance, not by asking an
+error about itself: it is the exact value the input limiter fails with (its own
+stop, or a sink stop published before it that it adopted), either as is for the
+root or joined first by the multipart framing once per enclosing part, at most
+the entity's depth; a join is recognized by its standard-library type before
+its `Unwrap` runs. The guard calls no `Is`, `As` or `Unwrap` of an error a
+caller's source returned and never replaces one, so such an error — one whose
+`Unwrap` cycles or whose `As` panics included — is never asked anything by it;
+a plain body hands it back unchanged as before this item, while a decoder may
+still reword it, as quoted-printable rewords an ordinary read error. A first
+pass that asked every source error `IsFatal` regressed exactly that and was
+corrected in review. Nothing is claimed about what an arbitrary decoder does
+with the errors it is given, and the wider predicate audit stays with
+`ROB-120-007` (#16). This fixes a defect present before
+this item (recorded on [issue #3](https://github.com/saeroun-ai/emlkit/issues/3)):
+a quoted-printable body whose soft line break the input budget cut, such as
+`foo=\r\nbar` with the budget ending after the `\r`, ended with the decoder's ordinary
+"invalid bytes after =" error while `ParseStop` held the `limit.input_bytes`
+stop. Only that failure is restored, so a plain I/O error stays the decoder's
+report, and a stop published for another reason is not looked up. A cut base64 quantum is dropped and a cut quoted-printable escape is
+kept literally, as the tolerant decoder keeps a malformed one; the decoders are
+not rewritten. `Read`, `ReadWithOptions` and `New` are unchanged.
+
+Raw recovery is one-shot, and this item adds no raw API or replay. The header
+and the delivered prefix stay valid. The existing verbatim `WriteTo` path stays
+what it was, a conditional copy: it applies only before `Body` is read and only
+when the output encoding and charset match the entity's, the writer still
+refuses a `Content-Type` it cannot interpret before writing anything
+(`ROB-120-008`) even when `Parse` healed the entity's view of it, and a
+`CharsetReader` that reads eagerly may already have consumed raw input. Where
+it applies to a leaf it is held to the encoded and input budgets and not to the
+decoded ones. Wire bytes a body consumed, its proof byte, decoder read-ahead and
+a tail the parent drained are not replayed; replay and spooling are #41. A
+caller's `CharsetReader` is bounded only from outside, by what it reads and
+delivers; its allocation, CPU and blocking are not (`ROB-080-008`,
+`ROB-001-006`). With every default, a single body larger than 128 MiB now meets
+`MaxEncodedBodyBytes` before `MaxInputBytes`.
 
 `MaxDiagnosticCount` (`ROB-001-008`, [issue #8](https://github.com/saeroun-ai/emlkit/issues/8))
 bounds diagnostics, not parsing. Every request the session would record takes
@@ -875,7 +961,7 @@ Each applicable test asserts:
 | ROB-001-002 | Done | Apply message and per-entity header byte limits, including child part headers. | Top/child/deep child boundary tests. |
 | ROB-001-003 | Done | Limit header fields, physical line bytes, logical field bytes, parameters, and RFC 2231 segments. | `limit-1/limit/limit+1` tests. |
 | ROB-001-004 | Done | Limit multipart MIME depth and total part count without recursive stack growth; nested-message depth is deferred to ROB-090-002. | Deep multipart and single-/multi-container wide generated messages. |
-| ROB-001-005 | Planned | Limit encoded/decoded body bytes and total decoding expansion. | Streaming overflow with recoverable raw body. |
+| ROB-001-005 | Done | Limit encoded/decoded body bytes and total decoding expansion under `Parse`: per-leaf `MaxEncodedBodyBytes`/`MaxDecodedBodyBytes` (framed containers are raw views outside them) and the shared `MaxTotalDecodedBytes`, exact at `N` with one undelivered proof byte. | Streaming overflow at `N-1/N/N+1` for identity, base64, quoted-printable, charset and custom expanding/masking/eager decoders, across source and destination chunk sizes: the header and the delivered prefix stay valid, and output decoders buffered from encoded-admitted wire bytes is still delivered within the decoded budgets; a per-body overflow ends that body alone and the parent can drain its unread raw tail under `MaxInputBytes` to reach later and shallower siblings unless another limit or a sink stops it; a total overflow ends the parse. Decoders cannot mask the body's failure or this parse's `MaxInputBytes` failure, recognized by provenance without calling `Is`/`As`/`Unwrap` on source errors, with or without body budgets (fixes the issue #3 quoted-printable masking); the guard never asks or replaces a source's own error, cyclic or panicking ones included, though a decoder may still reword an ordinary one as before. "Recoverable raw body" is the reviewed one-shot scope: no raw API or replay is added; the existing conditional verbatim `WriteTo` copy, before `Body` is read and where the writer accepts the header, is held to the encoded and input budgets only; consumed, proof, read-ahead and drained raw bytes are not replayed (#41, not done here). |
 | ROB-001-006 | Planned | Add context cancellation and deadline checks to long scans/decoders. | Cancellation latency and partial-result tests. |
 | ROB-001-007 | Planned | Detect repeated no-progress reads while allowing legal transient behavior. | Adversarial reader tests. |
 | ROB-001-008 | Done | Cap diagnostics under `Parse` with `MaxDiagnosticCount`, and emit one terminal `limit.diagnostic_count` entry in the last slot (`N-1` ordinary, request `N` replaced, later requests omitted without copy, retention or sink call) while parsing continues. | Diagnostic storm through public `Parse`: every malformed part healed and returned under the cap; `0`/default/`-1`/`1`/`N-1`/`N`/`N+1`/`math.MaxInt64`; retain/no-retain with sink none/ok/refusing; later input budget and sink stops after the cap; concurrent records, separate sessions and reentrant inspection. |
@@ -1679,3 +1765,5 @@ Codex reviewed `ROB-120-008` for [issue #58](https://github.com/saeroun-ai/emlki
 Codex reviewed `ROB-001-009` for [issue #3](https://github.com/saeroun-ai/emlkit/issues/3): independent QA passes 2,160 plain-input boundary/source-error cases, 288 multipart/skip/Walk/mail cases and 200 decoder/charset cases. A generated 256 MiB stream verifies the default without materializing the input: at most N admitted bytes plus one proof byte. A fresh full race suite, build, formatting and whitespace checks pass after review corrections; the executor also passed the full standard suite, 386 checks and scoped input fuzzing (90 s plus 45 s after review). Review corrected read-ahead, proof-byte, stop identity and legacy-header-cap documentation and added the prefetch regression. Fuzzing independently reproduced preexisting corrupt-Base64 chunk dependence on clean `6fb8b93`; issue #34 tracks it, and the scoped oracle does not claim malformed decoder chunk invariance. Plain vet retains its documented 13 composite and one WriteTo-signature warnings; the other analyzers pass. Both delegation permission-denial arrays were empty. Unread tails, cancellation, no-progress handling and body limits remain separate work.
 
 Codex reviewed `ROB-001-008` for [issue #8](https://github.com/saeroun-ai/emlkit/issues/8): the independent public cap matrix passes 196 cases; input-after-cap, terminal sink refusal and Strict local failures retain their own errors and preserve valid siblings. A 10,000-part malformed-parameter storm returns every body while the default cap delivers exactly 1,000 callbacks with no retained diagnostics in sink-only mode. The final full race suite, build, formatting and whitespace checks pass on Go 1.26.10 linux/amd64; the executor also passed the full standard suite, focused 386 checks and all prior input/healing/opaque probes. Review corrected the terminal Action so it does not promise continuation after an independent failure, qualified diagnostic completeness claims, verified FatalError keeps its original diagnostic, and fixed the enforced-budget test map and a test failure-path index. MaxDiagnosticCount reserves its final slot and does not stop parsing; producer-side formatting can still cost work after recording is capped. Both delegation permission-denial arrays were empty. Baseline vet categories remain unchanged.
+
+Codex reviewed ROB-001-005 for issue #4. Independent public QA passed 168 body-budget cases, 1,080 encoded/charset cases over source and destination read sizes, and six generated-stream default boundary checks at 128/128/512 MiB. Local-limit sibling recovery and the local-then-total stop regression pass. Prior input 2,160 + multipart 288 + decoder 200 cases, diagnostic matrix 196 and 10,000-part storm, heal 240, opaque 288 and bounded-mail 36 all pass on the final functional code. Full non-short race passed in all five packages on Go 1.26.10 linux/amd64, as did build, formatting, whitespace and non-baseline vet checks. Codex input fuzzing passed 30 s / 4,253,656 executions with the scoped oracle; executor body fuzzing and 386 checks also passed. Review fixed dropped global-stop precedence for a previously failed body and restored input-limit errors masked by QP (also reproduced on clean c484941). A new arbitrary errors.As call in the guard was rejected after process-isolated source-cycle and As-panic regressions; the final implementation uses the actual input-limiter failure identity and only bounded stdlib-join layers. Both independent hostile-source probes now return the same source error normally. The wider predicate audit remains #16. Only ROB-001-005 is completed; ROB-070-010, ROB-080-008, cancellation/no-progress, and raw replay remain separate. Raw WriteTo stays conditional and one-shot; decoded limits count bytes and may cut UTF-8, container raw views are governed by MaxInputBytes, and per-body refusals permit later siblings within other budgets. All delegation permission-denial arrays were empty. Plain vet retains the documented composites and WriteTo-signature warnings. Final review also corrected source-error wording, prefix retention under interacting budgets and branch-neutral diagnostic actions; the final wording-only update passed focused tests and formatting without repeating unrelated full fuzz/race runs.

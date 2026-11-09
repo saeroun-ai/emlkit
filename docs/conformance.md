@@ -211,8 +211,8 @@ These are deliberate boundaries, each with a reason.
   the check is a streaming monitor that holds no bytes and refuses only once a
   terminator **proves** the line it ended was over budget, so an encoded body
   that never terminates a line costs fixed memory and is not refused. What bounds
-  opaque bodies is `MaxEncodedBodyBytes` / `MaxDecodedBodyBytes`, which a later
-  item enforces. ([`limit_line_bytes.go`](../limit_line_bytes.go) · `cteLineMonitor`)
+  opaque bodies is `MaxEncodedBodyBytes` / `MaxDecodedBodyBytes`.
+  ([`limit_line_bytes.go`](../limit_line_bytes.go) · `cteLineMonitor`)
 - **Parameter lists are bounded, and losing them does not cost the entity.**
   `MaxParameterCount` (256) bounds the raw semicolon-separated parameter
   occurrences of one `Content-Type` or `Content-Disposition`, and
@@ -332,11 +332,36 @@ These are deliberate boundaries, each with a reason.
   `math.MaxInt64` cannot overflow. Every "records one diagnostic" statement in
   this document holds while the budget has a slot left.
   ([`limit_diagnostics.go`](../limit_diagnostics.go))
+- **Leaf bodies are budgeted as they stream.** `MaxEncodedBodyBytes` (128 MiB)
+  bounds the wire bytes of one leaf body — an entity whose `MultipartReader` is
+  nil — as its decoders or the verbatim `WriteTo` copy read them;
+  `MaxDecodedBodyBytes` (128 MiB) bounds what its `Body` delivers after every
+  decoding stage, in bytes, so a cut may split a UTF-8 character; and
+  `MaxTotalDecodedBytes` (512 MiB) bounds what every leaf `Body` delivers
+  together. Each permits at most `N`; reaching `N` is not an overflow, and one
+  proof byte past it is read, never delivered. A per-body overflow records one
+  diagnostic and ends that body with a `FatalError`; the header and the
+  delivered prefix stay valid, output the decoders buffered from admitted wire
+  bytes is still delivered within the decoded budgets, and the parent can drain
+  the unread raw tail to the next part unless another limit or a sink stops it.
+  The total ends the parse and stops all further decoded output, earlier bodies
+  included. A framed container's raw body is outside these budgets and bounded
+  by `MaxInputBytes`. Whether or not any is enforced, the body's own failure,
+  or this parse's `MaxInputBytes` failure when that is what the body's input
+  returned, is reported after the decoders end, instead of their `io.EOF` or
+  own error. That input failure is recognized by provenance — the exact value
+  the input limiter fails with, joined only by the multipart framing — and the
+  guard calls no `Is`, `As` or `Unwrap` of a source's own error and never
+  replaces one; a decoder may still reword an ordinary source error, as it
+  always has. Nothing is replayed (#41), and no raw API is added: the existing
+  verbatim `WriteTo` path stays a conditional one-shot copy.
+  ([`limit_body.go`](../limit_body.go))
 - **The remaining budgets in `Limits` are still resolved but not consulted.**
-  Everything outside the ten enforced ones — `MaxInputBytes`, `MaxHeaderBytes`,
-  `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`, `MaxParameterCount`,
-  `MaxParameterSegments`, `MaxMIMEDepth`, `MaxPartCount` and
-  `MaxDiagnosticCount` — is validated and
+  Everything outside the thirteen enforced ones — `MaxInputBytes`,
+  `MaxHeaderBytes`, `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`,
+  `MaxParameterCount`, `MaxParameterSegments`, `MaxMIMEDepth`, `MaxPartCount`,
+  `MaxDiagnosticCount`, `MaxEncodedBodyBytes`, `MaxDecodedBodyBytes` and
+  `MaxTotalDecodedBytes` — is validated and
   reported by `ParseSession.Limits`, and their `limit.*` codes are reserved but
   not yet emitted. ([`limits.go`](../limits.go))
 
