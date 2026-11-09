@@ -277,6 +277,17 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 // transfer decoded, and a charset applies only to text/*. A header that meets
 // the requirement above therefore produces neither of the decoding warnings
 // that New can return.
+//
+// The body is generated lazily, when Body is first read or the entity is
+// written, so a header or a part the writer refuses — a Content-Type that does
+// not parse (ROB-120-008) — is reported then, not here, and every later read of
+// Body reports the same error. What has been produced by then depends on whose
+// header it is. The entity's own header is refused before anything: the first
+// read of Body yields no bytes, and WriteTo writes nothing. A part's header is
+// found only when the writer reaches that part. Body carries the parts alone —
+// never the entity's own header — so it yields the bytes of the parts before
+// the refused one, then the error. WriteTo has by then written the entity's
+// header as well as those parts to w. Nothing already produced is withdrawn.
 func NewMultipart(header Header, parts []*Entity) (*Entity, error) {
 	r := &multipartBody{
 		header: header,
@@ -534,6 +545,19 @@ func (e *Entity) writeBodyTo(w *Writer) error {
 }
 
 // WriteTo writes this entity's header and body to w.
+//
+// It writes through CreateWriter, so an entity whose own Content-Type does not
+// parse is refused with an error before anything is written (ROB-120-008). A
+// part of a body built by NewMultipart is written through CreatePart once the
+// writer reaches it, so a part whose Content-Type does not parse fails WriteTo
+// after this entity's header and the parts before it are already on w; they
+// are not withdrawn. The guarantee of no output covers this entity's own
+// header, not its parts. The refusal of the entity's own header
+// includes an entity from Parse whose damaged Content-Type the parse repaired
+// for interpretation: the repair is of the entity's view, never of its header,
+// which keeps the input's bytes, and the writer does not serialize a field it
+// cannot interpret. Replaying such an entity's raw bytes is not what WriteTo
+// does; raw replay, including of a body already consumed, is #41's.
 func (e *Entity) WriteTo(w io.Writer) error {
 	ew, err := CreateWriter(w, e.Header)
 	if err != nil {

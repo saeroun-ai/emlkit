@@ -113,20 +113,39 @@ type multipartBody struct {
 	r *io.PipeReader
 	w *Writer
 
+	// err is the sticky failure of setting the body up: the writer for this
+	// header could not be created, so no worker was started and no pipe was
+	// published. Every Read reports it again.
+	err error
+
 	i int
 }
 
 // Read implements io.Reader.
+//
+// The body is produced by a worker goroutine writing the parts into a pipe.
+// The pipe is published only once the writer for the header exists: if that
+// fails — a Content-Type the writer refuses (ROB-120-008), an unhandled charset
+// — the error is kept and returned by this and every later Read, rather than
+// leaving a pipe that no worker will ever write to, on which a second Read
+// would block for ever. A failure while the worker writes the parts — a part
+// the writer refuses — closes the pipe with that error, which every later Read
+// then reports, and the worker exits.
 func (m *multipartBody) Read(p []byte) (n int, err error) {
+	if m.err != nil {
+		return 0, m.err
+	}
 	if m.r == nil {
 		r, w := io.Pipe()
-		m.r = r
 
-		var err error
-		m.w, err = createWriter(w, &m.header)
+		mw, err := createWriter(w, &m.header)
 		if err != nil {
+			r.Close()
+			w.Close()
+			m.err = err
 			return 0, err
 		}
+		m.r, m.w = r, mw
 
 		// Prevent calls to NextPart to succeed
 		m.i = len(m.parts)

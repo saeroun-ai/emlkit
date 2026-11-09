@@ -1015,14 +1015,15 @@ iterator then failed with an empty boundary. The contract is:
   `Header.ContentType`/`ContentDisposition`, and `mail` accessors built on them
   such as `AttachmentHeader.Filename`, still report the legacy failure for the
   unchanged raw field. Filename policy is `ROB-050-009`.
-- **Known defect outside this item.** `Entity.WriteTo` panics ("assignment to
-  entry in nil map") for any entity whose raw multipart `Content-Type` fails the
-  legacy parse. The writer reparses the header with `Header.ContentType` and
-  writes into the nil map it gets back. This happens through `Read` as well as
-  `Parse` and predates this item. It is registered as
-  [issue #58](https://github.com/saeroun-ai/emlkit/issues/58) (proposed
-  `ROB-120-008`) for its own reviewed execution after this item, and is not
-  part of it; the tests here check raw header and body bytes instead.
+- **Writer defect found during this item, fixed separately.** While this item
+  was in review, `Entity.WriteTo` panicked ("assignment to entry in nil map")
+  for any entity whose raw multipart `Content-Type` fails the legacy parse,
+  through `Read` as well as `Parse`. The defect predated this item and was not
+  part of it, so the tests here check raw header and body bytes instead. It was
+  fixed as `ROB-120-008` ([issue #58](https://github.com/saeroun-ai/emlkit/issues/58)):
+  `WriteTo` now refuses such an entity with an explicit error before writing
+  anything, rather than panicking. That refusal is a documented limitation and
+  not raw replay (#41); see the `ROB-120-008` contract.
 - **Evidence.**
   - `metadata_repair_test.go`:
     - a 22-row invalid-tail matrix: broken item before/after the boundary,
@@ -1284,6 +1285,82 @@ contract is:
 | ROB-120-005 | Planned | Never perform network fetches for Content-Location/external-body while parsing. | Hostile URI tests. |
 | ROB-120-006 | Planned | Preserve cryptographic raw representations and clearly mark repaired signed content as unverifiable. | DKIM/S-MIME/PGP invariants. |
 | ROB-120-007 | Planned | Make every parser-wide error classification cycle-safe and non-forgeable over input-derived error graphs. | Hostile-graph tests at each predicate: no hang, no panic, no nil dereference, no misclassification. |
+| ROB-120-008 | Done | Make writer generation and serialization refuse a syntactically unparseable Content-Type with an explicit error, never a panic, an invented media type, parameter map or boundary, or silent metadata loss ([issue #58](https://github.com/saeroun-ai/emlkit/issues/58)). | Lowercase/uppercase malformed tail, duplicate boundary, malformed text/plain and missing subtype, at the root and as a part, through `CreateWriter`, `CreatePart`/`CreatePartWithBuffer`, `Parse`→`WriteTo` and `NewMultipart` Body reads: no panic; no output from the refused entity or part before its header is validated (output of its parent and of earlier siblings may already have been written and is not withdrawn); a good part after a refused one, deterministic repeated reads with no blocked worker; valid boundary generation, charset/encoding policy and copy-on-write unchanged. |
+
+`ROB-120-008` ([issue #58](https://github.com/saeroun-ai/emlkit/issues/58))
+closes a writer defect that predates the robustness work (QA baseline
+`76fd211`). `createWriter` discarded the `Header.ContentType` error. A
+lowercase malformed multipart, such as `multipart/mixed; boundary=B; broken`,
+then wrote a generated boundary into the nil parameter map and panicked. An
+uppercase one, or a malformed `text/plain`, was written as whatever the raw
+string's prefix suggested. The QA matrix of 20 cases (five values × four paths)
+found 12 panics and 6 silent successes. The contract is:
+
+- **Refusal, not repair.** Every generation and serialization path —
+  `CreateWriter`, `Writer.CreatePart`/`CreatePartWithBuffer`, `Entity.WriteTo`
+  and `NewMultipart`'s lazily generated `Body` — refuses a `Content-Type`
+  that does not parse. The error names the field and its value and wraps the
+  parse error. Nothing is guessed: no media type is read off the raw string,
+  and no parameter map or boundary is invented. A missing `Content-Type` is
+  still text/plain. The well-formed paths are unchanged: boundary generation
+  for a missing or invalid boundary in the written header, the utf-8/us-ascii
+  charset policy, transfer encoding, and copy-on-write of the caller's header.
+- **Before output.** `CreateWriter` refuses before writing anything.
+  `CreatePart`/`CreatePartWithBuffer` refuse before that part's delimiter,
+  header or buffer use, and leave the writer as it was: the parts already
+  written stand, a later part may still be created, and a refused first part
+  does not commit `Close` to writing a closing delimiter. Undoing output already
+  written is not promised.
+- **`NewMultipart`.** Construction is unchanged. The refusal is reported when
+  `Body` is read or the entity is written. `multipartBody.Read` used to publish
+  its pipe before creating the writer, so after a refusal a second read blocked
+  for ever. The pipe is now published only once the writer exists, and a setup
+  failure is sticky: every read returns the same error. A part the writer
+  refuses fails the body after the parts before it; every later read reports
+  that error, and the worker goroutine exits. Only a refusal of the entity's
+  own header produces no output. `Body` carries the parts alone, never the
+  entity's own header, so for a refused part it has already yielded the bytes
+  of the parts before it. `WriteTo` has by then written the entity's header as
+  well as those parts to its destination. Those bytes are not withdrawn.
+- **Parsed entities.** `Parse` still repairs a damaged `Content-Type` for
+  interpretation (`ROB-050-001`) and still keeps the raw header byte for byte.
+  Such an entity, and one from `Read` with the same header, is refused by
+  `WriteTo` before any output, because the refused header is its own. That is
+  a documented limitation, not raw
+  replay; replay, especially of a consumed body, is #41's.
+- **Not in scope.** Media types `mime.ParseMediaType` accepts that RFC 2045
+  would not (a lone token), header injection (`ROB-120-003`), disposition
+  canonicalization, writer transactionality, and other writer lifecycle
+  issues, such as a worker blocked by a reader that stops early without
+  `Close`.
+- **Evidence.** `writer_malformed_test.go`:
+  - the five-value matrix through `CreateWriter`, `CreatePart` and
+    `CreatePartWithBuffer` (no panic, no output, caller header and buffer
+    intact, the part before and a good part after kept, no closing delimiter
+    after a refused first part);
+  - `Parse`→`WriteTo` and `Read`→`WriteTo` (refusal with no output, header
+    unchanged);
+  - a `NewMultipart` with a malformed header: two reads under a deadline
+    return the same error, and no worker is started (this test blocks against
+    the previous `multipart.go`);
+  - the writer setup failure that predates this item, on the same path: a
+    well-formed `text/plain; charset=unavailable` passed to `NewMultipart`
+    yields a usable entity with the unknown-charset warning, and three reads of
+    its body each return the unhandled-charset refusal (this also blocks
+    against the previous `multipart.go`);
+  - a `NewMultipart` with a malformed child between good ones: the part
+    before it is delivered, the same error on repeat, and the worker exits;
+  - unchanged absent-type, generated-boundary, uppercase well-formed and
+    charset behavior.
+
+  Reads run on a helper goroutine under a 5-second deadline, and a panic on
+  that goroutine is recovered and reported as a test failure. Worker exit is
+  observed by counting goroutines that hold the worker function's own stack
+  frame, not the global goroutine count, and a companion test checks that a
+  live worker is counted. A panic on the worker goroutine itself cannot be
+  recovered by a test; it aborts the test binary, which still fails the run.
+  The QA programs `/tmp/emlkit-writer-paths-qa.go` (`cases=20 failures=0`) and
+  `/tmp/emlkit-writer-repeat-qa.go` (`repeat_read_failures=0`) pass.
 
 `ROB-120-007` owns two parser-wide issues found while reviewing `ROB-001-002`,
 where they were fixed for the header byte budget alone and left standing
@@ -1411,6 +1488,16 @@ does not claim #17, any other producer's profile behavior, or parity with any
 reference engine. It does not advance, start or complete `ROB-050-002`
 through `ROB-050-010`, `ROB-060-002` or any other item.
 
+**Exception — `ROB-120-008`.** It was added to the ledger before
+implementation and taken ahead of `ROB-010` through `ROB-110` and of
+`ROB-120-001` through `ROB-120-007`, at the user's request, after
+`ROB-050-001` was reviewed, as an independent fix of an existing writer panic
+([issue #58](https://github.com/saeroun-ai/emlkit/issues/58)). The defect
+reproduces on the pre-#22 baseline `76fd211`. Its fix depends on nothing those
+items introduce: it makes the writer stop ignoring an error it was already
+given. It does not advance, start or complete raw replay (#41, `ROB-110`),
+header injection (`ROB-120-003`), any other `ROB-120` item, or any other item.
+
 ## 9. Per-item implementation protocol
 
 Each Claude Code execution receives exactly one ledger ID and must:
@@ -1471,3 +1558,5 @@ Codex reviewed `ROB-040-003` for [issue #9](https://github.com/saeroun-ai/emlkit
 Codex reviewed `ROB-100-007` for [issue #15](https://github.com/saeroun-ai/emlkit/issues/15), independently passed 36 root/child/nested/chunked CP949 classification-and-body scenarios, and found and returned a same-entity diagnostic-callback deadlock for correction. After the cache-publication/delivery split, the independent reentry probe, callback-stop/concurrency regressions and full fresh race suite pass. Build, standard tests, formatting and whitespace checks pass; vet passes with only the pre-existing `composites` and `stdmethods` categories excluded. The construction-snapshot mutation change for `New`/`Read` as well as `Parse` was reviewed as deliberate: edited headers do not silently change the interpretation of an already-created decoder. Normal vet retains the documented baseline warnings.
 
 Codex reviewed `ROB-050-001` for [issue #22](https://github.com/saeroun-ai/emlkit/issues/22) and returned three gaps for correction: an ambiguous multipart losing later siblings, a known Strict refusal appearing successful through `Walk`, and empty-only parameter separators escaping repair. The corrected implementation independently passes 240 root/nested/chunked tolerant/forensic recovery scenarios, 288 opaque-body/Walk/mail scenarios with exact bytes and following siblings, the previous 36 attachment/charset scenarios, and the reentrant accessor probe. A fresh full race suite, build, formatting, whitespace checks and vet with the two documented baseline categories excluded pass. The executor also passed the full standard suite and the final 60-second focused fuzz run; no permission denials occurred. Nine identical synthetic inputs were actually exercised with Python 3.14.10 and Mime4j 0.8.15; conflicting boundaries intentionally differ, and broad reference parity is not claimed. `ROB-050-002` and the other recovery items remain Planned. The writer panic found during this review is tracked separately in #58.
+
+Codex reviewed `ROB-120-008` for [issue #58](https://github.com/saeroun-ai/emlkit/issues/58): the independent writer matrix passes 28 cases (the initial 20 had 12 panics and six silent successes), and repeated reads after malformed-header or unsupported-charset setup failures return without blocking. The 240 healing and 288 opaque-body/Walk/mail scenarios still pass. A fresh full race suite, build, formatting and whitespace checks pass, as do the non-baseline vet analyzers; ordinary vet retains the documented composites and WriteTo-signature warnings. The executor passed the full standard suite. Review corrected the worker-exit test to observe its own worker, checked its positive control and panic handling, and qualified output guarantees for the entity versus descendants and for Body versus WriteTo. All delegation permission-denial arrays were empty. Early consumer abandonment/Close propagation remains a lifecycle checkpoint in #6, and raw replay remains #41.
