@@ -137,6 +137,19 @@ one. Every entry point's header reader reports the first read failure of a
 header block as itself, with the fields read whole before it, rather than as a
 malformed line.
 
+An empty input, and complete header fields ended by `io.EOF` rather than an
+empty line, are framed the same under every profile and compatibility policy:
+the entity has exactly the fields read (raw bytes and order kept) and an empty
+body, or, after an empty line, whatever follows it, blank lines included. That
+framing adds no error or diagnostic of its own, and nothing requires a `From`,
+`Date` or `MIME-Version`, not even `ProfileStrict`; what the fields declare
+(an unknown encoding or charset, malformed parameters) is interpreted as usual.
+A header-only multipart with a usable boundary has no part: `NextPart` returns
+an error wrapping `io.EOF`, then `io.EOF`. `WriteTo` is serialization, not a
+replay of the input: it adds `Mime-Version: 1.0` to a header that has none and
+always writes the empty line, so `""` is written as
+`"Mime-Version: 1.0\r\n\r\n"`.
+
 Errors and diagnostics answer different questions, so read both: an error says
 whether a scope could continue, the session says what was observed. `Parse`
 enforces **fifteen** budgets today — `MaxInputBytes`, `MaxHeaderBytes`,

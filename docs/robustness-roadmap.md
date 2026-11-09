@@ -1285,7 +1285,7 @@ empty permission-denial arrays.
 
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
-| ROB-010-001 | Planned | Treat empty input and header-only input deterministically. | All profiles and round-trip tests. |
+| ROB-010-001 | Done | Treat empty input and header-only input deterministically: an empty input, an empty line alone, and complete CRLF fields ended by `io.EOF` or by the empty line are framed identically under every profile and compatibility as a usable entity with exactly those fields and an empty body or the bytes after the empty line, the framing adding no error or diagnostic of its own while the fields' MIME metadata is interpreted as usual; documented and pinned, no parser change. See "ROB-010-001 — empty and header-only input" below. | All profiles and round-trip tests; see below. |
 | ROB-010-002 | Planned | Handle CRLF, bare LF, bare CR, mixed endings, and a missing final newline. | Chunk boundary matrix. |
 | ROB-010-003 | Planned | Detect and preserve BOMs without letting them corrupt a field name. | UTF-8/16/32 BOM fixtures. |
 | ROB-010-004 | Planned | Optionally recognize a leading mbox envelope line and preserve it separately. | Valid/invalid/mid-header `From ` fixtures. |
@@ -1433,6 +1433,115 @@ Evidence: `/tmp/emlkit-ioerror-verification.json` and `.out`, the per-step logs,
 128 tasks and a deadline; observed peak memory was 1,433,858,048 bytes. Jobs
 ran sequentially, with finite sources and short subprocess deadlines for hangs.
 Every Claude invocation for this ID returned an empty permission-denial array.
+
+#### ROB-010-001 — empty and header-only input (Done)
+
+Status: Done for [issue #19](https://github.com/saeroun-ai/emlkit/issues/19),
+after `ROB-010-006`. The audit found the behavior already deterministic, so
+this item documents and pins it; no parser or writer code changed. Claude ran
+no tests; Codex reviewed the actual diff and completed the bounded QA below.
+
+**Contract.** Under `Parse`, `ParseContext`, `Read`/`ReadWithOptions`,
+`textproto.ReadHeader(Limits)` and `mail.Reader` alike:
+
+- An empty input, an input that is only the empty line, and complete
+  CRLF-terminated fields (folded ones included) ended by `io.EOF` give a usable
+  entity — `textproto`: a header — with exactly those fields, raw bytes and
+  order as read. A block `io.EOF` ended is the same block with the empty line
+  appended; the body is empty. The framing adds no error and no diagnostic of
+  its own: for the fixtures here, which declare nothing to interpret, that is a
+  nil error and an empty session. What fields do declare is interpreted as for
+  any message — an unknown transfer encoding or charset is still a warning with
+  its diagnostic, a multipart whose repair kept no usable boundary is still an
+  opaque leaf (`ROB-050-001`), `ProfileStrict` still refuses such a field — and
+  budgets and cancellation keep their rules.
+- One empty line ends the block; every byte after it, blank lines included,
+  is body (`"\r\n\r\n"` has body `"\r\n"`). The body begins right after the
+  block, at the input's length when `io.EOF` ended it.
+- Nothing requires a field. No profile applies RFC 5322's minimum field
+  counts; `ProfileStrict` does not refuse a message without `From`, `Date` or
+  `MIME-Version`.
+- A block only `io.EOF` could end is still being read at that `io.EOF`: an
+  input error, a cancellation or a no-progress stop arriving there instead is
+  reported by `Parse` with no entity, the identical value, as for any header
+  (`ROB-010-006`, `ROB-001-006`, `ROB-001-007`). After an empty line it is
+  usually reported by the body after every byte before it; a cancellation seen
+  by the read that delivered the header's last bytes is instead returned by
+  `ParseContext` with the entity, whose body then delivers a prefix.
+- `MaxHeaderBytes` counts a block `io.EOF` ended as its fields alone and an
+  empty line as part of the block; `MaxHeaderCount` charges the empty line
+  nothing; `MaxInputBytes` of exactly the input's length reads it whole.
+- A multipart with a usable boundary (the fixtures: `boundary=B`) whose body
+  is empty has no part: the first `NextPart` returns an error wrapping `io.EOF`
+  (`"multipart: NextPart: EOF"`), later ones `io.EOF`; `Walk` ends with that
+  error after the root; `mail.Reader.NextPart` returns it with no part, then
+  `io.EOF`. Pinned as is; the empty-container policy is `ROB-060-009`'s.
+- A message that is not multipart is its own one part to `mail.Reader`,
+  classified as usual: inline `text/plain` with no Content-Type or
+  Content-Disposition, an attachment for a non-text type or an `attachment`
+  disposition.
+
+**Serialization is not replay.** `Entity.WriteTo` adds `Mime-Version: 1.0` at
+the top of a header without a MIME-Version, always writes the empty line, and
+otherwise keeps its existing writer rules (`CreateWriter` may set a multipart
+boundary or drop a multipart's `Content-Transfer-Encoding`, and refuses what it
+cannot interpret). For the fixtures here — ordinary unmodified fields — the
+fields are written raw and in order: `""` and `"\r\n"` become
+`"Mime-Version: 1.0\r\n\r\n"`, and fields `io.EOF` ended gain that line;
+parsing that output gives the same body and the written fields, and writing it
+again gives the same bytes. `WriteHeader` likewise always writes the empty
+line. Reconstructing the input's own bytes is #41's; `WriteTo` keeps the
+one-shot body contract.
+
+**Not changed, not claimed.** Bare CR, bare LF, mixed endings and an
+unterminated last line (`ROB-010-002`); a malformed, colonless or
+whitespace-only first line and partial root-header healing (`ROB-020`);
+completion state (#10); raw replay (#41); the overall profile and compatibility
+policy (#17). Fixtures here use CRLF only.
+
+**Tests verified by Codex.** `framing_empty_test.go`: ten literal
+fixtures over every profile and compatibility, default and disabled limits,
+reads of 1/7/4096 bytes, `io.EOF` with or after the data, every two-read split;
+fields, raw bytes, order, body, body offset, empty session, multipart and
+`Walk` outcome, each from a fresh parse; `WriteTo` of a fresh entity,
+reparse and second-write stability; legacy `Read`/`ReadWithOptions`; injected
+I/O error at the end, cancellation before and at the `io.EOF` read, 99 and
+100 empty reads at the end, exact and one-over budgets; and header-only
+fields whose interpretation is unchanged — unknown encoding and charset
+warnings, a conflicting-boundary multipart repaired to an opaque leaf or
+refused under Strict — with and without the empty line.
+`textproto/header_empty_test.go`: `ReadHeader` and exact `ReadHeaderLimits`
+over the same reads and splits, bytes left in the reader, `WriteHeader` and
+reread stability. `mail/reader_empty_test.go`: `CreateReader` and
+`NewReader` over `Parse` under every profile, and the usual inline/attachment
+classification of header-only parts.
+
+**Codex review and verification.** Review narrowed the initial documentation's
+blanket success and byte-replay claims: MIME warnings/refusals, cancellation
+seen while the header is read, unusable-boundary fallback, attachment
+classification and writer transformations retain their existing meanings. The
+new tests cover those exceptions without changing product code.
+
+Final bounded verification passed all nine steps: uncached tests and race in
+all six packages, build, filtered vet (the documented composites and stdmethods
+warnings remain), GOARCH=386, formatting and whitespace. Independent QA passed
+1,872 Parse/ParseContext combinations, 3,336 header splits and 78 legacy
+combinations (24,399 assertions), plus 265 metadata/classification/writer
+exception checks. Evidence: `/tmp/emlkit-empty-verification.json` and `.out`.
+All work used one bounded service at a time, 1,536 MiB RAM, no swap, two CPU
+cores, 128 tasks and a deadline; final service `emlkit-bounded-6800a930a6`.
+Both Claude calls returned empty permission-denial arrays.
+
+A preceding full run failed the existing `TestHeader_commentScanAllocationIsConstant`
+once (5,592 bytes against 4,096). The same unchanged test also failed on the
+older `92eaec1` baseline (5,736 bytes, isolated 30-run check); current isolated
+30 and current/baseline full-mail 20-run checks passed. This is a confirmed
+pre-existing intermittent allocation-measurement failure, not evidence of a
+product regression from these test/comment-only changes. The failed run is
+preserved in `/tmp/emlkit-empty-final-failure.out`, comparison evidence in
+`/tmp/emlkit-empty-allocation-investigation.json` and `.out`, and stabilization
+is tracked separately in [issue #59](https://github.com/saeroun-ai/emlkit/issues/59).
+The passing final run does not claim that intermittent failure has been fixed.
 
 ### ROB-020 — Raw header framing and preservation
 
@@ -2239,6 +2348,15 @@ EOF, header-only and truncated-input recovery work a reliable basis. This is
 the remaining item of #7, handled in its own execution and review; no partial
 header healing, completion-state API or other framing item is completed by
 this ordering decision.
+
+**Reviewed dependency note — `ROB-010-001` and #17.** Issue #19 references
+[#17](https://github.com/saeroun-ai/emlkit/issues/17) (activating profiles and
+compatibility policies). This item needs no new profile producer: empty and
+header-only input is accepted by the existing common path, every `Profile` and
+`Compatibility` value presently frames it the same (metadata producers keep
+their own documented profile behavior), and its round-trip
+contract is the existing serializer's. It documents and pins that; it does not
+claim #17 or any part of it is finished.
 
 **Exception — `ROB-100-006`.** It was taken ahead of `ROB-010` through `ROB-090`
 at the user's request, as an independent compatibility fix

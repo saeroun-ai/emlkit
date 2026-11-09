@@ -7,6 +7,14 @@ import "strconv"
 //
 // Profiles never change the result for conformant input: a well-formed message
 // parses identically under every profile.
+//
+// The constants below describe what each profile is for; what each does today
+// is what its producers implement, documented on Parse. In particular no
+// profile validates RFC 5322's required fields, and none reconstructs the
+// input's original bytes: a header ended by io.EOF, or one with no fields or
+// no body, is framed the same under every profile and every Compatibility,
+// while what its fields say is interpreted as usual, and Entity.WriteTo
+// serializes such an input rather than replaying it (ROB-010-001).
 type Profile uint8
 
 const (

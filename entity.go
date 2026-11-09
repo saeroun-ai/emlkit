@@ -707,6 +707,16 @@ func (e *Entity) writeBodyTo(w *Writer) error {
 // cannot interpret. Replaying such an entity's raw bytes is not what WriteTo
 // does; raw replay, including of a body already consumed, is #41's.
 //
+// WriteTo serializes the entity; it does not replay the input. It adds a
+// "Mime-Version: 1.0" field at the top of a header that has no MIME-Version,
+// always ends the header with one empty line, and otherwise writes the header
+// as CreateWriter does, which may for instance give a multipart a usable
+// boundary or drop its Content-Transfer-Encoding. So an empty input is written
+// as "Mime-Version: 1.0\r\n\r\n", and unmodified ordinary fields that io.EOF
+// ended are written raw and in order after that added field, followed by the
+// empty line (ROB-010-001); for such input, parsing what WriteTo wrote and
+// writing it again gives the same bytes.
+//
 // For an entity from ParseContext whose context is already done when WriteTo
 // is called, nothing is written and the parse's stop is returned. A
 // cancellation that comes later is seen by the reads of the body, before and

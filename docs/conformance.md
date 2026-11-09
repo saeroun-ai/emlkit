@@ -63,6 +63,22 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   normalized to CRLF in the stored raw bytes. ([`textproto/header.go`](../textproto/header.go) · `readContinuedLineSlice`)
 - **Folded values** are unfolded and whitespace-collapsed for the parsed value;
   the original raw bytes are preserved separately. ([`textproto/header.go`](../textproto/header.go) · `trimAroundNewlines`)
+- **Empty and header-only input** is framed identically under every `Profile`
+  and `Compatibility` (`ROB-010-001`). An empty input, an input that is only the
+  empty line, and complete CRLF-terminated fields (folded ones included) ended
+  by `io.EOF` all yield an entity with exactly the fields read, raw bytes and
+  order kept, and an empty body; after the empty line every byte, blank lines
+  included, is body. The missing body or empty line adds no error or diagnostic
+  of its own, and no profile requires RFC 5322's mandatory fields; what the
+  fields declare — an unknown encoding or charset, a Content-Type to repair or,
+  under Strict, refuse — is interpreted as for any message. A header only
+  `io.EOF` could end is still being read at that `io.EOF`, so an input error,
+  cancellation or no-progress stop there leaves no entity, as for any header. A
+  header-only multipart with a usable boundary has no part (`NextPart`: an error
+  wrapping `io.EOF`, then `io.EOF`; the empty-container policy is
+  `ROB-060-009`'s). Other line endings are `ROB-010-002`'s; a malformed or
+  whitespace-only first line is `ROB-020`'s.
+  ([`parse.go`](../parse.go) · `Parse`, [`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
 - **Over-long header keys** do not crash the line-folder (a naive fold width would
   go negative; it falls back to the hard limit). ([`textproto/header.go`](../textproto/header.go) · `formatHeaderField`)
 
@@ -390,6 +406,15 @@ These are deliberate boundaries, each with a reason.
   and field order. Each field keeps its raw bytes; only mutated or synthesized
   fields are reformatted. This is what makes parsed-then-written messages safe for
   DKIM signatures. ([`textproto/header.go`](../textproto/header.go) · `headerField.raw` / `WriteHeader`)
+  This is per field, not a replay of the input: `Entity.WriteTo` adds
+  `Mime-Version: 1.0` at the top of a header without one, always writes the
+  empty line that ends the header, and otherwise follows `CreateWriter` (which
+  may, for example, set a multipart boundary or drop a multipart's
+  `Content-Transfer-Encoding`). So an empty input is written as
+  `Mime-Version: 1.0\r\n\r\n`, and a header of unmodified ordinary fields that
+  `io.EOF` ended gains that field and that line; writing such output again
+  gives the same bytes. Original-byte replay is #41's.
+  ([`entity.go`](../entity.go) · `WriteTo`)
 - **Body byte-preservation.** When the output transfer-encoding and charset match
   the input (case-insensitively), the original undecoded body bytes are copied
   through verbatim instead of decoded and re-encoded — preserving exact bytes for

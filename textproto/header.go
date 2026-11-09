@@ -1299,6 +1299,12 @@ func trimAroundNewlines(v []byte) string {
 // look-ahead was ignored and the source read again, so a one-shot failure could
 // vanish, or a cut line be reported as a malformed one.
 //
+// An empty input and an input that is only the empty line are both an empty
+// Header and a nil error, and complete fields that io.EOF ended are the same
+// fields as with an empty line after them. What follows that empty line, blank
+// lines included, is left in r. WriteHeader always ends what it writes with one
+// empty line, so a block io.EOF ended is written with one (ROB-010-001).
+//
 // A source may fail with bufio.ErrBufferFull itself, the value ReadSlice also
 // uses for a line longer than r's buffer. It is the source's failure whenever
 // fewer bytes than the whole buffer came with it. A source that fails so just

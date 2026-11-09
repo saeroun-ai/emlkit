@@ -14,6 +14,14 @@ type MultipartReader interface {
 	// NextPart returns the next part in the multipart or an error. When there are
 	// no more parts, the error io.EOF is returned.
 	//
+	// A parsed multipart body framed by a usable boundary but with no bytes at
+	// all — the body of a header-only multipart message such as
+	// "Content-Type: multipart/mixed; boundary=B\r\n" — holds no delimiter and
+	// so no part: the first call
+	// returns no part and an error wrapping io.EOF, "multipart: NextPart: EOF",
+	// and every later call io.EOF (ROB-010-001 pins this; how an empty container
+	// is treated is ROB-060-009's).
+	//
 	// Entity.Body must be read completely before the next call to NextPart,
 	// otherwise it will be discarded.
 	NextPart() (*Entity, error)

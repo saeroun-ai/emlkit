@@ -189,6 +189,31 @@ type ParseOptions struct {
 // block returned, keeps the fields read whole before it, and keeps a line the
 // failure cut out of them (see textproto.ReadHeader).
 //
+// Empty and header-only input is framed the same way under every Profile and
+// Compatibility (ROB-010-001). An input that ends with io.EOF before its first
+// byte, or right after complete CRLF-terminated fields, folded ones included,
+// is read as the same input with one empty line appended: the same fields, raw
+// bytes and order as read, and an empty body. Having no fields, no body or no
+// empty line adds no error and no diagnostic of its own, and nothing requires a
+// field: no profile, ProfileStrict included, applies RFC 5322's minimum field
+// counts. What the fields say is interpreted as for any message — an unknown
+// transfer encoding or charset is still a warning, a Content-Type with
+// malformed parameters is still repaired or, under ProfileStrict, refused — and
+// budgets and cancellation keep their rules. One empty line ends the header
+// block, and every byte after it, blank lines included, is body. A header that
+// only io.EOF could end is still being read at that io.EOF, so an input error,
+// a cancellation or a no-progress stop arriving there instead is reported by
+// Parse with no entity, as for any header, and a header budget counts such a
+// block's fields alone. After an empty line it is reported where the parse
+// reaches it: usually by the body, but a cancellation seen by the read that
+// delivered the header's last bytes is returned by ParseContext with the
+// entity. A multipart with a usable boundary and an empty body has no part:
+// MultipartReader.NextPart returns an error wrapping io.EOF and then io.EOF,
+// and Walk ends with that error after the root (empty-multipart policy is
+// ROB-060-009's). WriteTo does not reproduce such an input; see there. Bare CR,
+// bare LF, mixed line endings and an unterminated last line are ROB-010-002's,
+// and a malformed or whitespace-only first line is ROB-020's.
+//
 // A header block that exceeds Limits.MaxHeaderBytes, MaxHeaderFieldBytes,
 // MaxHeaderCount or MaxLineBytes is refused, and refused wherever it is found:
 // the message's own header block and the header block of every part, at any

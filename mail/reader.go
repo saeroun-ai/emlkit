@@ -117,6 +117,14 @@ func recoverable(e *message.Entity, err error) bool {
 // single part such a message yields is what the skipped stage left undecoded.
 // Every other error is returned with a nil Reader.
 //
+// An empty message, and one that is only a header, ended by io.EOF or by its
+// empty line, is read like any other: the Reader's Header holds the fields
+// read, and a message that is not multipart is its own one part, classified as
+// NextPart classifies every part — inline text/plain when it declares no
+// Content-Type or Content-Disposition — with what followed the empty line, if
+// anything, as its body. A header-only multipart with a usable boundary has no
+// part; see NextPart (ROB-010-001).
+//
 // CreateReader reads through message.Read, which enforces only the message
 // header's byte budget. To read under the per-entity header, line, parameter
 // and tree budgets, and to collect diagnostics, parse with message.Parse and
@@ -152,7 +160,9 @@ func CreateReader(r io.Reader) (*Reader, error) {
 // message's source is returned with no part too; the source is not read again,
 // so later calls report the failure rather than reach another part. In each
 // case NextPart returns at once: it does not skip ahead or retry within the
-// call, and a caller that wants the following parts calls it again.
+// call, and a caller that wants the following parts calls it again. A
+// multipart message with a usable boundary whose body is empty returns no part
+// and an error wrapping io.EOF, then io.EOF (see message.MultipartReader).
 //
 // Under every other profile such a field is repaired by the parse — its valid
 // base and well-formed parameters kept, the defect recorded as a diagnostic —
