@@ -2236,6 +2236,22 @@ contract is:
 | ROB-120-006 | Planned | Preserve cryptographic raw representations and clearly mark repaired signed content as unverifiable. | DKIM/S-MIME/PGP invariants. |
 | ROB-120-007 | Done | Make every parser-wide error classification cycle-safe and non-forgeable over input-derived error graphs. | Hostile-graph tests at each predicate: no hang, no panic, no nil dereference, no misclassification. |
 | ROB-120-008 | Done | Make writer generation and serialization refuse a syntactically unparseable Content-Type with an explicit error, never a panic, an invented media type, parameter map or boundary, or silent metadata loss ([issue #58](https://github.com/saeroun-ai/emlkit/issues/58)). | Lowercase/uppercase malformed tail, duplicate boundary, malformed text/plain and missing subtype, at the root and as a part, through `CreateWriter`, `CreatePart`/`CreatePartWithBuffer`, `Parse`→`WriteTo` and `NewMultipart` Body reads: no panic; no output from the refused entity or part before its header is validated (output of its parent and of earlier siblings may already have been written and is not withdrawn); a good part after a refused one, deterministic repeated reads with no blocked worker; valid boundary generation, charset/encoding policy and copy-on-write unchanged. |
+| ROB-120-009 | Planned | Isolate NewMultipart from caller Header mutation while keeping the generated entity header consistent with its body and all header views ([issue #60](https://github.com/saeroun-ai/emlkit/issues/60)). | Generated/replaced/valid boundary, CTE removal, setup failure and Close/retry cases; Get/Map/Fields/Raw/WriteHeader consistency, original field bytes/order/duplicates, post-construction mutation policy, full/race/386 and independent QA. |
+
+**New issue registration — ROB-120-009.** Independent finite QA on `64d11b8`
+confirmed that lazily reading `NewMultipart`'s Body can mutate the caller's
+Header: generated/replaced boundaries leak to it, deleting transfer encoding
+can leave lookup and serialization inconsistent, and writer setup can change
+the boundary even when charset setup then fails. A valid-boundary control
+stays unchanged. Six synthetic cases, each body capped at 64 KiB, passed
+through the host-safe runner as a reproduction (`/tmp/emlkit-multipart-header-audit.go`
+and `.out`, service `emlkit-bounded-91f818714b`). Issue #60 was filed before
+implementation. This registration does not implement the fix, reopen the
+malformed-Content-Type panic fix, complete raw replay, or claim concurrent
+caller mutation is supported. Review must establish header ownership without
+making the generated entity's boundary disagree with its body. The issue is
+separate from the reviewed line-ending work, and remains Planned.
+
 
 `ROB-120-008` ([issue #58](https://github.com/saeroun-ai/emlkit/issues/58))
 closes a writer defect that predates the robustness work (QA baseline
