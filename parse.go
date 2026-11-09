@@ -5,8 +5,9 @@ import "io"
 // ParseOptions configures Parse.
 //
 // The zero value is the recommended configuration: the tolerant profile, the
-// conservative compatibility policy, every diagnostic retained in the session,
-// and the default read limits. A nil *ParseOptions means the same thing, so a
+// conservative compatibility policy, every recorded diagnostic retained in the
+// session — at most Limits.MaxDiagnosticCount of them, 1000 by default — and the
+// default read limits. A nil *ParseOptions means the same thing, so a
 // caller with nothing to configure passes nil.
 //
 // Options are read once, when Parse is called, and are not retained: changing
@@ -22,9 +23,12 @@ type ParseOptions struct {
 	// CompatibilityConservative.
 	Compatibility Compatibility
 
-	// DiagnosticSink, when non-nil, receives every diagnostic as it is
-	// discovered, in discovery order, and may ask the parse to stop by
-	// returning an error. See DiagnosticSink for what a sink may do and what
+	// DiagnosticSink, when non-nil, receives every diagnostic the session
+	// records as it is discovered, in discovery order, and may ask the parse to
+	// stop by returning an error. Limits.MaxDiagnosticCount bounds what it
+	// receives exactly as it bounds what is retained: at most that many calls,
+	// the last of them the terminal limit.diagnostic_count diagnostic when the
+	// budget is reached. See DiagnosticSink for what a sink may do and what
 	// stopping means.
 	DiagnosticSink DiagnosticSink
 
@@ -32,7 +36,8 @@ type ParseOptions struct {
 	// diagnostics it delivers, for a caller that handles each one in its sink
 	// as it arrives and does not want the memory of a parse to grow with the
 	// number of defects in the message. ParseSession.Diagnostics then reports
-	// nothing.
+	// nothing. The sink's own work is bounded separately, by
+	// Limits.MaxDiagnosticCount.
 	//
 	// It is ignored while DiagnosticSink is nil: a diagnostic is never dropped
 	// without being delivered somewhere.
@@ -90,8 +95,10 @@ type ParseOptions struct {
 //   - The session is never nil, including when the header could not be read at
 //     all, so there is always somewhere to look. What it holds, though, is what
 //     some producer has been implemented to record, which today is the two
-//     decoding warnings below, the nine enforced resource budgets, and the
-//     repair of a valid media type or disposition with malformed parameters. A framing
+//     decoding warnings below, the ten enforced resource budgets, and the
+//     repair of a valid media type or disposition with malformed parameters,
+//     up to Limits.MaxDiagnosticCount, whose last slot holds one terminal
+//     limit.diagnostic_count diagnostic in place of the rest. A framing
 //     failure that nothing diagnoses yet is carried by err alone and leaves the
 //     session empty, so read both rather than treating an empty session as a
 //     clean parse. Later releases add diagnostics for the remaining resource
@@ -189,6 +196,15 @@ type ParseOptions struct {
 // Entity.Walk — reports the identical error and one diagnostic is recorded for
 // the message. Everything already returned stays valid either way. A child that
 // exceeds both at once reports limit.part_count, which is charged first.
+//
+// Every "records one diagnostic" above, and every diagnostic a producer
+// records, is recorded only while Limits.MaxDiagnosticCount has a slot left. The
+// request that reaches a positive budget N is replaced by one
+// limit.diagnostic_count diagnostic, and every later request is omitted —
+// neither retained nor delivered. That budget ends nothing by itself: parsing
+// continues, and a failure whose diagnostic was replaced or omitted — a budget,
+// a Strict refusal — still ends its scope with its own FatalError, which still
+// carries its own Diagnostic. See Limits.MaxDiagnosticCount.
 //
 // Limits.MaxMessageDepth is reserved and enforced by nothing: a message/rfc822
 // or message/global body is an opaque leaf to this engine rather than a nested

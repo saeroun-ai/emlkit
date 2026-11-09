@@ -223,10 +223,18 @@ func (c parseContext) completeBody(d Diagnostic) Diagnostic {
 // nor this entity's path can be disturbed through what the session holds, and
 // vice versa.
 //
+// Once the session omits every further diagnostic under
+// Limits.MaxDiagnosticCount, d is handed on as it is: completing it would only
+// copy a path the session discards unread, and the session still answers the
+// request exactly as it answers any other.
+//
 // record returns what the session returns: nil, or the sticky FatalError of a
 // sink that asked the parse to stop. A nil session records nothing and returns
 // nil.
 func (c parseContext) record(d Diagnostic, at Location) error {
+	if c.session.omittingDiagnostics() {
+		return c.session.record(d)
+	}
 	return c.session.record(c.complete(d, at))
 }
 

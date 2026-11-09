@@ -64,7 +64,11 @@ import (
 // later read, and every scope of the parse — Parse itself while it is still
 // reading the header, MultipartReader.NextPart, Entity.Walk, mail.Reader and
 // Entity.ParseStop — report that one FatalError. Nothing more is read from the
-// source, however often the caller asks.
+// source, however often the caller asks. The diagnostic is recorded through the
+// session like any other, so Limits.MaxDiagnosticCount may replace it with the
+// terminal limit.diagnostic_count diagnostic or omit it; the stop is published
+// regardless, and its FatalError carries the limit.input_bytes diagnostic
+// either way.
 //
 // Everything already returned stays valid: a root header that was complete
 // within the budget, the parts already yielded, and every byte a body already
@@ -184,7 +188,9 @@ func (l *inputLimiter) Read(p []byte) (int, error) {
 // delivered first, with no session lock held, so that a sink may read the
 // session it is delivering for as it always could, and the budget's failure is
 // published after. A sink that refused the diagnostic has by then published its
-// own stop through record, and publishStop keeps it.
+// own stop through record, and publishStop keeps it. What record returns is not
+// consulted, and the stop is published unconditionally, so a diagnostic that
+// record omitted under Limits.MaxDiagnosticCount still ends the parse.
 //
 // The published stop is read rather than waited for. The only transition that
 // waits is a MaxPartCount overflow being delivered to a sink, which runs on the

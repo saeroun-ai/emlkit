@@ -107,15 +107,21 @@ message.
 
 Errors and diagnostics answer different questions, so read both: an error says
 whether a scope could continue, the session says what was observed. `Parse`
-enforces **nine** budgets today — `MaxInputBytes`, `MaxHeaderBytes`,
+enforces **ten** budgets today — `MaxInputBytes`, `MaxHeaderBytes`,
 `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`, `MaxParameterCount`,
-`MaxParameterSegments`, `MaxMIMEDepth` and `MaxPartCount`. `MaxInputBytes` is
+`MaxParameterSegments`, `MaxMIMEDepth`, `MaxPartCount` and
+`MaxDiagnosticCount`. `MaxDiagnosticCount` (default 1000) caps diagnostics, not
+parsing: the diagnostic that reaches it is replaced by one
+`limit.diagnostic_count` diagnostic, later diagnostics are neither retained nor
+delivered to a sink, and the cap alone does not stop the parse — metadata is
+still healed and bodies and parts still returned, while every other budget or
+Strict refusal still fails with its own `FatalError` and diagnostic. `MaxInputBytes` is
 counted once at the input, on the raw bytes actually read from it — including
 body bytes buffered ahead while the header was read — so a body or epilogue
 never read from the input is never checked. One byte past the budget ends the
 whole parse with a `FatalError` and one `limit.input_bytes` diagnostic rather
 than a successful `io.EOF`. The other `Limits` fields — encoded/decoded body
-bytes, the diagnostic cap and the rest — are validated but **not enforced
+bytes and the rest — are validated but **not enforced
 yet**, and there is no cancellation support yet. `Read` and `ReadWithOptions`
 have no total input budget; only their message-header cap
 (`ReadOptions.MaxHeaderBytes`) applies. See

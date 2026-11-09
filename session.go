@@ -26,6 +26,15 @@ import (
 // with the number of defects; by default, and for the zero ParseSession, every
 // diagnostic is retained.
 //
+// Independently of retention, Limits.MaxDiagnosticCount bounds how many
+// diagnostics a session records and delivers at all, the zero ParseSession
+// included, which runs under DefaultLimits. The request that reaches the budget
+// is replaced, in its last slot, by one terminal limit.diagnostic_count
+// diagnostic, and every later request is neither retained nor delivered; what
+// was recorded before is never changed. What a session reports past that point
+// is therefore not everything the parser observed, and the terminal says so.
+// See that field.
+//
 // The zero ParseSession is ready to use: it holds no diagnostics, has no sink
 // and reports the default profile and compatibility policy. A nil
 // *ParseSession is usable too: Diagnostics returns nil and the accessors
@@ -87,6 +96,21 @@ type ParseSession struct {
 	// It is only ever set together with a publishStop under one acquisition of
 	// mu, so a non-nil sinkFailure implies a non-nil stop.
 	sinkFailure FatalError
+
+	// diagSlots is how many record requests have taken one of the
+	// Limits.MaxDiagnosticCount slots, the terminal slot included. It never
+	// passes the budget: the request that takes the last slot closes the
+	// session's diagnostics instead of incrementing past it, so a budget of
+	// math.MaxInt64 cannot overflow it. It stays zero while the budget is
+	// disabled. It is written with deliver and mu both held and read with mu.
+	diagSlots int64
+
+	// diagClosed is set, once and for good, by the request that took the
+	// terminal slot. From then on every record request is omitted: it is
+	// neither copied, retained nor delivered. It is guarded like diagSlots,
+	// and since it never goes back to false, a reader that saw it set may rely
+	// on it after releasing mu.
+	diagClosed bool
 
 	// partsUsed is how many child parts this parse has discovered anywhere in
 	// the message. The root entity is not one of them. It is the usage side of
@@ -250,7 +274,30 @@ func (s *ParseSession) headerLimits() textproto.HeaderLimits {
 // backstop for a scope that reaches this point anyway. Values already returned
 // stay valid, as they do for any fatal error. Later diagnostics are still
 // recorded, and still retained when the session retains them, leaving the
-// record of what happened after the failure readable.
+// record of what happened after the failure readable, up to
+// Limits.MaxDiagnosticCount.
+//
+// Every request takes one slot of Limits.MaxDiagnosticCount while that budget is
+// positive, whether or not the session retains and whether or not it has a sink,
+// so the budget bounds what is delivered and what is kept alike. The last slot
+// is reserved: the request that takes it is not recorded itself, and the one
+// limit.diagnostic_count diagnostic built by diagnosticCountTerminal is recorded
+// and delivered in its place, exactly as an ordinary diagnostic would be. Every
+// later request is omitted before anything is copied: it is not retained, the
+// sink is not called, and it returns what an ordinary request returns from then
+// on — the published stop once the sink has failed, nil otherwise. The terminal
+// is built here rather than recorded through a second call, so it cannot recurse
+// and cannot be counted twice.
+//
+// Closing the diagnostics ends nothing by itself. The request the terminal
+// replaces returns nil, as for any diagnostic, unless the sink refuses the
+// terminal or had already failed. Every budget, Strict refusal and sink failure
+// is decided by its own code, independently of whether its diagnostic was kept,
+// and the request it was recorded with may itself be one of them, so none of
+// them is lost to this one. An omitted request returns exactly what an ordinary
+// request returns once its sink is no longer called, so it can neither replace
+// nor hide a stop already published: a budget's stop is read from fatalErr as it
+// always was, and a failed sink's is returned here as it always was.
 //
 // record is a no-op on a nil session, and returns nil.
 //
@@ -266,8 +313,6 @@ func (s *ParseSession) record(d Diagnostic) error {
 		return nil
 	}
 
-	c := d.Clone()
-
 	s.deliver.Lock()
 	defer s.deliver.Unlock()
 
@@ -276,6 +321,20 @@ func (s *ParseSession) record(d Diagnostic) error {
 	// A failed sink implies a published stop, so this is the identity every
 	// other scope of the parse is reporting.
 	published := s.stop
+	slot := s.claimDiagnosticSlot()
+	if slot == diagnosticOmitted {
+		s.mu.Unlock()
+		if failed != nil {
+			return published
+		}
+		return nil
+	}
+	var c Diagnostic
+	if slot == diagnosticTerminal {
+		c = s.diagnosticCountTerminal(d)
+	} else {
+		c = d.Clone()
+	}
 	retained := !s.noRetention
 	if retained {
 		s.diags = append(s.diags, c)
@@ -410,7 +469,10 @@ func (s *ParseSession) Len() int {
 	return len(s.diags)
 }
 
-// Diagnostics returns the diagnostics recorded so far, in discovery order.
+// Diagnostics returns the diagnostics recorded so far, in discovery order. It
+// holds at most Limits.MaxDiagnosticCount entries, and the terminal
+// limit.diagnostic_count diagnostic is the last of them when that budget was
+// reached.
 //
 // The returned slice and the Path of every returned diagnostic are freshly
 // allocated, so the caller may retain and modify them without affecting the

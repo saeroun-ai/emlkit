@@ -310,10 +310,33 @@ These are deliberate boundaries, each with a reason.
   during the delivery, or a stop already published, wins. `Read` and
   `ReadWithOptions` have no total input budget; their message-header cap still
   applies. ([`limit_input.go`](../limit_input.go))
+- **`Parse` caps diagnostics with `MaxDiagnosticCount` without capping
+  parsing.** A positive budget `N` counts every diagnostic the session would
+  record, whether or not it retains and whether or not it has a sink. The first
+  `N-1` are recorded and delivered as they are; in place of the `N`-th, one
+  `limit.diagnostic_count` diagnostic at `SeverityLimitExceeded` is recorded and
+  delivered, carrying the path and location of the one it replaced; every later
+  diagnostic is omitted: the session neither copies, retains nor delivers it
+  (a producer may already have built and formatted it). `N=1` makes the first
+  diagnostic the terminal, a parse with no diagnostic records none, and a parse
+  with exactly `N` diagnostics records it too, so it means "recording stopped",
+  not "more than `N` defects". Nothing recorded before it is replaced. The
+  budget alone ends no scope: metadata is still healed and every body and later
+  part is still returned unless something else ends them. Every other budget,
+  Strict refusal and sink stop still ends its scope with its own `FatalError` —
+  including when its own diagnostic is the request the terminal replaced, or one
+  omitted after it, and that `FatalError` still carries the failure's own
+  diagnostic. A sink that refuses the terminal stops the parse like any other
+  refusal, and a stop already published keeps its identity. The default is
+  1000; `LimitDisabled` records everything; the count stops at the budget, so
+  `math.MaxInt64` cannot overflow. Every "records one diagnostic" statement in
+  this document holds while the budget has a slot left.
+  ([`limit_diagnostics.go`](../limit_diagnostics.go))
 - **The remaining budgets in `Limits` are still resolved but not consulted.**
-  Everything outside the nine enforced ones — `MaxInputBytes`, `MaxHeaderBytes`,
+  Everything outside the ten enforced ones — `MaxInputBytes`, `MaxHeaderBytes`,
   `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`, `MaxParameterCount`,
-  `MaxParameterSegments`, `MaxMIMEDepth` and `MaxPartCount` — is validated and
+  `MaxParameterSegments`, `MaxMIMEDepth`, `MaxPartCount` and
+  `MaxDiagnosticCount` — is validated and
   reported by `ParseSession.Limits`, and their `limit.*` codes are reserved but
   not yet emitted. ([`limits.go`](../limits.go))
 

@@ -110,8 +110,9 @@ const (
 	// acceptable parts.
 	defaultMaxTotalDecodedBytes = 512 << 20 // 512 MiB
 
-	// defaultMaxDiagnosticCount bounds retained diagnostics, so that a message
-	// engineered to be defective everywhere cannot grow a session without end.
+	// defaultMaxDiagnosticCount bounds recorded and delivered diagnostics, so
+	// that a message engineered to be defective everywhere cannot grow a
+	// session, or a sink's work, without end.
 	defaultMaxDiagnosticCount = 1000
 
 	// defaultMaxMemorySpoolBytes bounds what is held in memory before raw
@@ -174,8 +175,15 @@ const (
 // DefaultLimits returns those values resolved, so a caller can read one, adjust
 // it, or compare against it without repeating a number from this table.
 //
-// Nine budgets are enforced, and only under Parse. They fall into four groups
-// by what a failure costs, and the grouping is part of the contract:
+// Ten budgets are enforced, and only under Parse. MaxDiagnosticCount bounds the
+// diagnostics a parse records and delivers, and by itself stops no parsing: the
+// request that reaches it is replaced by one terminal limit.diagnostic_count
+// diagnostic in the last slot and every later request is omitted; see the field.
+// The "exactly one" or "one" diagnostic each of the other nine records below is
+// recorded only while that budget has a slot left. The failure it describes
+// happens whether or not it is recorded, with the same FatalError carrying the
+// same Diagnostic. Those nine fall into four groups by what a failure costs, and
+// the grouping is part of the contract:
 //
 //   - MaxInputBytes bounds the bytes read from the input for the whole message,
 //     shared by every read of the parse.
@@ -251,7 +259,10 @@ type Limits struct {
 	// since the multipart framing adds that the part's closing delimiter was not
 	// found. Everything already returned stays valid, including a message
 	// header that ended within the budget and every byte already delivered; a
-	// header block the budget cut short yields no header at all.
+	// header block the budget cut short yields no header at all. When
+	// MaxDiagnosticCount replaces that diagnostic with its terminal or omits
+	// it, the overflow ends the parse all the same, with a FatalError that
+	// still carries the limit.input_bytes diagnostic.
 	//
 	// An I/O error or io.EOF the input returns without a byte past the budget
 	// is reported as itself and is not an overflow. A DiagnosticSink that stops
@@ -379,9 +390,42 @@ type Limits struct {
 	// message together.
 	MaxTotalDecodedBytes int64
 
-	// MaxDiagnosticCount bounds how many diagnostics one parse produces. Once
-	// it is enforced, the last diagnostic of a parse that reaches it is the
-	// terminal limit.diagnostic_count entry.
+	// MaxDiagnosticCount bounds how many diagnostics one parse records and
+	// delivers, the terminal limit.diagnostic_count entry included. It bounds
+	// diagnostics only: reaching it ends no scope and stops no reading by
+	// itself, so metadata is still healed, bodies are still read and later
+	// parts are still returned unless something else ends them.
+	//
+	// A budget of N reserves its last slot for the terminal; the default is
+	// 1000. The first N-1 diagnostic requests of the parse are recorded as they
+	// are. In place of the N-th, the session records one limit.diagnostic_count
+	// diagnostic at SeverityLimitExceeded, carrying the path and location of the
+	// request it replaced, and delivers it to the DiagnosticSink as it would
+	// any other. Every request after that is omitted: the session neither
+	// copies, retains nor delivers it. A budget of 1 therefore makes the first
+	// request the terminal, and a parse that makes no request records no
+	// terminal. The count stops at N, so a budget of math.MaxInt64 cannot
+	// overflow it, and LimitDisabled records every request.
+	//
+	// The terminal says recording stopped, not that the message has more than
+	// N defects: a parse that makes exactly N requests records the terminal
+	// too, in place of the N-th, and nothing past that point is counted.
+	// Retained diagnostics stay append-only — nothing recorded before the
+	// terminal is ever replaced or removed — so Diagnostics reports at most N
+	// entries, the terminal last. The same count applies whether or not the
+	// session retains and whether or not it has a sink, so it bounds what a
+	// sink receives as well as what the session keeps. What it bounds is the
+	// session's work: a producer may already have built, and formatted the
+	// message of, a diagnostic the session then omits.
+	//
+	// Every other budget, Strict refusal and sink stop is enforced as it is
+	// without it. The request the terminal replaces, or one omitted after it,
+	// may itself be such a failure — an input or part-count overflow, a
+	// refused header — and it still ends its scope, or the whole parse, with
+	// its own FatalError, whose Diagnostic is that failure's own rather than
+	// the terminal. A sink that refuses the terminal stops the parse exactly as
+	// a sink refusing any other diagnostic does, and a stop published earlier
+	// keeps its identity.
 	MaxDiagnosticCount int64
 
 	// MaxMemorySpoolBytes bounds what one message holds in memory when raw

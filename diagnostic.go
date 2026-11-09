@@ -143,7 +143,10 @@ func (l Location) String() string {
 // A Diagnostic describes one defect that was observed in a message, or one
 // repair that was applied to it. Recovery never silently changes the
 // interpretation of a message: every deviation from the input is reported as a
-// Diagnostic.
+// Diagnostic, up to Limits.MaxDiagnosticCount. The request that reaches that
+// budget is replaced by one limit.diagnostic_count diagnostic saying the
+// reporting stopped there, and every later deviation is still applied but no
+// longer reported.
 //
 // Diagnostics are collected by a ParseSession in discovery order.
 type Diagnostic struct {

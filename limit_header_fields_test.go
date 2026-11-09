@@ -1430,6 +1430,9 @@ func TestParse_otherBudgetsStayUnenforced(t *testing.T) {
 		"MaxPartCount": true,
 		// ROB-001-009.
 		"MaxInputBytes": true,
+		// ROB-001-008. The fixture records no diagnostic, so pinching it to 1
+		// would pass without saying anything; it is enforced and listed here.
+		"MaxDiagnosticCount": true,
 	}
 
 	limits := DefaultLimits()

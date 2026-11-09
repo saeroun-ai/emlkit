@@ -45,7 +45,8 @@ import (
 // the field is parsed from its media type and the occurrences within the
 // budget, the remainder is ignored, exactly one limit.parameter_count or
 // limit.parameter_segments diagnostic is recorded for that field with an Action
-// saying so, and the parse continues into the body. A Content-Type that
+// saying so (while Limits.MaxDiagnosticCount has a slot for it; the fallback is
+// the same either way), and the parse continues into the body. A Content-Type that
 // classifies the entity, and a boundary parameter that arrived before the
 // budget ran out, therefore stay usable, so an oversized parameter list at the
 // end of a field does not hide the multipart children it introduces.

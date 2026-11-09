@@ -50,7 +50,8 @@ import (
 // every byte a body already produced — as FatalError describes.
 //
 // Each failure records exactly one limit.line_bytes diagnostic, once, however
-// many times the caller asks again.
+// many times the caller asks again — while Limits.MaxDiagnosticCount has a slot
+// for it; the failure and its FatalError are the same either way.
 
 // multipartLineAction and cteLineAction are what a limit.line_bytes diagnostic
 // reports was done: nothing was repaired, and the scope stopped where the budget

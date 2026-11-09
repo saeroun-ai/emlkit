@@ -18,6 +18,13 @@ package message
 //
 // A sink must not block indefinitely: the session that is delivering cannot
 // make progress while its Diagnose call runs.
+//
+// A sink receives at most Limits.MaxDiagnosticCount diagnostics per session. If
+// the parse reaches that budget, the last one it receives is the terminal
+// limit.diagnostic_count diagnostic, delivered in place of the diagnostic that
+// reached the budget, and it is not called again for that session. Reaching the
+// budget does not stop the parse by itself; refusing the terminal does, exactly
+// as refusing any other diagnostic would.
 type DiagnosticSink interface {
 	// Diagnose handles one diagnostic discovered by session.
 	//
@@ -65,7 +72,8 @@ func (f DiagnosticSinkFunc) Diagnose(session *ParseSession, d Diagnostic) error 
 //
 // The zero value is the default: no sink, and every diagnostic retained.
 type diagnosticOptions struct {
-	// sink receives every diagnostic as it is discovered, or is nil when
+	// sink receives every diagnostic the session records, within
+	// Limits.MaxDiagnosticCount, as it is discovered, or is nil when
 	// diagnostics are only collected.
 	sink DiagnosticSink
 

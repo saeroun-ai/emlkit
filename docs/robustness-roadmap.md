@@ -501,8 +501,53 @@ returns a session carrying the requested profile and policy.
 five more — `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`,
 `MaxParameterCount` and `MaxParameterSegments`. `ROB-001-004` added the two tree
 budgets, `MaxMIMEDepth` and `MaxPartCount`. `ROB-001-009` added
-`MaxInputBytes`, so **nine** budgets are enforced, all of them under `Parse`
-alone.
+`MaxInputBytes`. `ROB-001-008` added `MaxDiagnosticCount`, so **ten** budgets
+are enforced, all of them under `Parse` alone.
+
+`MaxDiagnosticCount` (`ROB-001-008`, [issue #8](https://github.com/saeroun-ai/emlkit/issues/8))
+bounds diagnostics, not parsing. Every request the session would record takes
+one slot of a positive budget `N`, whether or not the session retains and
+whether or not it has a sink, so it bounds what a sink receives as well as what
+the session keeps. The last slot is reserved: requests `1` through `N-1` are
+recorded and delivered as they are, request `N` is replaced by one
+`limit.diagnostic_count` diagnostic at `SeverityLimitExceeded` carrying that
+request's path and location and an `Action` saying that request and every later
+one are omitted and that this budget alone does not stop parsing (it does not
+claim the parse went on: the replaced request may itself be a failure that ends
+it, and the sink may refuse the terminal), and every later request is discarded
+before a parse context copies a path into it, before it is retained and without
+a sink call. `N = 1` makes the first request
+the terminal, and a parse with no diagnostic records none. Because request `N`
+itself takes the terminal slot, the terminal means "recording stopped", never
+"an `N+1`-th defect was observed" or a total count of defects; nothing recorded
+before it is replaced, so the session stays append-only and reports at most `N`
+entries, the terminal last. The count is compared before it is incremented and
+stops at `N`, so `math.MaxInt64` cannot overflow; `LimitDisabled` counts nothing.
+The terminal is built inside the recording call rather than recorded by a
+second one, so it cannot recurse. Producers that already built a diagnostic —
+including formatting its message — still pay for building it; only what
+follows — the context's path copy, the session's copy, retention and delivery
+— is bounded.
+
+Reaching the budget ends no scope by itself. Metadata is still healed, every
+body is still read and every later part is still returned unless something
+else ends them. Every other failure is decided by its own code independently of
+whether its diagnostic was kept, including when its diagnostic is the very
+request the terminal replaced: an input, header or tree budget, or a Strict
+refusal, still ends its scope or the parse with its own `FatalError`, which
+still carries that failure's own diagnostic (the `MaxInputBytes` and
+`MaxPartCount` transitions publish their stop unconditionally after recording),
+and a sink that refuses the terminal stops the parse like any other refusal. A
+stop already published keeps its identity, a failed sink is never called again,
+and an omitted request returns exactly what an ordinary request returns once the
+sink is not called — the published stop only when the sink had failed, nil
+otherwise — so it can neither replace nor hide a published stop, which scopes
+read from the session as before. The terminal returns nil unless the caller's
+sink refuses it or had already failed. Every "records exactly one" diagnostic
+statement elsewhere in this roadmap holds while the budget has a slot left. This generalizes
+the earlier statement that a parse reaching the budget ends with the terminal
+entry: the terminal is the last diagnostic recorded, not the last event of the
+parse.
 
 `MaxInputBytes` (`ROB-001-009`, [issue #3](https://github.com/saeroun-ai/emlkit/issues/3))
 is counted once, by one reader at the raw source under the offset counter, so
@@ -833,7 +878,7 @@ Each applicable test asserts:
 | ROB-001-005 | Planned | Limit encoded/decoded body bytes and total decoding expansion. | Streaming overflow with recoverable raw body. |
 | ROB-001-006 | Planned | Add context cancellation and deadline checks to long scans/decoders. | Cancellation latency and partial-result tests. |
 | ROB-001-007 | Planned | Detect repeated no-progress reads while allowing legal transient behavior. | Adversarial reader tests. |
-| ROB-001-008 | Planned | Cap diagnostics and emit one terminal `limit.diagnostic_count` entry. | Diagnostic storm test. |
+| ROB-001-008 | Done | Cap diagnostics under `Parse` with `MaxDiagnosticCount`, and emit one terminal `limit.diagnostic_count` entry in the last slot (`N-1` ordinary, request `N` replaced, later requests omitted without copy, retention or sink call) while parsing continues. | Diagnostic storm through public `Parse`: every malformed part healed and returned under the cap; `0`/default/`-1`/`1`/`N-1`/`N`/`N+1`/`math.MaxInt64`; retain/no-retain with sink none/ok/refusing; later input budget and sink stops after the cap; concurrent records, separate sessions and reentrant inspection. |
 | ROB-001-009 | Done | Enforce `MaxInputBytes` under `Parse` once, at the raw source shared by every header, body, multipart and skip/drain read: `N` bytes are admitted, a proven byte `N+1` (at most one proof byte, never handed on) records one `limit.input_bytes` diagnostic and publishes the session stop; `Read`/`ReadWithOptions` unchanged. | `N-1/N/N+1` root header and body, nested and skipped parts, chunkings, `(n>0, EOF/error)`, delayed EOF, `(0, nil)`, empty reads, default/disabled/`math.MaxInt64`, sink-stop and header-budget precedence. |
 
 ### ROB-010 — Input and message framing
@@ -1558,6 +1603,16 @@ blocked read (`ROB-001-006`, #6), judges repeated no-progress reads
 start or complete any of them, and none of them depends on it beyond sharing
 the published session stop that already exists.
 
+**Exception — `ROB-001-008`.** It was taken after `ROB-001-009` was reviewed,
+at the user's request, as the diagnostic cap of
+[issue #8](https://github.com/saeroun-ai/emlkit/issues/8), ahead of the
+still-Planned `ROB-001-005` through `ROB-001-007`. It bounds what a session
+records and delivers and depends on nothing those items introduce: it neither
+bounds a body nor decoding (`ROB-001-005`, #4), cancels a read (`ROB-001-006`,
+#6), nor judges no-progress reads (`ROB-001-007`, #7). It does not advance,
+start or complete any of them, the shared profile engine (#17), or raw replay
+(#41).
+
 ## 9. Per-item implementation protocol
 
 Each Claude Code execution receives exactly one ledger ID and must:
@@ -1622,3 +1677,5 @@ Codex reviewed `ROB-050-001` for [issue #22](https://github.com/saeroun-ai/emlki
 Codex reviewed `ROB-120-008` for [issue #58](https://github.com/saeroun-ai/emlkit/issues/58): the independent writer matrix passes 28 cases (the initial 20 had 12 panics and six silent successes), and repeated reads after malformed-header or unsupported-charset setup failures return without blocking. The 240 healing and 288 opaque-body/Walk/mail scenarios still pass. A fresh full race suite, build, formatting and whitespace checks pass, as do the non-baseline vet analyzers; ordinary vet retains the documented composites and WriteTo-signature warnings. The executor passed the full standard suite. Review corrected the worker-exit test to observe its own worker, checked its positive control and panic handling, and qualified output guarantees for the entity versus descendants and for Body versus WriteTo. All delegation permission-denial arrays were empty. Early consumer abandonment/Close propagation remains a lifecycle checkpoint in #6, and raw replay remains #41.
 
 Codex reviewed `ROB-001-009` for [issue #3](https://github.com/saeroun-ai/emlkit/issues/3): independent QA passes 2,160 plain-input boundary/source-error cases, 288 multipart/skip/Walk/mail cases and 200 decoder/charset cases. A generated 256 MiB stream verifies the default without materializing the input: at most N admitted bytes plus one proof byte. A fresh full race suite, build, formatting and whitespace checks pass after review corrections; the executor also passed the full standard suite, 386 checks and scoped input fuzzing (90 s plus 45 s after review). Review corrected read-ahead, proof-byte, stop identity and legacy-header-cap documentation and added the prefetch regression. Fuzzing independently reproduced preexisting corrupt-Base64 chunk dependence on clean `6fb8b93`; issue #34 tracks it, and the scoped oracle does not claim malformed decoder chunk invariance. Plain vet retains its documented 13 composite and one WriteTo-signature warnings; the other analyzers pass. Both delegation permission-denial arrays were empty. Unread tails, cancellation, no-progress handling and body limits remain separate work.
+
+Codex reviewed `ROB-001-008` for [issue #8](https://github.com/saeroun-ai/emlkit/issues/8): the independent public cap matrix passes 196 cases; input-after-cap, terminal sink refusal and Strict local failures retain their own errors and preserve valid siblings. A 10,000-part malformed-parameter storm returns every body while the default cap delivers exactly 1,000 callbacks with no retained diagnostics in sink-only mode. The final full race suite, build, formatting and whitespace checks pass on Go 1.26.10 linux/amd64; the executor also passed the full standard suite, focused 386 checks and all prior input/healing/opaque probes. Review corrected the terminal Action so it does not promise continuation after an independent failure, qualified diagnostic completeness claims, verified FatalError keeps its original diagnostic, and fixed the enforced-budget test map and a test failure-path index. MaxDiagnosticCount reserves its final slot and does not stop parsing; producer-side formatting can still cost work after recording is capped. Both delegation permission-denial arrays were empty. Baseline vet categories remain unchanged.

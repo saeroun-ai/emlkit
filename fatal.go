@@ -91,6 +91,12 @@ type FatalError interface {
 	// second result rather than by returning a zero Diagnostic that could be
 	// mistaken for a real one.
 	//
+	// The diagnostic is the failure's own, whether or not the session recorded
+	// it: once Limits.MaxDiagnosticCount is reached the session replaces it
+	// with the terminal limit.diagnostic_count diagnostic or omits it, but the
+	// fatal error still carries it, so the reason a scope stopped is never lost
+	// to that budget.
+	//
 	// The returned diagnostic is a copy whose Path is a distinct slice, so a
 	// caller may retain and modify it freely. As with Diagnostic.Clone, Cause
 	// is an arbitrary error value and is not copied: it is the same error the
