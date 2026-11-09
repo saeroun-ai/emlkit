@@ -405,7 +405,13 @@ func readWithOptions(r io.Reader, opts *ReadOptions, session *ParseSession) (*En
 
 	opts = opts.withDefaults()
 
-	cr := &countingReader{r: r}
+	// The input budget goes under the counting reader, at the raw source, so
+	// that every read of this parse — header, body, every part and every byte a
+	// multipart iterator skips — shares it and is counted once, and so that a
+	// byte it refuses is never one a position is measured against. A parse that
+	// budgets nothing, which is Read and ReadWithOptions, reads r as it is; see
+	// limit_input.go.
+	cr := &countingReader{r: session.limitInput(r)}
 	lr := &limitedReader{R: cr, N: math.MaxInt64}
 	br := bufio.NewReader(lr)
 
@@ -439,6 +445,14 @@ func readWithOptions(r io.Reader, opts *ReadOptions, session *ParseSession) (*En
 
 	h, err := textproto.ReadHeaderLimits(br, headerLimits)
 	if err != nil {
+		// The input budget can end the parse while the header block is still
+		// being read, and its stop is the session's: it outranks whatever the
+		// header reader made of the failed read, and is returned as the
+		// identical value every other scope reports. The block did not end
+		// within the budget, so there is no header to return.
+		if stop := session.fatalErr(); stop != nil {
+			return nil, stop
+		}
 		return nil, rootHeaderError(err, session)
 	}
 

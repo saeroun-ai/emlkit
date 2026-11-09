@@ -500,8 +500,56 @@ returns a session carrying the requested profile and policy.
 `ROB-001-002` added the first enforcement, `MaxHeaderBytes`. `ROB-001-003` added
 five more — `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`,
 `MaxParameterCount` and `MaxParameterSegments`. `ROB-001-004` added the two tree
-budgets, `MaxMIMEDepth` and `MaxPartCount`, so **eight** budgets are enforced,
-all of them under `Parse` alone.
+budgets, `MaxMIMEDepth` and `MaxPartCount`. `ROB-001-009` added
+`MaxInputBytes`, so **nine** budgets are enforced, all of them under `Parse`
+alone.
+
+`MaxInputBytes` (`ROB-001-009`, [issue #3](https://github.com/saeroun-ai/emlkit/issues/3))
+is counted once, by one reader at the raw source under the offset counter, so
+the root header, every body, multipart framing and part headers, and the bytes
+an iterator drains past a skipped part all spend the same budget and none is
+counted twice. A budget `N` admits `N` bytes; reaching `N` is neither an
+overflow nor an end of input. Once `N` bytes are admitted the next read asks the
+source for exactly one byte: a byte — whatever error accompanies it — proves the
+overflow and is never handed on; no byte passes the source's `io.EOF`, error or
+`(0, nil)` through unchanged, and nothing is retried there (`ROB-001-007` owns
+no-progress). Reads before `N` are only shortened, so offsets and the bytes
+before `N` do not depend on chunking, and an empty read asks the source for
+nothing. The limiter implements `io.Reader` alone, so `io.WriterTo` and
+`io.ReaderFrom` copies go through it.
+
+The budget is spent as raw bytes are read from the source, not as they are
+interpreted. `Parse` interprets only the header, but the buffered reader above
+the source may already have fetched body bytes with it, up to the budget; those
+count, and fetching up to exactly `N` reads no proof byte. A tail never read
+from the source — an unread body, the epilogue after a closing delimiter — is
+not validated, so the size of the whole message beyond it stays unknown, and a
+header that ended within the budget is never what proves an overflow. `Read` and
+`ReadWithOptions` have no total input budget; their message-header cap is
+unchanged. One
+consequence is exact rather than incidental: a nested part's header block that
+ends exactly at the budget is not returned, because the enclosing multipart
+must read the next byte to rule out that its last terminator starts a
+delimiter. When one header block would exceed both a header budget and this
+one, the header budget wins when its refusal is decided from bytes already
+admitted, and this one wins when the header reader needs a byte it refuses first.
+
+An overflow records exactly one `limit.input_bytes` diagnostic at
+`SeverityLimitExceeded`, at offset `N`, with the nil path of the message as a
+whole — the source cannot know which entity it was about to feed, and no part
+path is invented. Its failure belongs to the whole parse and is published as the
+session's stop: `Parse` returns it, with no entity, when the root header did not
+end within the budget; otherwise the read that reached it, every later read, and
+`NextPart`, `Walk`, `mail.Reader` and `ParseStop` return the identical value, and
+the source is not read again. A read of a part's body returns an error that
+wraps that stop, joined by the multipart framing with `ErrMissingBoundaryClose`.
+Unlike the part-count transition this needs no pending state: the overflow is
+claimed by the single reader of the stream, the diagnostic is delivered with no
+lock held, and only then is the stop published, so a sink may still read the
+session and ask `ParseStop`, which answers nil until publication. A sink that
+refuses the diagnostic, or a stop published earlier, wins; after an earlier stop
+nothing is recorded. Everything already returned stays valid, and a header
+block cut short yields no header.
 
 Under `Parse` it bounds one header block per entity — the message's own and
 every part's, at any nesting depth — counted as the block appears on the wire
@@ -786,6 +834,7 @@ Each applicable test asserts:
 | ROB-001-006 | Planned | Add context cancellation and deadline checks to long scans/decoders. | Cancellation latency and partial-result tests. |
 | ROB-001-007 | Planned | Detect repeated no-progress reads while allowing legal transient behavior. | Adversarial reader tests. |
 | ROB-001-008 | Planned | Cap diagnostics and emit one terminal `limit.diagnostic_count` entry. | Diagnostic storm test. |
+| ROB-001-009 | Done | Enforce `MaxInputBytes` under `Parse` once, at the raw source shared by every header, body, multipart and skip/drain read: `N` bytes are admitted, a proven byte `N+1` (at most one proof byte, never handed on) records one `limit.input_bytes` diagnostic and publishes the session stop; `Read`/`ReadWithOptions` unchanged. | `N-1/N/N+1` root header and body, nested and skipped parts, chunkings, `(n>0, EOF/error)`, delayed EOF, `(0, nil)`, empty reads, default/disabled/`math.MaxInt64`, sink-stop and header-budget precedence. |
 
 ### ROB-010 — Input and message framing
 
@@ -1498,6 +1547,17 @@ items introduce: it makes the writer stop ignoring an error it was already
 given. It does not advance, start or complete raw replay (#41, `ROB-110`),
 header injection (`ROB-120-003`), any other `ROB-120` item, or any other item.
 
+**Exception — `ROB-001-009`.** It was added to the ledger before
+implementation, at the user's request, after every earlier reviewed item, as
+the input-byte budget of [issue #3](https://github.com/saeroun-ai/emlkit/issues/3),
+and taken ahead of the still-Planned `ROB-001-005` through `ROB-001-008`. It is
+a primitive enforcement at the raw source that depends on nothing those items
+introduce: it neither bounds a body nor decoding (`ROB-001-005`, #4), cancels a
+blocked read (`ROB-001-006`, #6), judges repeated no-progress reads
+(`ROB-001-007`, #7), nor caps diagnostics (`ROB-001-008`). It does not advance,
+start or complete any of them, and none of them depends on it beyond sharing
+the published session stop that already exists.
+
 ## 9. Per-item implementation protocol
 
 Each Claude Code execution receives exactly one ledger ID and must:
@@ -1560,3 +1620,5 @@ Codex reviewed `ROB-100-007` for [issue #15](https://github.com/saeroun-ai/emlki
 Codex reviewed `ROB-050-001` for [issue #22](https://github.com/saeroun-ai/emlkit/issues/22) and returned three gaps for correction: an ambiguous multipart losing later siblings, a known Strict refusal appearing successful through `Walk`, and empty-only parameter separators escaping repair. The corrected implementation independently passes 240 root/nested/chunked tolerant/forensic recovery scenarios, 288 opaque-body/Walk/mail scenarios with exact bytes and following siblings, the previous 36 attachment/charset scenarios, and the reentrant accessor probe. A fresh full race suite, build, formatting, whitespace checks and vet with the two documented baseline categories excluded pass. The executor also passed the full standard suite and the final 60-second focused fuzz run; no permission denials occurred. Nine identical synthetic inputs were actually exercised with Python 3.14.10 and Mime4j 0.8.15; conflicting boundaries intentionally differ, and broad reference parity is not claimed. `ROB-050-002` and the other recovery items remain Planned. The writer panic found during this review is tracked separately in #58.
 
 Codex reviewed `ROB-120-008` for [issue #58](https://github.com/saeroun-ai/emlkit/issues/58): the independent writer matrix passes 28 cases (the initial 20 had 12 panics and six silent successes), and repeated reads after malformed-header or unsupported-charset setup failures return without blocking. The 240 healing and 288 opaque-body/Walk/mail scenarios still pass. A fresh full race suite, build, formatting and whitespace checks pass, as do the non-baseline vet analyzers; ordinary vet retains the documented composites and WriteTo-signature warnings. The executor passed the full standard suite. Review corrected the worker-exit test to observe its own worker, checked its positive control and panic handling, and qualified output guarantees for the entity versus descendants and for Body versus WriteTo. All delegation permission-denial arrays were empty. Early consumer abandonment/Close propagation remains a lifecycle checkpoint in #6, and raw replay remains #41.
+
+Codex reviewed `ROB-001-009` for [issue #3](https://github.com/saeroun-ai/emlkit/issues/3): independent QA passes 2,160 plain-input boundary/source-error cases, 288 multipart/skip/Walk/mail cases and 200 decoder/charset cases. A generated 256 MiB stream verifies the default without materializing the input: at most N admitted bytes plus one proof byte. A fresh full race suite, build, formatting and whitespace checks pass after review corrections; the executor also passed the full standard suite, 386 checks and scoped input fuzzing (90 s plus 45 s after review). Review corrected read-ahead, proof-byte, stop identity and legacy-header-cap documentation and added the prefetch regression. Fuzzing independently reproduced preexisting corrupt-Base64 chunk dependence on clean `6fb8b93`; issue #34 tracks it, and the scoped oracle does not claim malformed decoder chunk invariance. Plain vet retains its documented 13 composite and one WriteTo-signature warnings; the other analyzers pass. Both delegation permission-denial arrays were empty. Unread tails, cancellation, no-progress handling and body limits remain separate work.

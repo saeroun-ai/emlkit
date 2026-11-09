@@ -61,6 +61,18 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 
 	p, err := r.r.NextPart()
 	if err != nil {
+		// The input budget is counted at the source this iterator reads, so it
+		// can end the whole parse in the middle of this call — while a part the
+		// caller left unread is drained, a framing line is read, or a part
+		// header is — and the reader below then fails with that stop, wrapped
+		// in whatever it says about the read it could not finish. The stop is
+		// the session's and outranks this iterator's own failures, so it is
+		// returned first and as the identical value every scope reports, and no
+		// header or line budget is diagnosed for a read the stop cut short.
+		if stop := r.parent.fatalErr(); stop != nil {
+			return nil, stop
+		}
+
 		// A part header past one of its budgets, or a framing line past the
 		// line budget, is a defect of the message, so it is recorded and
 		// reported as one. Either ends this iterator: the reader is standing

@@ -291,7 +291,7 @@ func (e *Entity) EffectiveContentDisposition() (disp string, params map[string]s
 // to, or nil while that parse may continue. It is the identical value Parse,
 // MultipartReader.NextPart and Entity.Walk report for that stop: a FatalError
 // for a DiagnosticSink that asked the parse to stop, or for a budget whose scope
-// is the whole parse, such as Limits.MaxPartCount.
+// is the whole parse, such as Limits.MaxPartCount or Limits.MaxInputBytes.
 //
 // It reports only a stop of the whole parse. A failure confined to one scope —
 // a child header past a budget, which ends one multipart iterator — is reported

@@ -174,9 +174,11 @@ const (
 // DefaultLimits returns those values resolved, so a caller can read one, adjust
 // it, or compare against it without repeating a number from this table.
 //
-// Eight budgets are enforced, and only under Parse. They fall into three groups
+// Nine budgets are enforced, and only under Parse. They fall into four groups
 // by what a failure costs, and the grouping is part of the contract:
 //
+//   - MaxInputBytes bounds the bytes read from the input for the whole message,
+//     shared by every read of the parse.
 //   - MaxHeaderBytes, MaxHeaderFieldBytes, MaxHeaderCount and MaxLineBytes bound
 //     the header block of every entity — the message's own and every part's at
 //     any depth.
@@ -186,7 +188,9 @@ const (
 //     the parser descends through nested multipart containers, and how many
 //     child parts it discovers in the whole message.
 //
-// The three groups fail differently. A header block past one of its budgets is
+// An input past MaxInputBytes ends the whole parse with one limit.input_bytes
+// diagnostic; see the field for exactly when that is decided. The other three
+// groups fail differently from each other. A header block past one of its budgets is
 // all or nothing: it yields no header, records exactly one limit.* diagnostic at
 // SeverityLimitExceeded, and ends that scope with a FatalError, because a block
 // that overran leaves the input somewhere that cannot be resynchronized to. A
@@ -219,6 +223,40 @@ const (
 type Limits struct {
 	// MaxInputBytes bounds the bytes read from the input for one message,
 	// including everything below.
+	//
+	// It is counted once, at the input itself, so every read of the parse
+	// spends it: the message's header block, its body, the framing and headers
+	// of every part, and the bytes a multipart iterator skips past a part the
+	// caller did not read. A budget of N admits N bytes, and a message of
+	// exactly N bytes is read whole. Only a byte that actually exists after
+	// the N-th exceeds it, which costs reading that one byte, and that byte is
+	// never delivered to anything.
+	//
+	// It is spent as raw bytes are read from the input, not as they are
+	// interpreted. Parse interprets the message's header block and nothing
+	// more, and the rest is interpreted as the caller consumes it, but reading
+	// is buffered: body bytes fetched ahead together with the header count, and
+	// may already be all of the budget. Fetching up to exactly N is not an
+	// overflow and reads no proof byte. What is never read at all — a body left
+	// unread past what was fetched, the epilogue after the last part — is never
+	// checked against it, so a parse that ends without a failure says nothing
+	// about the size of the message beyond what was read.
+	//
+	// Exceeding it ends the whole parse. It records exactly one
+	// limit.input_bytes diagnostic at offset N, the first byte not admitted,
+	// with the nil path of the message as a whole, and publishes the session's
+	// FatalError: the read that exceeded it, every later read of the input, and
+	// every later scope of the parse report that one error, and the input is
+	// not read again. A read of a part's body reports an error wrapping it,
+	// since the multipart framing adds that the part's closing delimiter was not
+	// found. Everything already returned stays valid, including a message
+	// header that ended within the budget and every byte already delivered; a
+	// header block the budget cut short yields no header at all.
+	//
+	// An I/O error or io.EOF the input returns without a byte past the budget
+	// is reported as itself and is not an overflow. A DiagnosticSink that stops
+	// the parse while it is told about the overflow, or a stop published before
+	// it, is the error the parse ends with instead.
 	MaxInputBytes int64
 
 	// MaxHeaderBytes bounds one header block, counted as it appears in the

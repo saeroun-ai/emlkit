@@ -107,15 +107,18 @@ message.
 
 Errors and diagnostics answer different questions, so read both: an error says
 whether a scope could continue, the session says what was observed. `Parse`
-enforces **eight** budgets today — `MaxHeaderBytes`, `MaxHeaderFieldBytes`,
-`MaxHeaderCount`, `MaxLineBytes`, `MaxParameterCount`, `MaxParameterSegments`,
-`MaxMIMEDepth` and `MaxPartCount`. The other `Limits` fields — total input
-bytes, encoded/decoded body bytes, the diagnostic cap and the rest — are
-validated but **not enforced yet**, and there is no cancellation support yet.
-If you need an input byte cap, enforce it with a reader that fails with an
-explicit overflow error once the cap is passed — not one that ends the input
-with a successful `io.EOF`, which would turn a truncated message into what looks
-like a complete one. See
+enforces **nine** budgets today — `MaxInputBytes`, `MaxHeaderBytes`,
+`MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`, `MaxParameterCount`,
+`MaxParameterSegments`, `MaxMIMEDepth` and `MaxPartCount`. `MaxInputBytes` is
+counted once at the input, on the raw bytes actually read from it — including
+body bytes buffered ahead while the header was read — so a body or epilogue
+never read from the input is never checked. One byte past the budget ends the
+whole parse with a `FatalError` and one `limit.input_bytes` diagnostic rather
+than a successful `io.EOF`. The other `Limits` fields — encoded/decoded body
+bytes, the diagnostic cap and the rest — are validated but **not enforced
+yet**, and there is no cancellation support yet. `Read` and `ReadWithOptions`
+have no total input budget; only their message-header cap
+(`ReadOptions.MaxHeaderBytes`) applies. See
 [docs/conformance.md](docs/conformance.md).
 
 ## Features

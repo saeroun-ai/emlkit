@@ -1428,6 +1428,8 @@ func TestParse_otherBudgetsStayUnenforced(t *testing.T) {
 		// ROB-001-004.
 		"MaxMIMEDepth": true,
 		"MaxPartCount": true,
+		// ROB-001-009.
+		"MaxInputBytes": true,
 	}
 
 	limits := DefaultLimits()
@@ -1443,8 +1445,7 @@ func TestParse_otherBudgetsStayUnenforced(t *testing.T) {
 		t.Fatal("every budget is enforced; this test has nothing to say")
 	}
 
-	// A message that exceeds each of them: more than one byte of input, deeper
-	// than one container, more than one part, a preamble and an epilogue, and
+	// A message that exceeds each of them: deeper than one container, more than one part, a preamble and an epilogue, and
 	// bodies of more than one byte, encoded and decoded.
 	text := "Content-Type: multipart/mixed; boundary=OUTER\r\n\r\n" +
 		"a preamble\r\n" +

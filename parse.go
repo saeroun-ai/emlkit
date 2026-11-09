@@ -90,7 +90,7 @@ type ParseOptions struct {
 //   - The session is never nil, including when the header could not be read at
 //     all, so there is always somewhere to look. What it holds, though, is what
 //     some producer has been implemented to record, which today is the two
-//     decoding warnings below, the eight enforced resource budgets, and the
+//     decoding warnings below, the nine enforced resource budgets, and the
 //     repair of a valid media type or disposition with malformed parameters. A framing
 //     failure that nothing diagnoses yet is carried by err alone and leaves the
 //     session empty, so read both rather than treating an empty session as a
@@ -118,6 +118,17 @@ type ParseOptions struct {
 // there is nothing about the message to report. The session is still returned
 // and still reports the requested Profile and Compatibility; its Limits are the
 // defaults, since the requested ones were never settled.
+//
+// Limits.MaxInputBytes bounds every byte this parse reads from r, counted once
+// at r whichever scope reads it — the header, a body, a part's framing or
+// header, or a part a multipart iterator skips. It is spent as raw bytes are
+// read from r, which includes body bytes buffered ahead while the header was
+// read, and only that far: a tail never read from r is never checked. A byte that
+// actually exists past the budget ends the whole parse: one limit.input_bytes
+// diagnostic at the offset of that byte, which is never delivered, and the
+// session's FatalError, returned by Parse itself when the message header did not
+// end within the budget, and otherwise by the read that reached it and every
+// later scope. Everything already returned stays valid. See Limits.MaxInputBytes.
 //
 // A header block that exceeds Limits.MaxHeaderBytes, MaxHeaderFieldBytes,
 // MaxHeaderCount or MaxLineBytes is refused, and refused wherever it is found:

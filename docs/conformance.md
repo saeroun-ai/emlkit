@@ -290,8 +290,28 @@ These are deliberate boundaries, each with a reason.
   activates the budget. A `message/rfc822` part is meanwhile one ordinary part of
   `MaxPartCount`, and the structure inside its opaque body costs neither tree
   budget. ([`limits.go`](../limits.go))
+- **`MaxInputBytes` is counted once, at the input, and only as it is read.**
+  Under `Parse` one reader at the raw source bounds every read of the parse —
+  header, bodies, multipart framing and part headers, and the bytes an iterator
+  drains past a part the caller skipped — so nothing is counted twice and no
+  path reads around it, `io.WriterTo`/`io.ReaderFrom` copies included. A budget
+  `N` admits `N` bytes; only an actual byte after them is an overflow, learned by
+  reading that one byte, which is never delivered. The overflow records one
+  `limit.input_bytes` diagnostic at offset `N`, with the message's nil path
+  because the source cannot know which entity it was feeding, and publishes the
+  session's stop; the source is never read again. An `io.EOF` or I/O error with
+  no byte past the budget, and a `(0, nil)` read, are passed through unchanged.
+  The budget counts raw bytes as they are read, not as they are interpreted:
+  body bytes buffered ahead while the header was read count, and fetching up to
+  exactly `N` reads no proof byte; bytes never read from the input — an unread
+  body tail, an epilogue — are never checked, so the size of the whole message
+  beyond them stays unknown. A nested part header ending exactly at the budget
+  may still need the next byte to rule out the enclosing delimiter. A sink stop
+  during the delivery, or a stop already published, wins. `Read` and
+  `ReadWithOptions` have no total input budget; their message-header cap still
+  applies. ([`limit_input.go`](../limit_input.go))
 - **The remaining budgets in `Limits` are still resolved but not consulted.**
-  Everything outside the eight enforced ones — `MaxHeaderBytes`,
+  Everything outside the nine enforced ones — `MaxInputBytes`, `MaxHeaderBytes`,
   `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`, `MaxParameterCount`,
   `MaxParameterSegments`, `MaxMIMEDepth` and `MaxPartCount` — is validated and
   reported by `ParseSession.Limits`, and their `limit.*` codes are reserved but
