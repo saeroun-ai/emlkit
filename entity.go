@@ -663,7 +663,15 @@ func readWithOptions(r io.Reader, opts *ReadOptions, session *ParseSession) (*En
 	// on construction could not move it.
 	bodyOffset := cr.n - int64(br.Buffered())
 
-	return newWithOptions(Header{h}, br, opts.SkipTextAttachmentDecoding, rootContextAt(session, headerOffset, bodyOffset))
+	e, err := newWithOptions(Header{h}, br, opts.SkipTextAttachmentDecoding, rootContextAt(session, headerOffset, bodyOffset))
+	// A root that frames no parts has no input after it that belongs to no
+	// entity: its body runs to the end of the input. Under ProfileForensic that
+	// is noted for ParseSession.TrailingInput, from the header alone; nothing is
+	// read for it. See trailing.go.
+	if e != nil && !e.framesParts() {
+		session.noteUnframedRoot()
+	}
+	return e, err
 }
 
 // Read reads a message from r. The message's encoding and charset are
@@ -695,7 +703,7 @@ func Read(r io.Reader) (*Entity, error) {
 // Limits.MaxInputBytes alone. A body kept opaque as above is a leaf, held to the
 // body budgets like any other. See Limits.MaxEncodedBodyBytes.
 func (e *Entity) MultipartReader() MultipartReader {
-	if !strings.HasPrefix(e.mediaType, "multipart/") || e.unframed {
+	if !e.framesParts() {
 		return nil
 	}
 	if mb, ok := e.Body.(*multipartBody); ok {
@@ -743,6 +751,15 @@ func (e *Entity) MultipartReader() MultipartReader {
 		skipTextAttachmentDecoding: e.skipTextAttachmentDecoding,
 		parent:                     parent,
 	}
+}
+
+// framesParts reports whether MultipartReader returns an iterator for this
+// entity: a multipart media type, as it was interpreted at construction, that
+// the metadata repair did not leave unframed. It does not check that a
+// boundary parameter is present or that any delimiter will be found; an
+// iterator with an empty or absent boundary ends as it always did.
+func (e *Entity) framesParts() bool {
+	return strings.HasPrefix(e.mediaType, "multipart/") && !e.unframed
 }
 
 // sameReader reports whether a and b are the same reader value. It detects

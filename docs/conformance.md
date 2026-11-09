@@ -189,6 +189,50 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
 - **Missing closing boundary.** On EOF before the final `--boundary--`, buffered
   bytes are flushed as body and an `ErrMissingBoundaryClose` is reported, instead
   of dropping data or looping forever. ([`textproto/multipart.go`](../textproto/multipart.go) · `scanBody` / `bodyFailure`)
+- **The input after the message, under `ProfileForensic`, on request**
+  (`ROB-010-005`). The iterators end at the closing delimiter of the message's
+  own multipart body and do not read on; the buffered readers may already
+  have fetched some of what follows, counted against `MaxInputBytes`, as they
+  fetch ahead everywhere. RFC 2046 calls what follows the epilogue and says to
+  ignore it, and it is also where a concatenated message would be. Under
+  `ProfileForensic` only, once an iterator of that body (`NextPart`, `Walk`,
+  `mail.Reader`) returns `io.EOF` at a proven closing delimiter,
+  `ParseSession.TrailingInputReader` offers one reader of the bytes after the
+  delimiter's line ending, and `ParseSession.TrailingInput` a snapshot: status
+  (`unknown`, `none`, `open`, `ended`, `failed`, `stopped`), absolute start
+  (with a known flag), bytes delivered, the error that ended it, and evidence.
+  Offering it reads no input (it allocates bounded state); nothing more is read
+  for it until the caller reads it; the bytes are delivered verbatim and once,
+  from the buffers and then the input, and are not retained or replayable.
+  Reading the root's `Body` or `WriteTo` — whose verbatim copy of a multipart
+  body includes the epilogue — consumes those bytes as body, as before, and is
+  no inspection; mixing either, or a second iterator, with the reader is not
+  supported. While open, a non-empty read reports a stop of the parse
+  (cancellation included, even with the bytes already buffered) before and
+  after reading; exact `io.EOF` ends it; any other input error is returned as
+  itself and records no error diagnostic, though message-like evidence already
+  proved is still reported. The first end is final: a later stop or
+  cancellation does not replace an `io.EOF` or input error already returned. A
+  zero-length read does no I/O and no inspection. `MaxInputBytes` counts it as
+  any read, with its existing prefetch semantics: a stop keeps what was
+  delivered, but not every admitted byte is promised to be delivered;
+  `MaxEpilogueBytes` stays reserved (#30) and is not applied. A message that
+  frames no parts reports `none`: its body runs to the end of the input, and a
+  message pasted into it is body — no body is scanned, split or flagged.
+  Evidence comes from the first 4096 bytes delivered: after blank lines, an
+  mbox `From_` line of `ROB-010-004`'s grammar, or two header field lines
+  (name, `:`, then space, tab or line ending; continuation lines between
+  allowed, a blank line ending the candidate) are *message-like*, which records
+  one `input.trailing_messages` diagnostic at Info. Line endings are the
+  longest match; a `\r` that ends the proof is decided by the byte after it
+  (a `\n` is included in the evidence, another byte is not) or by `io.EOF`
+  itself, an ordinary failure first leaving it undecided, and a next byte past
+  the window deciding against. That is a suspicion only: a conformant epilogue
+  can look the same, and a concatenated message that does not begin that way
+  within the window is not recognized. An ordinary, blank, empty or binary
+  epilogue records nothing. Nested multipart epilogues, preambles and raw
+  replay are not covered (#30, #41). Other profiles are unchanged.
+  ([`trailing.go`](../trailing.go), [`textproto/multipart.go`](../textproto/multipart.go) · `MultipartReader.Epilogue`)
 - **Preamble** before the first boundary is skipped. ([`textproto/multipart.go`](../textproto/multipart.go) · `nextPart`)
 - **Trailing whitespace** after a boundary delimiter is tolerated. ([`textproto/multipart.go`](../textproto/multipart.go) · `skipLWSPChar`)
 - **Malformed/empty `boundary` parameter on write** is re-synchronized: the writer
@@ -257,7 +301,10 @@ These are deliberate boundaries, each with a reason.
   `From ` lines: no splitting at later `From ` lines, no `>From` unescaping, no
   `Content-Length` interpretation, no inferred message end, and a `From ` line
   anywhere else — a second one, one inside the header, one in a part header or
-  a body — is read as it always was. `Read`, `ReadWithOptions`, `New`,
+  a body — is read as it always was. A `From_` line at the start of the input
+  after a multipart message's closing delimiter is only evidence that a
+  `ProfileForensic` caller may read about (`ROB-010-005`, above); nothing is
+  split there either. `Read`, `ReadWithOptions`, `New`,
   `textproto` and the `mail` constructors never recognize an envelope, and no
   writer writes one; replaying the original input is not provided
   (`ROB-020-007`, `ROB-110`). This is not a claim of parity with any mbox

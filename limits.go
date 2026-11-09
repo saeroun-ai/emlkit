@@ -450,6 +450,13 @@ type Limits struct {
 	MaxPreambleBytes int64
 
 	// MaxEpilogueBytes bounds the text after a multipart closing delimiter.
+	//
+	// It is reserved and enforced by nothing yet. In particular it does not
+	// bound the input after the message that ParseSession.TrailingInputReader
+	// delivers under ProfileForensic: the parse does not read on for those
+	// bytes — its buffered readers may already hold some of them, fetched
+	// ahead as everywhere — the caller does, and they count towards
+	// MaxInputBytes as every read of the input does.
 	MaxEpilogueBytes int64
 
 	// MaxEncodedBodyBytes bounds the wire bytes of one leaf body, before any

@@ -51,7 +51,11 @@ import (
 // never read, the epilogue after the last part a caller iterated to — is
 // checked only as far as the bytes actually read, so a parse that has returned
 // without a failure has not certified the size of anything it did not read, and
-// the size of the whole message beyond that stays unknown.
+// the size of the whole message beyond that stays unknown. The input after the
+// message that a caller reads through ParseSession.TrailingInputReader, under
+// ProfileForensic, is read from the same input and counted the same way: what
+// a buffer had already fetched of it was counted then, and the rest is counted
+// as the caller reads it and not checked before (trailing.go).
 //
 // # What a failure means
 //

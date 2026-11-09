@@ -1291,7 +1291,7 @@ empty permission-denial arrays.
 | ROB-010-002 | Done | Handle CRLF, bare LF, bare CR, mixed endings, and a missing final newline in headers and multipart delimiters, preserving false-candidate body bytes and source errors within the budgets. Parse records original-byte locations; Strict refuses the affected entity or iterator locally. See "ROB-010-002 — line endings" below. | Independent chunk, source-error, budget, cancellation and profile matrices; bounded native fuzzing; full unit/race/386/build checks. |
 | ROB-010-003 | Done | Detect and preserve BOMs without letting them corrupt a field name: a UTF-8 mark at the start of a header block is consumed, kept by the Header and written back; a UTF-16 or UTF-32 mark leaves the block unread and the entity opaque, every byte its body, never transcoded and refused by the writers; `input.bom` under Parse, Strict refuses locally. See "ROB-010-003 — byte order marks" below. | UTF-8/16/32 BOM fixtures; root/part/textproto/legacy/mail/writer, chunk, budget, source-error, cancellation and profile matrices; bounded fuzz oracles. |
 | ROB-010-004 | Done | Optionally recognize a leading mbox envelope line and preserve it separately: `ParseOptions.RecognizeMboxEnvelope` (off by default) lets `Parse`/`ParseContext` keep one ctime-shaped `From_` line at offset 0 on the session (`ParseSession.MboxEnvelope`), the header read after it at moved positions, `header.mbox_envelope` Info under every profile; nothing else changes. See "ROB-010-004 — mbox envelope lines" below. | Valid/invalid/mid-header `From ` fixtures; grammar, line-ending, bound, look-ahead, root/profile/compatibility/delivery, suffix-equivalence, negative/option-off, BOM, part and root/shared budget, input budget, source-error, cancellation, no-progress, sink, immutability, writer and `mail` matrices; capped fuzz oracle. |
-| ROB-010-005 | Planned | Detect concatenated messages or trailing unassigned bytes in forensic mode. | Two-message and trailing-junk fixtures. |
+| ROB-010-005 | Done | Detect concatenated messages or trailing unassigned bytes in forensic mode: under `ProfileForensic`, after the message's own multipart closing delimiter, `ParseSession.TrailingInputReader` delivers the bytes after it verbatim and once when the caller reads, and `ParseSession.TrailingInput` reports their position, how reading ended, and message-like evidence (one `input.trailing_messages` Info suspicion, never a definite second message); a message that frames no parts has none, and no body is scanned or split. See "ROB-010-005 — input after the message" below. | Two-message and trailing-junk fixtures; line-ending, traversal, chunking, profile-parity, none/unknown, nested, mbox, input-budget, every-cut source-error, cancellation, no-progress, sink, concurrency and empty-read matrices; textproto epilogue tests; reference classifier and bounded fuzz oracles. |
 | ROB-010-006 | Done | Preserve bytes returned with EOF and partial bytes before injected I/O errors: under `Parse` the input's first error is final and reported where the parse reaches it, a body reports it however its decoders ended, an eager `CharsetReader` failing on it returns it with the entity; every entry point's header scanner keeps a block's first read failure and the fields read whole before it. See "ROB-010-006 — input errors" below. | Custom-reader tests at every cut, chunk and buffer size, sticky and resuming sources; see below. |
 
 #### ROB-010-006 — input errors (Done)
@@ -1753,9 +1753,10 @@ parity with another MIME engine is claimed.
 Status: implemented by Claude and independently reviewed and verified by Codex
 for [issue #19](https://github.com/saeroun-ai/emlkit/issues/19). Claude ran no Go
 build, test or fuzz job. This
-covers byte order marks only. #19 is not complete: `ROB-010-005`
-(concatenated messages and trailing bytes) remains open under it, and
-`ROB-010-004` (mbox envelope lines) belongs to #46; neither is touched here.
+covers byte order marks only. At that completion, `ROB-010-005`
+(concatenated messages and trailing bytes) still remained under #19, and
+`ROB-010-004` (mbox envelope lines) belonged to #46; their later completion
+is recorded separately below.
 
 **Recognition, every entry point.** Only the first bytes of a header block —
 the input's first block, and each part's block right after its delimiter
@@ -2082,6 +2083,217 @@ finished normally with a reported 1.2 GiB peak. All three mbox Claude result
 files report no permission denials. This completes only ROB-010-004; trailing
 input (#19), general preamble/epilogue preservation (#30), raw replay (#41),
 writer ownership (#60) and mbox archive parsing are not completed here.
+
+#### ROB-010-005 — input after the message (Done)
+
+Status: implemented by Claude for
+[issue #19](https://github.com/saeroun-ai/emlkit/issues/19) from a design
+Codex reviewed and corrected, then independently reviewed and verified by
+Codex under enforced resource limits. Codex's initial bounded QA found a classifier defect — the empty
+value of the second field accepted a `\r` before the byte after it decided
+it, so an ordinary failure there was reported message-like and a `\r\n`
+split — a fuzz oracle that read its snapshot before reading the tail,
+a reference that shared the product's `From_` recognizer, and documentation
+overclaims; all were corrected in the same item. Claude ran no Go build, test,
+fuzz or benchmark; only `gofmt` was run. Primary sources: RFC 2046 §5.1.1 (`/tmp/emlkit-rfc2046.txt`: the
+epilogue is discard-text, "to be ignored") and RFC 4155 for the `From_`
+grammar `ROB-010-004` already implements. No other engine's behavior is
+claimed.
+
+**Scope.** One input holds one message. A message that frames no parts has
+no end of its own before the input's: its body runs to the end, and a header
+block or a whole message pasted into it is body — nothing is scanned, split
+or flagged (`TrailingNone`). A multipart message ends at its closing
+delimiter; what follows is RFC 2046's epilogue, conformant whatever it says,
+and is also where a concatenated message would be. Only that region, after
+the message's own (root) closing delimiter, is this item's. Nested
+epilogues, preambles, `MaxPreambleBytes`/`MaxEpilogueBytes` and their spans
+are `ROB-060-001` (#30); raw replay is #41; message completion state is #10.
+No archive splitting, unescaping or `Content-Length`.
+
+**Contract.** `ProfileForensic` only. The first iterator of the message's own
+multipart body (root path, known origin, depth 0 — a replaced body is
+excluded) whose `NextPart` returns `io.EOF` at a *proven* closing delimiter
+registers the trailing input; no input is read for that (a bounded reader
+and its state are allocated, once: a later `NextPart` of an ended iterator
+finds it registered and allocates nothing), and no iterator, `Walk`,
+`mail.Reader`, `Close` or accessor peeks or drains it for this feature. The
+buffered readers may already hold some of those bytes, fetched ahead and
+counted by `MaxInputBytes` as everywhere. Reading the root's `Body`, or
+`WriteTo`, whose verbatim copy of a multipart body includes everything after
+its closing delimiter, consumes them as body as before and is no inspection
+(`unknown`); mixing either, or a second iterator, with the reader after the
+close is unsupported one-shot use, with no guarantee of what it delivers.
+`ParseSession.TrailingInputReader` returns that one reader (same value every
+call); `ParseSession.TrailingInput` a value snapshot with `Status`, `Start`
+(with a known flag; none for unknown/none), `Delivered`, `Location` (the
+delivered span; the whole tail only when `TrailingEnded`), `Evidence` and
+`Err`. Statuses: `unknown` (zero: not Forensic, not iterated to a proven
+close — missing, truncated, failed, refused, body read directly, written by
+`WriteTo` or replaced),
+`none` (root frames no parts — structural, not a claim about how much input
+was read), `open`, `ended` (exact `io.EOF`), `failed` (any other input error,
+returned as the identical value: wrapped `io.EOF`, `io.ErrUnexpectedEOF`,
+`bufio.ErrBufferFull` included; no error diagnostic and `ParseStop` nil,
+though message-like evidence proved by the bytes delivered before or with it
+is kept and reported), `stopped` (the session's stop). While open, each
+non-empty read checks the session's stop — cancellation included, so
+buffered bytes are not delivered after it — before reading and again after;
+it delivers `n` bytes with whatever ended it. The first end is final and
+returned by every later read with no I/O: a stop or cancellation after an
+`io.EOF` or input error replaces neither. A zero-length read does no I/O and
+no inspection: `(0, nil)` while open, even after a stop, and the end after. The reader is one goroutine's, not reentrant from a
+sink or a `CharsetReader`; abandoning it leaves the rest unread in the
+caller's input. It keeps no copy and releases only its own reference on
+ending; consumed bytes are not replayable.
+
+**Primitive.** `textproto.(*MultipartReader).Epilogue() (io.Reader, int64,
+bool)`: ok only after `NextPart` consumed a closing delimiter on any of its
+three paths (body scan; framing line; closing line ended by `io.EOF`), with
+the longest line ending, `\r` decided by the next byte or `io.EOF`. The
+reader delivers the multipart reader's buffer, then its input (for the root,
+the message's buffered reader, then the source), and never more than that
+input — for a nested reader, its enclosing part's end. A generic end of
+iteration (EOF-class error, refusal, empty body) is not a close. It is the
+minimal shared foundation #30 may reuse; it does not complete #30.
+
+**Budgets.** The bytes come from the parse's input, so `MaxInputBytes` counts
+them once, at the source, with its existing prefetch semantics unchanged: a
+tail past it ends with the session's `limit.input_bytes` stop, bytes already
+delivered and the `n` of the read that met it stay delivered, and no promise
+is made that every admitted byte still in a buffer is delivered first. `MaxEpilogueBytes` stays reserved and
+is explicitly not applied, since the caller, not the parse, drives this
+stream. A stop published before registration — including one a source
+budget proves while the same read carries a closing delimiter whose line
+ending needs one more byte — keeps its precedence, and the status stays
+`unknown`. Retention is constant whatever the budgets: no tail bytes, and the
+classifier's one line of at most min(998, `MaxLineBytes`) bytes.
+
+**Evidence** (`trailingClassifier`, incremental over delivered bytes only,
+chunk-invariant): the first 4096 bytes decide. After blank lines (spaces and
+tabs only), the first other line is *message-like* when it is an mbox `From_`
+line of `ROB-010-004`'s grammar and bound, or when it and the next
+non-continuation line both begin as header fields — visible-ASCII name, `:`,
+then space, tab or a line ending — a blank line between them deciding
+against. Line endings are the longest match. A `\r` that ends the proof — of
+a `From_` line, or of an empty second value — is decided by the byte after it
+(a `\n` is included in the evidence, any other byte is not) or by exact
+`io.EOF`; an ordinary failure first, a wrapped `io.EOF` included, leaves it
+undecided, and that byte arriving past the window decides against. A space,
+a tab or a `\n` after the second `:` proves it at once, without waiting for
+the value. The evidence range runs from that line to the end of the `From_`
+line's ending, of the second field's space, tab or `\n`, or of its empty
+value's line ending. One `input.trailing_messages` at `SeverityInfo`, nil path, that
+range, no input bytes in its text — unless a stop was seen first. Snapshot
+evidence and delivered count are published before the sink runs; a refusing
+sink returns `(n, stop)`. `MaxDiagnosticCount`/discard affect only the
+diagnostic. `empty`/`blank` need exact `io.EOF` within the window;
+`unrecognized` means the bytes looked at decided against, or a byte past the
+window arrived first (no claim about the rest); `undecided` means not read
+far enough, and stays so after a failure or stop before a decision. Proven
+evidence survives later errors and stops. False positives (a header-like
+conformant epilogue) and false negatives (other text, a BOM, leading white
+space, one field, decisive bytes past 4096) are documented; it is a
+suspicion, never a parse. An ordinary, blank, empty or binary epilogue
+records nothing.
+
+**Profiles.** Without reading the trailing input, Forensic reads the same
+bytes and records the same diagnostics as Tolerant; Tolerant and Strict
+offer no reader. `profile.go` now qualifies the parity statement: an explicit
+Forensic inspection may record an informational diagnostic about a
+conformant message.
+
+**API added.** `TrailingStatus`, `TrailingEvidence` (both with `String`),
+`TrailingInput` (`Status`, `Start`, `Delivered`, `Location`, `Evidence`,
+`Err`), `ParseSession.TrailingInput`, `ParseSession.TrailingInputReader`,
+`textproto.(*MultipartReader).Epilogue`. Internally `Entity.framesParts`
+(now also `MultipartReader`'s test). `MultipartReader` interfaces are
+unchanged.
+
+**Tests added (not run by Claude).** `textproto/multipart_epilogue_test.go`:
+every closing path and line ending, close at `io.EOF`, preamble-only and
+empty parts, large tails, six deliveries, four read sizes; no epilogue for
+missing/truncated/suffixed closes, empty bodies and refused lines; an
+every-cut source-error matrix (sticky/resuming, with/after data, three
+chunkings) with identical errors and no reread; nested epilogue ending at its
+part; no I/O from `Epilogue` or empty reads. `trailing_internal_test.go`: an
+independent line-based reference (`refEvidence`, `refWindowed`) whose `From_`
+grammar is `mbox_internal_test.go`'s independent regular expression
+(`mboxReference`), not the product recognizer the classifier shares; a
+fixture table including every `\r` proof case; window and line-cap
+boundaries, a `\r` as the window's last byte with io.EOF, a byte after it,
+or neither; undecided prefixes, prefix-finality and one-line retention
+checks; and `FuzzTrailingEvidence` (8 KiB cap, any cap/chunking). `framing_trailing_test.go`: exact tails for four close
+endings × nine tails (ordinary, empty, blank, binary, message, mbox, blank
+then message, delimiters, 15 KB) plus close-at-EOF and no-part cases, three
+traversals, five deliveries, two read sizes, with reference evidence and
+diagnostics otherwise equal to Tolerant's; mbox offsets; profile parity of
+bytes read and diagnostics; none/unknown matrices (leaf with pasted message
+or `From_`, header-only, empty, unframed, UTF-16; missing/truncated/suffix,
+inner-only close, not iterated, one part, Body read, Body replaced, nil and
+zero values); nested epilogues; a `MaxInputBytes` sweep with timing-aware
+assertions; an every-cut source-error matrix for three errors and
+`bufio.ErrBufferFull` in a subprocess with a deadline, including evidence
+proven before the failure keeping its diagnostic; cancellation while
+buffered and while reading; no progress; sinks (refusal with reentrant
+snapshot, diagnostic budget, discard, a stop before reading with a returned
+part kept valid, an empty read after the stop inspecting nothing); concurrent
+snapshots; empty reads; `\r` proof cases through the public reader with exact
+spans for `io.EOF`, an ordinary error and a wrapped `io.EOF`, at the start
+and at the window's end; the first end staying final after a later
+cancellation; repeated `NextPart` after the end reading and registering
+nothing; `WriteTo` copying the epilogue as body, unchanged from Tolerant;
+`FuzzParse_trailing` (16 KiB cap, explicit part/depth budgets; every leaf's
+raw, undecoded body drained, so decoder parity, #34, stays out of it;
+Forensic and Tolerant, and two deliveries, compared on entities, raw bytes,
+read and walk errors and diagnostics; the snapshot taken after the tail is
+read; tail equals the input from its start; reference evidence; at most one
+diagnostic added by reading it). `mail/reader_trailing_test.go`: `mail.Reader` under
+Forensic and the default profile, and a single-part message.
+
+**Independent review and verification.** Codex inspected the source, API,
+error and ownership contracts and the actual corrections, then ran:
+
+- Seven final steps: 126 unchanged no-inspection control observations;
+  6,255 independent public-API cases with 3,480,712 assertions (raw bytes and
+  absolute positions, every-cut input errors including hostile error methods,
+  cancellation, sink stops, nested boundaries, WriteTo, budgets and stalled
+  readers); and all six packages' unit tests, uncached. The 135 CR/window
+  edge cases now pass, with 74,743 assertions.
+- Fifteen platform/regression steps, all passed: all packages with `-race`,
+  all packages on `GOARCH=386`, build, vet with the two existing warning
+  categories disabled, a plain-vet baseline comparison, fourteen prior
+  BOM/line-ending checks, mbox controls and four independent matrices, prior
+  empty/header-only and exception matrices, formatting and diff checks.
+  Plain `go vet ./...` still exits 1 with the same 13 unkeyed-literal warnings
+  and one WriteTo-signature warning, and no new warning; it is not clean.
+- Two separate 45-second fuzz runs with two workers and finite input/work
+  caps: `FuzzTrailingEvidence` 1,420,683 executions and
+  `FuzzParse_trailing` 982,782 executions, all passed (2,403,465 total).
+  The latter compares raw framing and tails, not decoded-body parity (#34).
+
+The first failed runs are retained, not relabeled as successes. The product's
+premature CR proof and two newly written fuzz-test mistakes (a snapshot taken
+before the read, then nil-versus-empty diagnostic-list comparison) were fixed
+and rechecked. Codex's own temporary QA harness had a syntax mistake and a
+no-progress loop bound that was too small; those were corrected separately,
+without changing the product. The final slice comparison still detects changed
+prior diagnostics and requires exactly the expected added diagnostic.
+
+Evidence: `/tmp/emlkit-trailing-post-review-r2-qa.json` and per-step outputs,
+`/tmp/emlkit-trailing-final-platform.json`,
+`/tmp/emlkit-trailing-final-fuzz.json`, the preserved initial/post-review logs,
+and `/tmp/emlkit-trailing-review-notes.md`. All four Claude result files report
+no permission denials and no Go verification by Claude. Every delegation and
+Go/parser QA job ran singly in the bounded service (1536 MiB RAM, zero swap,
+two-core CPU quota, 128 tasks, deadline); the final platform service completed
+normally in 53.735 seconds, with about 1.3 GiB peak memory, and fuzz in 95.156
+seconds with 367.8 MiB peak. No Windows/device or cross-engine parity is claimed.
+
+**Not done here.** Body scanning for pasted messages (deliberately not done),
+nested epilogue/preamble spans and budgets (#30), raw replay (#41),
+completion state (#10), and no claim that a parse read or validated the
+whole input.
 
 
 ### ROB-020 — Raw header framing and preservation
@@ -3162,6 +3374,17 @@ pre-mbox `2defe99` baseline. The independent test-measurement fix and final
 ROB-010-004 verification are now complete; the next framing item is
 ROB-010-005. This did not alter parser budgets or complete CI/performance-audit
 items #14/#18.
+
+**Reviewed dependency note — `ROB-010-005` and #30/#41/#10.** ROB-010-005
+needs exactly one piece of what `ROB-060-001` (#30) will generalize: a way to
+read the input after a proven closing delimiter without losing what the
+multipart reader buffered. It adds that minimal shared foundation,
+`textproto.(*MultipartReader).Epilogue`, and uses it only for the message's
+own closing delimiter under `ProfileForensic`, read only when the caller asks.
+It does not preserve or budget nested epilogues or preambles, enforce
+`MaxPreambleBytes`/`MaxEpilogueBytes`, retain or replay raw bytes (#41,
+`ROB-110`), or define message completion (#10); those items stay Planned and
+may build on the primitive.
 
 **Exception — `ROB-100-006`.** It was taken ahead of `ROB-010` through `ROB-090`
 at the user's request, as an independent compatibility fix

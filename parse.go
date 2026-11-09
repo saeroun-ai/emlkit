@@ -120,8 +120,9 @@ type ParseOptions struct {
 //     decoding warnings below, the fifteen enforced resource budgets, the
 //     no-progress rule, the repair of a valid media type or disposition
 //     with malformed parameters, the header line-ending and byte order
-//     mark notes described below, and the mbox envelope line a caller asked
-//     to have recognized,
+//     mark notes described below, the mbox envelope line a caller asked
+//     to have recognized, and, under ProfileForensic, a trailing input a
+//     caller read that begins like another message,
 //     up to Limits.MaxDiagnosticCount, whose last slot holds one terminal
 //     limit.diagnostic_count diagnostic in place of the rest. A framing
 //     failure that nothing diagnoses yet is carried by err alone and leaves the
@@ -276,6 +277,23 @@ type ParseOptions struct {
 // is recognized; any other input, and every input without the option, is
 // framed as before, and no "From " or ">From " line elsewhere is removed or
 // changed.
+//
+// The input after the message (ROB-010-005; see trailing.go) is not read on for
+// by the parse's iterators, though the buffered readers may already have
+// fetched some of it, as they fetch ahead everywhere. A message that frames no
+// parts has none: its body runs to the end of the input, and a second message
+// pasted into it is body. After the closing delimiter of a multipart message,
+// ProfileForensic — and no other profile — lets the caller read what follows:
+// once an iterator of the message's own body has returned io.EOF at that
+// delimiter, ParseSession.TrailingInputReader delivers those bytes verbatim,
+// once, when asked, held to MaxInputBytes and not to MaxEpilogueBytes; reading
+// the root's Body or WriteTo instead consumes them as body, as it always did,
+// and is no inspection. ParseSession.TrailingInput reports where they
+// begin, how much was read, how it ended, and whether they begin like another
+// message, which records one input.trailing_messages diagnostic of
+// SeverityInfo: a suspicion, since a conformant epilogue may begin the same
+// way. Nothing is split off or parsed as a message, and an epilogue that does
+// not begin like one records nothing.
 //
 // Multipart delimiter lines are framed on the same three line endings, before
 // and after each delimiter, in any mix (see textproto.MultipartReader). A

@@ -52,6 +52,11 @@ import (
 //     leaf bodies and framed multipart containers alike — and of the raw body
 //     WriteTo copies verbatim, so that bytes buffered or decoded ahead are not
 //     delivered once it has been seen;
+//   - before and after every non-empty read of
+//     ParseSession.TrailingInputReader while that input is open, a scope of
+//     the parse: bytes the multipart and message readers hold after the
+//     closing delimiter are not delivered once it has been seen. A trailing
+//     input that already ended keeps returning what ended it;
 //   - at every boundary a scope already checks the session's stop at: Parse
 //     itself, the construction of every entity, MultipartReader.NextPart,
 //     Entity.Walk, Entity.ParseStop and so mail.Reader, the start of WriteTo,

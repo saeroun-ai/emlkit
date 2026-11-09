@@ -741,6 +741,16 @@ type MultipartReader struct {
 	ends      LineEndings
 	lastEnd   LineEnding
 	lastEndAt int64
+
+	// closed reports that NextPart consumed a closing delimiter line and
+	// returned io.EOF for it; epilogueAt is then the offset just past that
+	// line, its line ending included. Neither is set by any other end of the
+	// iteration — an input that ended or failed before a closing delimiter, a
+	// refusal, an empty body — and neither changes once set. epilogue is the
+	// one reader Epilogue hands out, made on its first call. See Epilogue.
+	closed     bool
+	epilogueAt int64
+	epilogue   *epilogueReader
 }
 
 // A heldCandidate is a delimiter candidate whose name — its line ending
@@ -1024,6 +1034,7 @@ func (r *MultipartReader) nextPart() (*Part, error) {
 		r.cand = heldCandidate{}
 		switch {
 		case d.close:
+			r.markClosed()
 			return nil, io.EOF
 		case d.truncated:
 			// "--boundary" and the end of the input: the input ended where the
@@ -1054,6 +1065,7 @@ func (r *MultipartReader) nextPart() (*Part, error) {
 		if err == io.EOF && ok && close {
 			// "--boundary--" at the end of the input needs no line ending.
 			r.noteBefore(start)
+			r.markClosed()
 			return nil, io.EOF
 		}
 		if err != nil {
@@ -1063,6 +1075,7 @@ func (r *MultipartReader) nextPart() (*Part, error) {
 			r.noteBefore(start)
 			r.ends.note(end, start+int64(len(line)))
 			if close {
+				r.markClosed()
 				return nil, io.EOF
 			}
 			return r.startPart()
@@ -1078,6 +1091,60 @@ func (r *MultipartReader) noteBefore(start int64) {
 		r.ends.note(r.lastEnd, r.lastEndAt)
 	}
 	r.lastEnd = 0
+}
+
+// markClosed records that a closing delimiter line, its line ending included,
+// has just been consumed, and where the input after it begins.
+func (r *MultipartReader) markClosed() {
+	if !r.closed {
+		r.closed = true
+		r.epilogueAt = r.offset()
+	}
+}
+
+// Epilogue returns the input that follows this reader's closing delimiter line
+// — RFC 2046's epilogue, or whatever else follows it — together with the
+// offset of its first byte, relative to the first byte of the exact input this
+// reader was given on the terms of Part.HeaderOffset. ok is false, and nothing
+// else is returned, until NextPart has returned io.EOF because it consumed a
+// closing delimiter: "--", the boundary, "--", any spaces and tabs and the
+// line's own ending — "\r\n", '\n' or '\r', the longest that matches — or the
+// end of the input. An iteration that ended any other way has no epilogue: an
+// input that ended or failed before a closing delimiter, whose last part runs
+// to that end, a body with no delimiter at all, or a refused framing line.
+//
+// Calling Epilogue reads nothing and changes nothing. Every call after the
+// closing delimiter returns the same reader, which is the one way to read on:
+// it delivers what this reader's buffer still holds and then reads the input
+// this reader was given, until that input ends. It neither interprets nor
+// bounds what it delivers, and stops at nothing but the end of that input:
+// when the input is a part of an enclosing multipart, that is the part's own
+// end, never a byte beyond it. Errors are the input's own, returned as they
+// came, with the bytes that came with them. The reader is not safe for
+// concurrent use, and bytes it delivered cannot be read again.
+//
+// RFC 2046 says the epilogue is to be ignored, and this reader does not
+// change what NextPart returns.
+func (r *MultipartReader) Epilogue() (rd io.Reader, offset int64, ok bool) {
+	if !r.closed {
+		return nil, 0, false
+	}
+	if r.epilogue == nil {
+		r.epilogue = &epilogueReader{mr: r}
+	}
+	return r.epilogue, r.epilogueAt, true
+}
+
+// An epilogueReader reads the input after a closing delimiter: the reader's
+// buffer first, then its input through it. It implements io.Reader alone, so a
+// copy cannot reach around it to the buffered reader's WriteTo.
+type epilogueReader struct {
+	mr *MultipartReader
+}
+
+// Read implements io.Reader.
+func (e *epilogueReader) Read(p []byte) (int, error) {
+	return e.mr.bufReader.Read(p)
 }
 
 // startPart begins the part a delimiter line just consumed introduces.

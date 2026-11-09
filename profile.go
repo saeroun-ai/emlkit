@@ -6,7 +6,14 @@ import "strconv"
 // a malformed message and how much of the original input it keeps.
 //
 // Profiles never change the result for conformant input: a well-formed message
-// parses identically under every profile.
+// parses identically under every profile — the same entities, bodies, errors
+// and diagnostics, from the same bytes read. What ProfileForensic preserves on
+// top of that is offered for explicit inspection: offering it reads no input,
+// though it allocates and keeps some bounded state for it, and only an
+// inspection the caller makes reads more. An inspection may record an
+// informational diagnostic about a conformant message, such as
+// input.trailing_messages for an epilogue that begins like another message
+// (ROB-010-005).
 //
 // The constants below describe what each profile is for; what each does today
 // is what its producers implement, documented on Parse. In particular no
@@ -40,6 +47,14 @@ const (
 	// additionally preserves raw spans for the message, headers, fields,
 	// preamble, epilogue, parts, transfer-encoded bodies and damaged regions
 	// that could not be assigned a meaning.
+	//
+	// What it implements today is the input after the message: once an
+	// iterator of the message's own multipart body has reached its closing
+	// delimiter, ParseSession.TrailingInputReader reads the bytes after it,
+	// verbatim and once, when the caller asks, and ParseSession.TrailingInput
+	// reports their position and whether they begin like another message; a
+	// message that frames no parts has no such bytes. See trailing.go. The
+	// other spans are still planned.
 	ProfileForensic
 )
 

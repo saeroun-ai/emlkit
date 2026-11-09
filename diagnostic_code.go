@@ -33,10 +33,20 @@ const (
 	// ProfileStrict. Recorded once per block that has one (ROB-010-003).
 	CodeInputBOM Code = "input.bom"
 
-	CodeInputReadError         Code = "input.read_error"
-	CodeInputNoProgress        Code = "input.no_progress"
-	CodeInputCancelled         Code = "input.cancelled"
-	CodeInputTrailingMessages  Code = "input.trailing_messages"
+	CodeInputReadError  Code = "input.read_error"
+	CodeInputNoProgress Code = "input.no_progress"
+	CodeInputCancelled  Code = "input.cancelled"
+
+	// CodeInputTrailingMessages reports, at SeverityInfo, that the input after
+	// the closing delimiter of the message's own multipart body begins like the
+	// header of another message: a suspicion, never a finding that it is one,
+	// since a conformant epilogue may begin the same way. Recorded at most once
+	// per parse, under ProfileForensic only, while the caller reads
+	// ParseSession.TrailingInputReader; nothing is split or parsed for it. An
+	// epilogue that does not begin that way records nothing (ROB-010-005; see
+	// trailing.go).
+	CodeInputTrailingMessages Code = "input.trailing_messages"
+
 	CodeLimitInputBytes        Code = "limit.input_bytes"
 	CodeLimitHeaderBytes       Code = "limit.header_bytes"
 	CodeLimitHeaderFieldBytes  Code = "limit.header_field_bytes"

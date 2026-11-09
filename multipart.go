@@ -143,6 +143,13 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 				return nil, r.lineLimitFailure(limit)
 			}
 		}
+		// The iteration of the message's own multipart body that ended at a
+		// proven closing delimiter makes the input after it available, under
+		// ProfileForensic, to an explicit inspection. Nothing is read here;
+		// see trailing.go.
+		if err == io.EOF {
+			r.noteTrailing()
+		}
 		return nil, err
 	}
 

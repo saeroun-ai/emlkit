@@ -170,6 +170,15 @@ type ParseSession struct {
 	// mbox.go. Guarded by mu.
 	mbox []byte
 
+	// trailing is the input after the closing delimiter of the message's own
+	// multipart body, registered once, by the first iterator of that body to
+	// reach one, under ProfileForensic; nil before that and for every other
+	// parse. trailingNone is set, under ProfileForensic, for a message whose
+	// root frames no parts. Both are guarded by mu, and so is the state of
+	// trailing that TrailingInput reports; see trailing.go.
+	trailing     *trailingTail
+	trailingNone bool
+
 	// cancelCtx and cancelDone are the context of a parse started by
 	// ParseContext and the channel its Done method returned, or nil for a parse
 	// that cannot be cancelled. They are written once, by setContext, before the
