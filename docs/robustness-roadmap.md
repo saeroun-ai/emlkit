@@ -1289,7 +1289,7 @@ empty permission-denial arrays.
 |---|---|---|---|
 | ROB-010-001 | Done | Treat empty input and header-only input deterministically: an empty input, an empty line alone, and complete CRLF fields ended by `io.EOF` or by the empty line are framed identically under every profile and compatibility as a usable entity with exactly those fields and an empty body or the bytes after the empty line, the framing adding no error or diagnostic of its own while the fields' MIME metadata is interpreted as usual; documented and pinned, no parser change. See "ROB-010-001 — empty and header-only input" below. | All profiles and round-trip tests; see below. |
 | ROB-010-002 | Done | Handle CRLF, bare LF, bare CR, mixed endings, and a missing final newline in headers and multipart delimiters, preserving false-candidate body bytes and source errors within the budgets. Parse records original-byte locations; Strict refuses the affected entity or iterator locally. See "ROB-010-002 — line endings" below. | Independent chunk, source-error, budget, cancellation and profile matrices; bounded native fuzzing; full unit/race/386/build checks. |
-| ROB-010-003 | Planned | Detect and preserve BOMs without letting them corrupt a field name. | UTF-8/16/32 BOM fixtures. |
+| ROB-010-003 | Done | Detect and preserve BOMs without letting them corrupt a field name: a UTF-8 mark at the start of a header block is consumed, kept by the Header and written back; a UTF-16 or UTF-32 mark leaves the block unread and the entity opaque, every byte its body, never transcoded and refused by the writers; `input.bom` under Parse, Strict refuses locally. See "ROB-010-003 — byte order marks" below. | UTF-8/16/32 BOM fixtures; root/part/textproto/legacy/mail/writer, chunk, budget, source-error, cancellation and profile matrices; bounded fuzz oracles. |
 | ROB-010-004 | Planned | Optionally recognize a leading mbox envelope line and preserve it separately. | Valid/invalid/mid-header `From ` fixtures. |
 | ROB-010-005 | Planned | Detect concatenated messages or trailing unassigned bytes in forensic mode. | Two-message and trailing-junk fixtures. |
 | ROB-010-006 | Done | Preserve bytes returned with EOF and partial bytes before injected I/O errors: under `Parse` the input's first error is final and reported where the parse reaches it, a body reports it however its decoders ended, an eager `CharsetReader` failing on it returns it with the entity; every entry point's header scanner keeps a block's first read failure and the fields read whole before it. See "ROB-010-006 — input errors" below. | Custom-reader tests at every cut, chunk and buffer size, sticky and resuming sources; see below. |
@@ -1747,6 +1747,155 @@ reported no permission denials. An early header implementation hit its runtime
 deadline; edits were retained and independently checked before continuation.
 No Windows or physical-device validation, raw non-CRLF replay, or differential
 parity with another MIME engine is claimed.
+
+#### ROB-010-003 — byte order marks (Done)
+
+Status: implemented by Claude and independently reviewed and verified by Codex
+for [issue #19](https://github.com/saeroun-ai/emlkit/issues/19). Claude ran no Go
+build, test or fuzz job. This
+covers byte order marks only. #19 is not complete: `ROB-010-005`
+(concatenated messages and trailing bytes) remains open under it, and
+`ROB-010-004` (mbox envelope lines) belongs to #46; neither is touched here.
+
+**Recognition, every entry point.** Only the first bytes of a header block —
+the input's first block, and each part's block right after its delimiter
+line — are looked at, through the scanner's sticky `peek`: a bounded prefix
+look-ahead of at most four bytes, a further byte only while the bytes held
+still begin a mark, so a partial or near-miss prefix (`EF BB`, `FF FE 00`
+at a non-`io.EOF` failure, `00 00 FE`) is still looked at that far before it
+is known to have none. This decision comes first in the block, before the
+fields' own checks: a spent shared header field count (`HeaderBudget`), which
+without a mark refuses the first candidate at its first byte, refuses only
+after the up to four bytes were looked at, and those may be read from the
+source before that refusal; and, as with any `bufio.Reader` peek, looking may
+fill the reader's buffer from the source. The order in which a block's budgets
+are checked against each other is otherwise unchanged. Longest match: `EF BB BF` UTF-8, `FE FF` UTF-16BE,
+`FF FE` UTF-16LE, `00 00 FE FF` UTF-32BE, `FF FE 00 00` UTF-32LE. `io.EOF`
+decides on the bytes before it (`FF FE` and `FF FE 00` are UTF-16LE). A
+failure other than `io.EOF` before the mark is decided leaves no mark; the
+bytes are then the first line that failure cut and the failure is returned as
+itself (`ROB-010-006`), including a source's own `bufio.ErrBufferFull`. A
+failure still buffered past a decided mark is what the next read returns.
+Only one mark is recognized: a second, partial, near-miss or later one is the
+beginning of a line read as before (a malformed key or line, `ROB-020`), and
+U+FEFF in a value or body is content.
+
+**UTF-8.** The three bytes are consumed and charged as bytes of the block —
+`MaxBytes`/`MaxHeaderBytes` and the shared total bytes — but as no line's and
+no field's content and no field candidate. Offsets, `LineEndings` and refusal
+positions count them: the first field starts at 3, a block budget below the
+mark refuses the block at its start, a spent shared count refuses the first
+field at 3. `textproto.Header.ByteOrderMark` reports `BOMUTF8`; a block
+refused by its own budget is the empty Header (no mark, all or nothing), and
+an ordinary failure keeps the mark beside the fields read whole. Raw fields
+never include the mark. `Copy` and every field mutation keep it (they drop
+`LineEndings` as before); there is no setter — `HeaderFromMap(h.Map())`
+rebuilds a header without it, losing order, case and raw bytes. `WriteHeader`
+writes it once, first, on its usual terms: only a well-formed complete block —
+every field read as a field, kept and unchanged, every line, the empty line
+ending it included, ended with CRLF — round-trips byte for byte; bare LF and CR
+endings are written as CRLF, a mark alone, an unterminated last line or a block
+with no empty line gains the CRLF endings and the empty line, as without a
+mark, and a line the reader skipped rather than kept, such as one with an
+empty name (existing behavior), is not written. Keeping the mark is not raw
+replay; replaying the whole input is `ROB-020-007`/`ROB-110`'s.
+`Entity.WriteTo` writes the mark before the `Mime-Version` it may add.
+
+**UTF-16 and UTF-32.** In text in these encodings the ASCII characters that
+frame a header — field-name letters, the colon, CR and LF — are two or four
+bytes wide with zero bytes among them, so stripping the mark would not leave a
+header this package can read; no implicit transcoding is implemented, and no
+attempt is made to tell ASCII text after such a mark from text in its encoding.
+Nothing is consumed or charged, `ReadHeader` returns a Header with no fields,
+the mark reported and unknown `LineEndings`, and a nil error; the mark and
+everything after it are what the reader yields next, so a root's body starts
+at 0 and a part's at its header offset. Every entry point (`Parse`, `Read`,
+`ReadWithOptions`, `New`) builds an opaque entity from such a header, whatever
+fields a copy of it was given: no media type (not text/plain),
+`EffectiveContentType` reporting a private non-fatal error, no transfer or
+charset decoder, `MultipartReader` nil, the body a leaf under the body budgets.
+Content-Disposition is not part of that and is interpreted as usual when asked:
+a parsed such header has no fields and so declares none, and `mail.Reader`
+classifies the part as an attachment; a caller who gives a copy
+`Content-Disposition: inline` and builds an entity with `New` gets an inline
+part, its body still undecoded. Nothing is transcoded. Writers
+refuse such a header before any output — `textproto.WriteHeader`,
+`MultipartWriter.CreatePart`, `CreateWriter`, `Writer.CreatePart`, hence
+`Entity.WriteTo` and a `NewMultipart` body, where the parts before it are
+already written — and the entity's Body stays unread and usable.
+
+**Parse policy** (`bom.go`, through the line-ending notes of
+`line_endings.go`): one `input.bom` per marked block at the mark's bytes
+(offset 0 of the block; length 3, 2 or 4), before the block's line-ending
+notes. Tolerant and Forensic: Recovered for UTF-8, Unsupported for UTF-16/32,
+nil parse error. Strict: `SeverityInvalidMetadata` and the entity-scoped
+refusal of `ROB-010-002` — entity returned with a `FatalError` carrying a
+`SeverityFatal` copy even past `MaxDiagnosticCount`, Content-Type not
+interpreted, raw body, siblings continue, no session stop; for UTF-8 the
+fields are kept. Sink stops, cancellation, no-progress and budget stops keep
+their precedence. Every `Compatibility` value behaves the same.
+
+**Compatibility implications.** Inputs that failed before now succeed: a
+UTF-8-marked header used to fail with a malformed key under every entry point
+(no entity under `Parse`), and a UTF-16/32-marked input now returns an opaque
+entity, also from `textproto.ReadHeader` and the legacy `Read`, instead of an
+error. Callers that must not treat it as a message check
+`Header.ByteOrderMark`, or the `input.bom` diagnostic under Parse. The legacy
+`ReadOptions.MaxHeaderBytes` shortens the reads under the header, so a budget
+smaller than the up to four bytes the decision looks at fails as a header
+error there. A block whose first byte cannot begin a mark (anything but
+`EF`, `FE`, `FF` or `00`) is looked at no further than before and framed as
+before; a block that only begins like a mark is framed as before, after the
+look-ahead described above.
+
+**Not done here:** transcoding UTF-16/32 messages; body charset and mark
+conflicts (`ROB-080-004`); raw replay of the input (`ROB-020-007`,
+`ROB-110`, #41); general malformed-key repair, including repeated marks
+(`ROB-020`); mbox envelope lines (`ROB-010-004`, #46) and concatenated
+messages or trailing bytes (`ROB-010-005`, #19).
+
+**Tests added or updated (not run by Claude).** `textproto/bom_test.go`
+(case table over every delivery and buffer size through `ReadHeader` and
+`ReadHeaderLimits`; values; UTF-8 write, `Copy` and mutations; wide-header
+write and `MultipartWriter` refusals; budgets; read-failure matrix at every
+cut; `io.EOF` decisions; `bufio.ErrBufferFull` in a subprocess with a
+deadline; multipart part marks with and without tight budgets);
+`framing_bom_test.go` (root over every profile, compatibility and delivery;
+`Walk`; `Read`/`ReadWithOptions`; opaque copies through `New`; malformed
+marks unchanged; parts; Strict diagnostic budget; sink stop; budgets;
+input errors; cancellation; no progress; writers and `NewMultipart`);
+`mail/reader_bom_test.go`; the `ByteOrderMark` added to the outcome of
+`FuzzReadHeader_lineEndings` and `FuzzMultipartReader_lineEndings`, with
+marked seeds.
+
+**Final Codex review and verification (Linux amd64, Go 1.26.10).**
+All 15 independent/unit verification steps passed, including 60 unchanged
+baseline controls, 1,095 cancellation/diagnostic cases (4,131 assertions),
+1,260 BOM/profile/compatibility/entry-point/writer cases (14,742 assertions),
+and 1,934 source-error and budget cases (6,564 assertions), plus every prior
+line-ending matrix and the full six-package unit suite. Eight platform checks
+passed: full race, GOARCH=386, build, vet with the two documented baseline
+categories excluded, formatting, whitespace and both prior empty-input probes
+(24,399 assertions and 265 exception checks). Plain vet retains the same 13
+unkeyed-composite warnings and one WriteTo-signature warning; it is not clean.
+Fresh bounded 30-second fuzz runs with two workers passed 618,090 multipart
+and 945,836 header executions; the outcome oracles now include the BOM.
+Evidence: `/tmp/emlkit-bom-initial-verification.json`,
+`/tmp/emlkit-bom-final-platform.json`, `/tmp/emlkit-bom-final-fuzz.json` and
+their `.out` logs; plain vet in `/tmp/emlkit-bom-final-plain-vet.out`.
+
+Review corrected documentation to distinguish bounded marker look-ahead from
+field-count preflight, ASCII framing code units from arbitrary Unicode text,
+caller-supplied Content-Disposition from an unchanged parsed wide header, and
+well-formed complete CRLF header round trips from raw replay. Independent
+finite probes confirmed the last two distinctions. Final corrections were
+prose/comments only; formatting and whitespace were rechecked after them.
+All four Claude calls reported no permission denials. Every execution ran
+alone in the enforced RAM 1,536 MiB / swap 0 / CPU two cores / tasks 128 /
+deadline service. Matrix/fuzz/platform peak memory was approximately
+454.2 MiB / 581.9 MiB / 1.2 GiB, with normal exits. No host OOM, Windows
+validation, cross-engine parity, UTF-16/32 transcoding or general raw replay
+is claimed by these checks.
 
 ### ROB-020 — Raw header framing and preservation
 

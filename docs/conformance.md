@@ -72,6 +72,29 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   `header.truncated_line` per block), and `ProfileStrict` refuses only the
   entity whose header has a bare-CR ending or no final line ending.
   ([`textproto/header.go`](../textproto/header.go) · `ReadHeader`, [`line_endings.go`](../line_endings.go))
+- **Byte order marks at the start of a header block** (`ROB-010-003`). Only the first bytes of the message's header and of each part's are
+  looked at, on the longest match (`FF FE 00 00` is UTF-32LE; `FF FE` and
+  `FF FE 00` at the end of input are UTF-16LE). A UTF-8 mark is consumed, so it
+  no longer corrupts the first field's name: the fields are read after it, the
+  mark counts toward `MaxHeaderBytes` and the shared header total but toward no
+  line, field or count budget, offsets include it, and
+  `textproto.Header.ByteOrderMark` keeps it through `Copy` and field edits, so
+  `WriteHeader` and `WriteTo` write it once, before every field — on their
+  usual terms, so only a well-formed complete CRLF block with its empty line,
+  every field kept and unchanged, is written byte for byte — a line skipped
+  rather than kept as a field, such as one with an empty name, is not written;
+  this is not raw replay. A UTF-16 or
+  UTF-32 mark leaves the block unread: no field, no header budget spent, and an
+  opaque entity on every entry point whose body is every byte from the mark on —
+  no media type (not even text/plain), no transfer or charset decoding, and,
+  having no fields, an attachment to `mail.Reader` (a Content-Disposition a
+  caller adds to a copy is still interpreted) — which the writers refuse to
+  serialize, before writing anything. Nothing is transcoded. Under `Parse` each such block
+  records `input.bom` (Recovered for UTF-8, Unsupported for UTF-16/32), and
+  `ProfileStrict` refuses that entity locally. A second, partial or misplaced
+  mark is read as it always was: the start of a malformed line (`ROB-020`); a
+  mark in a value or body is content.
+  ([`textproto/bom.go`](../textproto/bom.go), [`bom.go`](../bom.go))
 - **Folded values** are unfolded and whitespace-collapsed for the parsed value;
   the original raw bytes are preserved separately. ([`textproto/header.go`](../textproto/header.go) · `trimAroundNewlines`)
 - **Empty and header-only input** is framed identically under every `Profile`

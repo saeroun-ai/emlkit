@@ -30,7 +30,11 @@ import (
 type HeaderLimits struct {
 	// MaxBytes bounds the whole block as it appears in the input, from the
 	// first byte of its first field through the empty line that ends it, that
-	// empty line included.
+	// empty line included. A UTF-8 byte order mark the block begins with is
+	// bytes of the block and is counted here, and by the shared budget's
+	// bytes; it is no line's and no field's, so no other budget counts it. A
+	// block that begins with a UTF-16 or UTF-32 mark is not read and costs
+	// nothing. See ReadHeader.
 	MaxBytes int64
 
 	// MaxFieldBytes bounds one logical header field: its first physical line,

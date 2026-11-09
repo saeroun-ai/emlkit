@@ -17,7 +17,8 @@ import (
 //
 //   - MaxHeaderBytes: the whole block as it appears in the input, from the
 //     first byte of its first field through the empty line that ends it, that
-//     empty line included.
+//     empty line included, together with a UTF-8 byte order mark before the
+//     first field, which no other budget below counts (ROB-010-003).
 //   - MaxHeaderFieldBytes: one logical field, its continuation lines and every
 //     line terminator among them included, exactly as they appear in the input.
 //   - MaxHeaderCount: the logical field candidates the block yields — including

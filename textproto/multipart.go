@@ -1181,7 +1181,14 @@ func (w *MultipartWriter) CreatePart(header Header) (io.Writer, error) {
 // should pass an empty buffer; reusing one buffer across many parts avoids a
 // per-part allocation. CreatePartWithBuffer drains the buffer before returning,
 // so the same buffer can be passed again for the next part.
+//
+// A header whose block began with a UTF-16 or UTF-32 byte order mark is refused
+// before anything is written or changed, as WriteHeader refuses it; see
+// Header.ByteOrderMark. The parts already written stand.
 func (w *MultipartWriter) CreatePartWithBuffer(header Header, b *bytes.Buffer) (io.Writer, error) {
+	if header.bom.wide() {
+		return nil, errWideHeader(header.bom)
+	}
 	if w.lastpart != nil {
 		if err := w.lastpart.close(); err != nil {
 			return nil, err

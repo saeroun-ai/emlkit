@@ -55,7 +55,15 @@ type Writer struct {
 // Reading a damaged field is a different job, done by Parse, which may repair
 // it for interpretation while keeping the raw header unchanged; such an entity
 // therefore cannot be written back through this writer. See Entity.WriteTo.
+//
+// A header whose block began with a UTF-16 or UTF-32 byte order mark is
+// refused first (ROB-010-003): that block was never read, its bytes are the
+// entity's body, and neither writing fields for it nor writing the mark before
+// them would represent it. See bom.go.
 func createWriter(w io.Writer, header *Header) (*Writer, error) {
+	if m := header.ByteOrderMark(); wideMark(m) {
+		return nil, errWideHeaderWrite(m)
+	}
 	ww := &Writer{w: w, rawWriter: w}
 
 	mediaType, mediaParams, err := header.ContentType()
@@ -110,6 +118,12 @@ func createWriter(w io.Writer, header *Header) (*Writer, error) {
 // A Content-Type that does not parse is refused with an error wrapping the
 // parse error, and nothing is written to w; the header is neither normalized
 // nor given a generated boundary. The caller's header is never modified.
+//
+// A header read from a block that began with a byte order mark (ROB-010-003;
+// see textproto.Header.ByteOrderMark) keeps it in the copy written: a UTF-8
+// mark is written once, before every field, the added MIME-Version included.
+// A UTF-16 or UTF-32 mark means the block was not read, and such a header is
+// refused before anything is written, as CreatePart refuses one for a part.
 func CreateWriter(w io.Writer, header Header) (*Writer, error) {
 	// Ensure that modifications are invisible to the caller
 	header = header.Copy()

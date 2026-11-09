@@ -74,8 +74,9 @@ type ParseOptions struct {
 // below rather than by position: the failure that left no entity at all, which
 // for Parse is a header that could not be read; a warning that accompanies a
 // perfectly usable entity, which is what an unknown transfer encoding or
-// charset is; or a fatal error — a DiagnosticSink that stopped the parse, or a
-// resource budget the message ran past. One more accompanies a usable entity
+// charset is; or a fatal error — a DiagnosticSink that stopped the parse, a
+// resource budget the message ran past, or, under ProfileStrict, a refusal
+// scoped to the entity it is returned with. One more accompanies a usable entity
 // without being either: the input's own error, when a CharsetReader building
 // the entity's decoder ran into it; see the input errors below.
 //
@@ -101,8 +102,9 @@ type ParseOptions struct {
 //     all, so there is always somewhere to look. What it holds, though, is what
 //     some producer has been implemented to record, which today is the two
 //     decoding warnings below, the fifteen enforced resource budgets, the
-//     no-progress rule, and the repair of a valid media type or disposition
-//     with malformed parameters,
+//     no-progress rule, the repair of a valid media type or disposition
+//     with malformed parameters, and the header line-ending and byte order
+//     mark notes described below,
 //     up to Limits.MaxDiagnosticCount, whose last slot holds one terminal
 //     limit.diagnostic_count diagnostic in place of the rest. A framing
 //     failure that nothing diagnoses yet is carried by err alone and leaves the
@@ -232,6 +234,17 @@ type ParseOptions struct {
 // header whose last line ending is a bare '\r' is still being read until the
 // byte after it, or io.EOF, arrives; Limits.MaxInputBytes of exactly such a
 // header's length, with a body after it, leaves no entity.
+//
+// A header block — the message's or a part's — may begin with a byte order
+// mark (ROB-010-003; see textproto.Header.ByteOrderMark and bom.go). Every
+// entry point frames it alike: a UTF-8 mark is kept by the Header and the
+// fields are read after it; a UTF-16 or UTF-32 mark leaves the block unread
+// and the entity opaque, its body every byte from the mark on, with no media
+// type, transfer encoding or charset interpreted and no transcoding. Under
+// Parse each such block records input.bom — SeverityRecovered for UTF-8,
+// SeverityUnsupported for UTF-16 or UTF-32, with a usable entity and a nil err
+// — and ProfileStrict refuses that entity on the same terms as a bare CR
+// above.
 //
 // Multipart delimiter lines are framed on the same three line endings, before
 // and after each delimiter, in any mix (see textproto.MultipartReader). A

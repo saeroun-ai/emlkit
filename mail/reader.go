@@ -153,8 +153,9 @@ func CreateReader(r io.Reader) (*Reader, error) {
 // stop, and later calls report it again rather than continue. The one
 // FatalError that ends less is the refusal of one part under
 // message.ProfileStrict, when its Content-Type or Content-Disposition has a
-// valid base but malformed parameters, or when its header has a line ended by
-// a bare CR or a last line with no line ending: that part is not returned, the
+// valid base but malformed parameters, when its header has a line ended by
+// a bare CR or a last line with no line ending, or when its header block began
+// with a byte order mark (ROB-010-003): that part is not returned, the
 // parse is not stopped (Entity.ParseStop stays nil), and the next call
 // continues with the part after it. A part whose own body budget refused the eager read of a
 // CharsetReader building its decoder is refused the same way. A failure of the
@@ -196,6 +197,12 @@ func CreateReader(r io.Reader) (*Reader, error) {
 // its body is decoded. The returned Part.Header is the entity's header, raw
 // bytes unchanged, and its own ContentType and ContentDisposition keep parsing
 // it under no budget.
+//
+// A part whose header block began with a UTF-16 or UTF-32 byte order mark was
+// not read as a header (see textproto.Header.ByteOrderMark): under every
+// profile but Strict it is returned with no error and no fields, its Body
+// every byte from the mark on, undecoded. With no media type and no
+// disposition declared it is an attachment, by the rule above.
 //
 // For an entity from message.ParseContext, the cancellation of the parse's
 // context is such a stop: NextPart returns it, and every Part.Body already

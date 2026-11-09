@@ -99,22 +99,22 @@ const (
 	strictLineAction = "refused the entity: its Content-Type is not interpreted and its body is kept as it was read"
 )
 
-// headerLineEndings records what the line endings of h, the header block of
-// the entity this context describes, call for, and returns that entity's
-// refusal under ProfileStrict, or nil. A parse with no session — every entry
-// point but Parse — and a header this parse did not read whole record and
-// refuse nothing.
+// headerLineEndings records what the byte order mark and the line endings of
+// h, the header block of the entity this context describes, call for, and
+// returns that entity's refusal under ProfileStrict, or nil. A parse with no
+// session — every entry point but Parse — records and refuses nothing, and so
+// do the line endings of a header this parse did not read whole.
+//
+// The byte order mark is the first thing a block can hold, so its note, at
+// offset 0 of the block, comes before every line-ending note, and under
+// ProfileStrict its refusal is the one the entity is returned with; see
+// byteOrderMarkNote.
 func (c parseContext) headerLineEndings(h *textproto.Header) error {
 	s := c.session
 	if s == nil {
 		return nil
 	}
-	le := h.LineEndings()
-	if !le.Known() {
-		return nil
-	}
 	strict := s.Profile() == ProfileStrict
-	lf, cr := le.Count(textproto.LineEndingLF), le.Count(textproto.LineEndingCR)
 
 	type owed struct {
 		at     int64
@@ -122,6 +122,16 @@ func (c parseContext) headerLineEndings(h *textproto.Header) error {
 		refuse bool
 	}
 	var notes []owed
+
+	if bom := h.ByteOrderMark(); bom != textproto.BOMNone {
+		d, refuse := c.byteOrderMarkNote(bom, strict)
+		notes = append(notes, owed{at: 0, d: d, refuse: refuse})
+	}
+
+	// An unknown LineEndings — a block that began with a UTF-16 or UTF-32
+	// mark was not read — reports nothing below.
+	le := h.LineEndings()
+	lf, cr := le.Count(textproto.LineEndingLF), le.Count(textproto.LineEndingCR)
 
 	if lf > 0 && s.claimLineNote(noteBareLF) {
 		at, _ := le.First(textproto.LineEndingLF)

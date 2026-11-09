@@ -529,6 +529,7 @@ func fuzzMultipart(src io.Reader, limits HeaderLimits) string {
 			}
 			break
 		}
+		fmt.Fprintf(&b, "bom %v\n", p.Header.ByteOrderMark())
 		fs := p.Header.Fields()
 		for fs.Next() {
 			raw, _ := fs.Raw()
@@ -556,6 +557,9 @@ func FuzzMultipartReader_lineEndings(f *testing.F) {
 		"--B\r\n\r\nx\r\r\n--B--\r\n",
 		"--B\r\n\r\none\r\n--B  ",
 		"--B\r\n--B-junk\r\n\r\nbody\r\n--B--\r\n",
+		// Byte order marks at part header starts (ROB-010-003).
+		"--B\r\n\xef\xbb\xbfA: 1\r\n\r\none\r\n--B\r\n\xff\xfex\x00\r\x00\n\x00\r\n--B--\r\n",
+		"--B\n\xfe\xff\x00x\r--B\r\x00\x00\xfe\xff\n--B\r\n\xef\xbb\r\n\r\n--B--",
 	} {
 		f.Add([]byte(s))
 	}

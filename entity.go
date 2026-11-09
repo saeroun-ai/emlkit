@@ -172,10 +172,21 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// framed, before anything its fields say. Under ProfileStrict a block framed
 	// by a bare '\r', or whose last line the input ended before any line ending,
 	// is refused on the terms of a refused Content-Type, which is then not
-	// interpreted at all; see line_endings.go.
+	// interpreted at all; see line_endings.go. So is one that began with a byte
+	// order mark.
+	//
+	// A header block that began with a UTF-16 or UTF-32 byte order mark was not
+	// read, so the entity is opaque, under every entry point and whatever
+	// fields the header has been given since: no media type, no transfer
+	// encoding and no charset are interpreted, and the body is the bytes from
+	// the mark on, as they were read. A Content-Disposition a caller gave a
+	// copy of such a header is still read as usual, when asked. See bom.go.
+	wide := wideMark(header.ByteOrderMark())
 	var ct fieldReading
 	if lineErr := ctx.headerLineEndings(&header.Header); lineErr != nil {
 		ct = fieldReading{err: lineErr}
+	} else if wide {
+		ct = fieldReading{err: wideHeaderError{mark: header.ByteOrderMark()}}
 	} else {
 		ct = ctx.contentType(header)
 	}
@@ -234,7 +245,10 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// However some messages in the wild are non-conformant and have it set to
 	// e.g. "quoted-printable". So we just ignore it for multipart.
 	// See https://github.com/emersion/go-message/issues/48
-	if !strings.HasPrefix(mediaType, "multipart/") {
+	//
+	// An opaque entity — one whose header block was not read — has no transfer
+	// encoding either, whatever its header was given since.
+	if !strings.HasPrefix(mediaType, "multipart/") && !wide {
 		encoding = header.Get("Content-Transfer-Encoding")
 		if fatal == nil && local == nil {
 			// A line-framed encoding is watched as it is read, so that an
@@ -775,6 +789,15 @@ func (e *Entity) writeBodyTo(w *Writer) error {
 // ended are written raw and in order after that added field, followed by the
 // empty line (ROB-010-001); for such input, parsing what WriteTo wrote and
 // writing it again gives the same bytes.
+//
+// A header read after a UTF-8 byte order mark is written with the mark first,
+// before the MIME-Version field WriteTo may add. An entity whose header block
+// began with a UTF-16 or UTF-32 mark was not read as a header, and WriteTo
+// refuses it with an error before writing anything; its Body is left unread
+// and stays usable, every byte from the mark on. Under a body built by
+// NewMultipart such a part is refused when the writer reaches it, after the
+// entity's header and the parts before it have been written. See bom.go;
+// nothing here transcodes or replays the input (ROB-010-003).
 //
 // For an entity from ParseContext whose context is already done when WriteTo
 // is called, nothing is written and the parse's stop is returned. A

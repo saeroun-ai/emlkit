@@ -513,11 +513,12 @@ func TestHeader_lineEndingsSnapshot(t *testing.T) {
 }
 
 // lineEndingOutcome is everything one read of a block yields that a caller can
-// observe: the fields with their raw bytes, the line-ending report, what is
-// left in the reader, and the error, by its text.
+// observe: the fields with their raw bytes, the line-ending report, the byte
+// order mark, what is left in the reader, and the error, by its text.
 type lineEndingOutcome struct {
 	fields []wantField
 	ends   LineEndings
+	bom    ByteOrderMark
 	rest   string
 	err    string
 }
@@ -525,7 +526,7 @@ type lineEndingOutcome struct {
 func readLineEndingOutcome(t *testing.T, br *bufio.Reader) lineEndingOutcome {
 	t.Helper()
 	h, err := ReadHeader(br)
-	o := lineEndingOutcome{fields: fieldsOf(t, h), ends: h.LineEndings()}
+	o := lineEndingOutcome{fields: fieldsOf(t, h), ends: h.LineEndings(), bom: h.ByteOrderMark()}
 	if err != nil {
 		o.err = err.Error()
 	}
@@ -551,6 +552,10 @@ func FuzzReadHeader_lineEndings(f *testing.F) {
 	f.Add([]byte("X: " + strings.Repeat("y", 14) + "\rb c\r\n\r\nbody"))
 	f.Add([]byte(" lead\r\n\r\n"))
 	f.Add([]byte("no colon\r\nA: 1\r\n\r\n"))
+	// Byte order marks, whole, partial, repeated and wide (ROB-010-003).
+	for _, tc := range byteOrderMarkCases() {
+		f.Add([]byte(tc.in))
+	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 8192 {
 			return
@@ -569,7 +574,7 @@ func FuzzReadHeader_lineEndings(f *testing.F) {
 			},
 		} {
 			got := readLineEndingOutcome(t, newReader())
-			if !sameFields(got.fields, want.fields) || got.ends != want.ends || got.rest != want.rest || got.err != want.err {
+			if !sameFields(got.fields, want.fields) || got.ends != want.ends || got.bom != want.bom || got.rest != want.rest || got.err != want.err {
 				t.Errorf("%s:\n got %+v\nwant %+v", name, got, want)
 			}
 		}

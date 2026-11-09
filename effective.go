@@ -234,7 +234,18 @@ func (d *dispositionSnapshot) isAttachment() bool {
 // chosen, such an entity's body is exactly the bytes of the input. An entity
 // ProfileStrict refused for its header's line endings — a line ended by a bare
 // '\r', or a last line with no line ending (ROB-010-002) — is reported the same
-// way, whatever its Content-Type says: nothing of the field is interpreted.
+// way, whatever its Content-Type says: nothing of the field is interpreted. So
+// is one refused for a byte order mark its header block began with
+// (ROB-010-003).
+//
+// An entity whose header block began with a UTF-16 or UTF-32 byte order mark
+// was not read as a header (see textproto.Header.ByteOrderMark and bom.go) and
+// is opaque under every entry point and profile: the media type is empty, not
+// text/plain, the parameters nil, and the error an ordinary one saying why —
+// neither a FatalError nor a warning, and not returned by Parse, which returns
+// such an entity with a nil error — unless ProfileStrict refused it, which is
+// reported as above. That holds for an entity New built from a copy of such a
+// header too, whatever Content-Type the copy was given.
 //
 // The result is a snapshot from construction rather than a reading of the
 // current header: an edit to Entity.Header after construction does not change

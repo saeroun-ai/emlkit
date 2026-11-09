@@ -44,9 +44,17 @@ func (f *headerField) raw() ([]byte, error) {
 
 // A Header represents the key-value pairs in a message header.
 //
-// The header representation is idempotent: if the header can be read and
-// written, the result will be exactly the same as the original (including
-// whitespace and header field ordering). This is required for e.g. DKIM.
+// The header representation is idempotent for a well-formed block: a complete
+// block whose every field was read as a field and kept, and whose every line,
+// the empty line that ends it included, ends with CRLF — with or without a
+// UTF-8 byte order mark before it — is written back unchanged exactly as it
+// was read, whitespace and field order included, as long as its fields are not
+// modified. This is required for e.g. DKIM. Anything else is not a replay of
+// the input: lines ended otherwise, and a block io.EOF ended, are written with
+// CRLF and the empty line; a line the reader skipped or repaired rather than
+// kept as a field — such as one whose name is empty — is not written at all
+// (see ReadHeader, WriteHeader and ByteOrderMark). A block that began with a
+// UTF-16 or UTF-32 mark is not read, and is not written.
 //
 // Mutating the header is restricted: the only two allowed operations are
 // inserting a new header field at the top and deleting a header field. This is
@@ -62,6 +70,11 @@ type Header struct {
 	// is never modified once set, so a Copy shares it; every mutation drops it.
 	// See LineEndings.
 	ends *LineEndings
+
+	// bom is the byte order mark the block this header was read from began
+	// with. Unlike ends it is the header's own: Copy and every mutation keep
+	// it. See ByteOrderMark.
+	bom ByteOrderMark
 }
 
 func makeHeaderMap(fs []*headerField) map[string][]*headerField {
@@ -229,7 +242,7 @@ func (h *Header) Copy() Header {
 	l := make([]*headerField, len(h.l))
 	copy(l, h.l)
 	m := makeHeaderMap(l)
-	return Header{l: l, m: m, ends: h.ends}
+	return Header{l: l, m: m, ends: h.ends, bom: h.bom}
 }
 
 // Len returns the number of fields in the header.
@@ -1594,6 +1607,18 @@ func trimAroundNewlines(v []byte) string {
 // bufio.Reader hands out a read error once. After ReadHeader has returned one,
 // r no longer holds it, and reading r again reads its source again; a caller
 // that must not do so stops reading r, or gives it a source that keeps failing.
+//
+// # Byte order marks
+//
+// A block may begin with a byte order mark (ROB-010-003); see bom.go and
+// Header.ByteOrderMark. A UTF-8 mark is consumed, counted as bytes of the block
+// and kept by the Header, and the fields are read after it. A UTF-16 or UTF-32
+// mark leaves the block unread: ReadHeader consumes nothing and returns a
+// Header with no fields that reports the mark, and a nil error, so that
+// everything from the mark on is what r yields next. The text after such a
+// mark is never transcoded. Only the first bytes of a block are looked at, at
+// most four, before anything else about the block is decided; see bom.go for
+// what that look-ahead reads and which refusal it can precede.
 func ReadHeader(r *bufio.Reader) (Header, error) {
 	return readHeader(r, &headerScan{})
 }
@@ -1602,8 +1627,9 @@ func ReadHeader(r *bufio.Reader) (Header, error) {
 // whose wire bytes exceed maxBytes.
 //
 // What is counted is the header block exactly as it appears in the input, from
-// the first byte of its first field through the empty line that ends it, that
-// empty line included. A block of exactly maxBytes bytes is read normally; one
+// the first byte of its first field — or of the UTF-8 byte order mark before it
+// — through the empty line that ends it, that empty line included. A block of
+// exactly maxBytes bytes is read normally; one
 // byte more and ReadHeaderLimit returns a *HeaderLimitError, which verifies
 // errors.Is(err, ErrHeaderTooBig). A maxBytes of zero or below is no budget at
 // all, which is what ReadHeader reads under.
@@ -1707,7 +1733,39 @@ func headerResult(fs []*headerField, err error) (Header, error) {
 	return newHeader(fs), err
 }
 
+// readHeader reads one header block from r: the byte order mark it may begin
+// with (see bom.go), and then its fields.
+//
+// A block that begins with a UTF-16 or UTF-32 mark is not read at all: nothing
+// is consumed or charged, and the Header that reports the mark has no fields.
+// A UTF-8 mark is consumed and charged as bytes of the block, and the fields
+// are read after it. The Header keeps the mark whenever it keeps its fields —
+// with an ordinary failure too, beside the fields read whole before it — and
+// is the empty Header, without the mark, when a budget refused the block.
 func readHeader(r *bufio.Reader, scan *headerScan) (Header, error) {
+	bom := scan.byteOrderMark(r)
+	switch {
+	case bom.wide():
+		return Header{bom: bom}, nil
+	case bom == BOMUTF8:
+		n := len(bomBytes[BOMUTF8])
+		r.Discard(n)
+		// Bytes of the block, but of no line and no field: the line and the
+		// field that follow begin after it, and neither has begun yet.
+		if err := scan.charge(0, int64(n)); err != nil {
+			return headerResult(nil, err)
+		}
+	}
+	h, err := readFields(r, scan)
+	if !isBudgetExhausted(err) {
+		h.bom = bom
+	}
+	return h, err
+}
+
+// readFields reads the fields of a header block, and the empty line that ends
+// it, from where r stands.
+func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 	fs := make([]*headerField, 0, 32)
 
 	// The first line cannot start with a leading space. A failed look is
@@ -1979,7 +2037,21 @@ func formatHeaderField(k, v string) string {
 }
 
 // WriteHeader writes a MIME header to w.
+//
+// A header whose block began with a UTF-8 byte order mark is written with the
+// mark first, once, and then its fields; see Header.ByteOrderMark. A header
+// whose block began with a UTF-16 or UTF-32 mark is refused with an error
+// before anything is written: that block was never read, and neither its
+// fields nor its mark are this header's to write.
 func WriteHeader(w io.Writer, h Header) error {
+	if h.bom.wide() {
+		return errWideHeader(h.bom)
+	}
+	if h.bom == BOMUTF8 {
+		if _, err := io.WriteString(w, bomBytes[BOMUTF8]); err != nil {
+			return err
+		}
+	}
 	for i := len(h.l) - 1; i >= 0; i-- {
 		f := h.l[i]
 		if rawField, err := f.raw(); err == nil {

@@ -24,8 +24,15 @@ func (c Code) Group() string {
 
 // Input and limit codes.
 const (
-	CodeInputEmpty             Code = "input.empty"
-	CodeInputBOM               Code = "input.bom"
+	CodeInputEmpty Code = "input.empty"
+
+	// CodeInputBOM reports a header block — the message's or a part's — that
+	// begins with a byte order mark: Recovered for a UTF-8 mark, whose fields
+	// are read after it, Unsupported for a UTF-16 or UTF-32 mark, whose entity
+	// is kept opaque; InvalidMetadata, with the entity refused, under
+	// ProfileStrict. Recorded once per block that has one (ROB-010-003).
+	CodeInputBOM Code = "input.bom"
+
 	CodeInputReadError         Code = "input.read_error"
 	CodeInputNoProgress        Code = "input.no_progress"
 	CodeInputCancelled         Code = "input.cancelled"

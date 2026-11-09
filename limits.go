@@ -295,7 +295,11 @@ type Limits struct {
 	// MaxHeaderBytes bounds one header block, counted as it appears in the
 	// input: from the first byte of its first field through the empty line that
 	// ends the block, that empty line included. A block of exactly the budget is
-	// read and one byte more is refused.
+	// read and one byte more is refused. A UTF-8 byte order mark the block
+	// begins with is counted here and by MaxTotalHeaderBytes, and by no field,
+	// line or count budget; a block that begins with a UTF-16 or UTF-32 mark is
+	// not read as a header and costs no header budget (ROB-010-003, see
+	// textproto.ReadHeader).
 	//
 	// It is per entity and never cumulative. Under Parse it applies to the
 	// message's own header and to the header of every part at any depth, each

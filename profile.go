@@ -32,7 +32,8 @@ const (
 	// ended by a bare CR, or a last line the input ended before any line
 	// ending, is refused for that entity, and a multipart with a bare CR
 	// before or after a delimiter line is refused for its remaining parts
-	// (ROB-010-002).
+	// (ROB-010-002). A header block that begins with a byte order mark is
+	// refused for that entity too (ROB-010-003).
 	ProfileStrict
 
 	// ProfileForensic includes every tolerant result and diagnostic, and
