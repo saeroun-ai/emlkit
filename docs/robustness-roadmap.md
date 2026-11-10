@@ -3204,7 +3204,7 @@ contract is:
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
 | ROB-120-001 | Planned | Audit all input-derived slice bounds, integer arithmetic, and allocation sizes. | Fuzz/32-bit-oriented boundary tests. |
-| ROB-120-002 | Planned | Make parsing and decoding complexity linear or explicitly budgeted. | Near-match and nesting benchmarks. |
+| ROB-120-002 | Review | Make parsing and decoding complexity linear or explicitly budgeted. Partial: a long line read back through a small reader buffer cost the square of its length in the scanner's replay and is linear now; found through a test that took 48 s. No complexity benchmarks yet. | Near-match and nesting benchmarks. |
 | ROB-120-003 | Done | Prevent header injection in all decoded/setter/serialization paths. Writers refuse a caller-set field whose value holds CR, LF or NUL or whose name is no field name, before writing it; the encoding setters encode such text; decoded header text has CR, LF and NUL neutralized (ROB-030-005). A writer that could not be made is returned as a nil interface. Pinned by mail/writer_injection_test.go. | CR/LF/NUL tests. |
 | ROB-120-004 | Done | Keep filename sanitization, HTML safety, archive expansion, and executable handling outside core parsing. Kept outside: message.SafeFilename is a pure function never applied implicitly, and nothing renders HTML, unpacks archives or executes content; stated in docs/spam-adapter-contract.md. | API boundary/documentation tests. |
 | ROB-120-005 | Done | Never perform network fetches for Content-Location/external-body while parsing. No code path opens a network connection; Node.Resolve only matches parts of the message. See docs/robustness-notes/structure-view.md. | Hostile URI tests. |

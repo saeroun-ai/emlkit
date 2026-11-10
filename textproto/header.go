@@ -996,7 +996,10 @@ func (s *headerScan) nextChunk(r *bufio.Reader) (b []byte, end lineEnd, next int
 	// next byte.
 	if len(s.replay) > 0 {
 		rp := s.replay
-		i := bytes.IndexAny(rp, "\r\n")
+		// Only a line ending within one buffer matters here, so only that
+		// much is searched: searching all that is held on every call made a
+		// long line cost the square of its length under a small buffer.
+		i := bytes.IndexAny(rp[:min(len(rp), r.Size()+1)], "\r\n")
 		take := func(n int) []byte {
 			b := rp[:n]
 			s.replay = rp[n:]

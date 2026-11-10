@@ -49,8 +49,11 @@ jobs:
         with:
           go-version-file: go.mod
       - name: race
-        timeout-minutes: 35
-        run: go test -race -count=1 -timeout 1800s ./...
+        timeout-minutes: 20
+        run: go test -race -count=1 -timeout 900s . ./mail/ ./charset/ ./utf7/ ./internal/...
+      - name: race (textproto)
+        timeout-minutes: 15
+        run: go test -race -count=1 -timeout 800s ./textproto/
 
   fuzz-smoke:
     runs-on: ubuntu-latest

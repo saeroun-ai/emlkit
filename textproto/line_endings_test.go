@@ -168,6 +168,15 @@ func lineEndingReaders(s string) map[string]func() *bufio.Reader {
 			}
 		}
 		for split := 1; split < len(s); split++ {
+			// A long input is split near its ends, around each multiple of
+			// the largest buffer, and at a sample of the positions between:
+			// every position of a 5000-byte input, for every buffer size and
+			// entry point, costs most of a minute and several under the race
+			// detector, for cuts that differ only in where plain content is
+			// divided.
+			if len(s) > 512 && split > 96 && split < len(s)-96 && split%4096 > 2 && split%4096 < 4094 && split%61 != 0 {
+				continue
+			}
 			out[fmt.Sprintf("buf %d split %d", size, split)] = func() *bufio.Reader {
 				return bufio.NewReaderSize(io.MultiReader(strings.NewReader(s[:split]), strings.NewReader(s[split:])), size)
 			}

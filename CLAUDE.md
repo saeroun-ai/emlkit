@@ -30,9 +30,14 @@ inside a bounded process group. On this Linux host use:
 
 ```bash
 rtk proxy python3 scripts/qa-bounded.py --seconds 180 -- go test -timeout 120s ./...
-rtk proxy python3 scripts/qa-bounded.py --seconds 600 -- go test -race -timeout 480s ./...
+rtk proxy python3 scripts/qa-bounded.py --seconds 600 -- go test -race -timeout 480s . ./mail/ ./charset/ ./utf7/ ./internal/...
+rtk proxy python3 scripts/qa-bounded.py --seconds 600 -- go test -race -timeout 480s ./textproto/
 rtk proxy python3 scripts/qa-bounded.py --seconds 120 -- go test -run '^$' -fuzz '^TARGET$' -fuzztime 30s -parallel 2 .
 ```
+
+Run the race detector in those two groups, not as `./...`: building every
+race test binary at once passes the 1.5 GiB limit and is OOM-killed during the
+build, before any test runs (seen 2026-11-11).
 
 The runner requires an available systemd user manager. It fails closed if the
 service or limits cannot be established: 1.5 GiB RAM, no swap, CPU quota of two
