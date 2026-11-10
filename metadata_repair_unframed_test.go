@@ -118,19 +118,24 @@ func TestParse_unframedMultipartIsOneOpaquePart(t *testing.T) {
 		}
 	})
 
-	// No repair, no fallback: a valid multipart without a boundary keeps its
-	// existing behavior, which ROB-060-002 owns.
-	t.Run("missing boundary without a repair is unchanged", func(t *testing.T) {
+	// A valid multipart that declares no boundary is framed on the boundary
+	// its body uses (ROB-060-002), and keeps the empty-boundary error under
+	// ProfileStrict.
+	t.Run("missing boundary is inferred", func(t *testing.T) {
 		session, e, _ := parseWith(t, "Content-Type: multipart/mixed\r\n\r\n"+unframedInner, ParseOptions{})
 		mr := e.MultipartReader()
 		if mr == nil {
-			t.Fatal("MultipartReader() = nil, want the existing iterator")
+			t.Fatal("MultipartReader() = nil, want an iterator")
 		}
-		if _, err := mr.NextPart(); err == nil {
-			t.Error("NextPart() succeeded, want the existing empty-boundary error")
+		if _, err := mr.NextPart(); err != nil {
+			t.Errorf("NextPart() = %v, want the first part of the inferred framing", err)
 		}
-		if session.Diagnostics() != nil {
-			t.Errorf("Diagnostics() = %v, want none", codesOfDiags(session.Diagnostics()))
+		if codes := codesOfDiags(session.Diagnostics()); !reflect.DeepEqual(codes, []Code{CodeMultipartBoundaryInferred}) {
+			t.Errorf("Diagnostics() = %v, want multipart.boundary_inferred", codes)
+		}
+		session, e, _ = parseWith(t, "Content-Type: multipart/mixed\r\n\r\n"+unframedInner, ParseOptions{Profile: ProfileStrict})
+		if _, err := e.MultipartReader().NextPart(); err == nil || session.Diagnostics() != nil {
+			t.Errorf("strict: NextPart() = %v, %v, want the empty-boundary error and nothing recorded", err, codesOfDiags(session.Diagnostics()))
 		}
 	})
 

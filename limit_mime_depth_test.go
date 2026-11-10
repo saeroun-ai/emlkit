@@ -369,8 +369,10 @@ func TestParse_mimeDepth_emptyContainerAtTheBudgetIsEOF(t *testing.T) {
 				if _, err := mr.NextPart(); err != io.EOF {
 					t.Errorf("NextPart() on the empty container at the budget = %v, want io.EOF", err)
 				}
-				if d := takeLineNotes(t, "", eol, f.text, session.Diagnostics(), true); len(d) != 0 {
-					t.Errorf("Diagnostics() = %v, want none: the container had no child to refuse", codesOfDiags(d))
+				// The empty container is reported as such (ROB-060-009), and
+				// nothing is refused.
+				if d := takeLineNotes(t, "", eol, f.text, session.Diagnostics(), true); !reflect.DeepEqual(codesOfDiags(d), []Code{CodeMultipartEmpty}) {
+					t.Errorf("Diagnostics() = %v, want multipart.empty alone: the container had no child to refuse", codesOfDiags(d))
 				}
 			})
 		}

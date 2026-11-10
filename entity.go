@@ -803,7 +803,23 @@ func (e *Entity) MultipartReader() MultipartReader {
 		src = e.framing
 	}
 
-	r := textproto.NewMultipartReader(src, e.mediaParams["boundary"])
+	// Under recovery a multipart that declares no boundary is still read: the
+	// body is kept and framed on the boundary its delimiter lines use, and a
+	// boundary an enclosing multipart already uses is reported. See
+	// multipart_heal.go.
+	limits := parent.headerLimits()
+	declared := e.mediaParams["boundary"]
+	boundary := declared
+	if limits.Recover && boundary == "" {
+		boundary = noBoundary
+	}
+	reused := limits.Recover && declared != "" && parent.bounds.has(declared)
+	parent.bounds = &boundaryChain{b: declared, up: parent.bounds}
+
+	r := textproto.NewMultipartReader(src, boundary)
+	if l, ok := parent.limits(); ok && limits.Recover {
+		r.SetPreambleLimit(l.MaxPreambleBytes)
+	}
 
 	// Every entity's header block is budgeted, and each gets the whole of every
 	// budget: the parts of this body are entities of the same parse, so the
@@ -814,12 +830,15 @@ func (e *Entity) MultipartReader() MultipartReader {
 	// nothing — which is every entry point but Parse — passes nothing down, and
 	// the parts of a message read that way stay as unbounded as they have
 	// always been.
-	r.SetHeaderLimits(parent.headerLimits())
+	r.SetHeaderLimits(limits)
 
 	return &multipartReader{
 		r:                          r,
 		skipTextAttachmentDecoding: e.skipTextAttachmentDecoding,
 		parent:                     parent,
+		healing:                    limits.Recover,
+		declared:                   declared,
+		reused:                     reused,
 	}
 }
 

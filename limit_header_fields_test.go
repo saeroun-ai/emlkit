@@ -1466,6 +1466,8 @@ func TestParse_otherBudgetsStayUnenforced(t *testing.T) {
 		// ROB-001-010.
 		"MaxTotalHeaderBytes": true,
 		"MaxTotalHeaderCount": true,
+		// ROB-060-001: the preamble is kept up to it.
+		"MaxPreambleBytes": true,
 	}
 
 	limits := DefaultLimits()

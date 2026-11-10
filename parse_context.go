@@ -51,6 +51,10 @@ type parseContext struct {
 	// Part.HeaderSeparatorMissing). It is this entity's own and is never carried
 	// to a child. See firstline.go.
 	separatorMissing bool
+
+	// bounds is the boundaries of the multiparts this entity is nested in,
+	// innermost first, or nil. See multipart_heal.go.
+	bounds *boundaryChain
 }
 
 // rootContext returns the context of the root entity of a message parsed from
@@ -83,6 +87,7 @@ func (c parseContext) child(index int, headerOffset, bodyOffset int64) parseCont
 		session: c.session,
 		origin:  c.origin.child(index, headerOffset, bodyOffset),
 		depth:   c.depth + 1,
+		bounds:  c.bounds,
 	}
 }
 
@@ -99,7 +104,7 @@ func (c parseContext) child(index int, headerOffset, bodyOffset int64) parseCont
 // descent rather than of the bytes it descended through, so a replacement body
 // does not buy back the nesting budget the entity above it already spent.
 func (c parseContext) detached() parseContext {
-	return parseContext{session: c.session, depth: c.depth}
+	return parseContext{session: c.session, depth: c.depth, bounds: c.bounds}
 }
 
 // fatalErr returns the sticky failure of the parse this context belongs to, or

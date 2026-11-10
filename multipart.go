@@ -1,6 +1,7 @@
 package message
 
 import (
+	"fmt"
 	"io"
 	"sync"
 
@@ -52,6 +53,18 @@ type multipartReader struct {
 	// ends is the delimiter line endings of r already looked at; see
 	// delimiterEndings in line_endings.go.
 	ends textproto.LineEndings
+
+	// Multipart recovery; see multipart_heal.go. healing reports that this
+	// iterator heals its framing; declared is the boundary the entity
+	// declared, empty for none; inferred that r was replaced by a reader of
+	// the kept body framed on a boundary found in it; endNoted that the end of
+	// the iteration has been looked at; reused that the declared boundary is
+	// one of an enclosing multipart's, to be reported by the first NextPart.
+	healing  bool
+	declared string
+	inferred bool
+	endNoted bool
+	reused   bool
 }
 
 // NextPart implements MultipartReader.
@@ -70,6 +83,14 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 	// parse than a defect of one part does.
 	if r.fatal != nil {
 		return nil, r.fatal
+	}
+
+	if r.reused {
+		r.reused = false
+		if fatal := r.noteFraming(CodeMultipartNestedBoundaryReused, SeverityRecovered,
+			fmt.Sprintf("multipart declares the boundary %q of a multipart it is nested in", r.declared), boundaryReusedAction); fatal != nil {
+			return nil, fatal
+		}
 	}
 
 	p, err := r.r.NextPart()
@@ -148,6 +169,20 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 		// ProfileForensic, to an explicit inspection. Nothing is read here;
 		// see trailing.go.
 		if err == io.EOF {
+			// Under recovery the end of the framing is looked at once: what it
+			// lacked is recorded, and a body it could not frame is returned
+			// as a part or framed again on the boundary found in it. See
+			// multipart_heal.go.
+			if r.healing && !r.endNoted {
+				r.endNoted = true
+				part, herr, again := r.healEnd()
+				switch {
+				case again:
+					return r.NextPart()
+				case part != nil || herr != nil:
+					return part, herr
+				}
+			}
 			r.noteTrailing()
 		}
 		return nil, err

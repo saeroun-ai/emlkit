@@ -112,7 +112,14 @@ func TestReader_emptyAndHeaderOnly(t *testing.T) {
 						t.Errorf("%s: header %q, want %q", name, got, tc.raw)
 					}
 					p, err := r.NextPart()
-					if tc.multipart {
+					// Parse heals an empty multipart under every profile but
+					// Strict: no part and io.EOF (ROB-060-009).
+					healed := o.name == "Parse/tolerant" || o.name == "Parse/forensic"
+					if tc.multipart && healed {
+						if p != nil || err != io.EOF {
+							t.Errorf("%s: NextPart() = (%v, %v), want no part and io.EOF", name, p != nil, err)
+						}
+					} else if tc.multipart {
 						if p != nil || err == nil || err == io.EOF || !errors.Is(err, io.EOF) {
 							t.Errorf("%s: NextPart() = (%v, %v), want no part and an error wrapping io.EOF", name, p != nil, err)
 						}

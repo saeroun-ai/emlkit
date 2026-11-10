@@ -477,6 +477,14 @@ func TestParse_diagnosticStormHealsEveryPart(t *testing.T) {
 				} else if mode == "retain and deliver" && !reflect.DeepEqual(got, delivered) {
 					t.Errorf("retained and delivered disagree: %d vs %d", len(got), len(delivered))
 				}
+				if tc.total == 0 {
+					// A multipart with no part records multipart.empty
+					// (ROB-060-009), or the terminal diagnostic in its place.
+					if len(got) != 1 || (got[0].Code != CodeMultipartEmpty && got[0].Code != CodeLimitDiagnosticCount) {
+						t.Fatalf("diagnostics %v, want one for the empty multipart", codesOfDiags(got))
+					}
+					return
+				}
 				want, terminal := tc.total, false
 				if limit != LimitDisabled && int64(tc.total) >= limit {
 					want, terminal = int(limit), true

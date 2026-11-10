@@ -375,7 +375,16 @@ type delimMatch struct {
 	endKind LineEnding
 	endLen  int
 	atEOF   bool
+
+	// cut reports a delimiter line the end of the input cut short, read as
+	// one under recovery only.
+	cut bool
 }
+
+// cutDelimiterMin is how many bytes of "--boundary" a delimiter line cut by
+// the end of the input must still hold to be read as one under recovery: the
+// dashes and four bytes of the boundary, or all of a shorter one.
+const cutDelimiterMin = 6
 
 // match matches the candidate whose line ending before it is buf[c:c+elen]
 // (elen is 0 at the start of a body). eof reports that buf is all the input
@@ -385,6 +394,11 @@ func (r *MultipartReader) match(buf []byte, c, elen int, eof, full bool) delimMa
 	db := r.dashBoundary
 	head := c + elen
 	if len(buf)-head < len(db) {
+		if eof && r.limits.Recover && len(buf)-head >= cutDelimiterMin && bytes.HasPrefix(db, buf[head:]) {
+			// Under recovery, a delimiter line the end of the input cut
+			// inside its name ends the part before it (ROB-060-006).
+			return delimMatch{status: matchDelim, end: len(buf), atEOF: true, cut: true}
+		}
 		if eof || full || !bytes.HasPrefix(db, buf[head:]) {
 			return delimMatch{status: matchFail}
 		}
@@ -403,6 +417,11 @@ func (r *MultipartReader) match(buf []byte, c, elen int, eof, full bool) delimMa
 	}
 	if k < len(buf) && buf[k] == '-' {
 		if k+1 == len(buf) {
+			if eof && r.limits.Recover {
+				// "--boundary-" and the end of the input: a closing delimiter
+				// cut one byte short (ROB-060-006).
+				return delimMatch{status: matchDelim, close: true, end: k + 1, atEOF: true, cut: true}
+			}
 			if eof || full {
 				return delimMatch{status: matchFail}
 			}
@@ -499,6 +518,24 @@ func (r *MultipartReader) scanBody(p *Part) (int, error) {
 		}
 	}
 
+	if eof && r.limits.Recover {
+		// Under recovery, a last line the end of the input cut inside
+		// "--boundary" is a delimiter line (ROB-060-006): the search above
+		// finds only whole names.
+		if q := bytes.LastIndexAny(buf, "\r\n"); q >= 0 {
+			rest := buf[q+1:]
+			if len(rest) >= cutDelimiterMin && len(rest) < len(r.dashBoundary) && bytes.HasPrefix(r.dashBoundary, rest) {
+				c, elen := q, 1
+				if buf[q] == '\n' && q > 0 && buf[q-1] == '\r' {
+					c, elen = q-1, 2
+				}
+				m := delimMatch{status: matchDelim, end: len(buf), atEOF: true, cut: true}
+				if done, n, err := r.decide(p, m, buf, c, elen, failed); done {
+					return n, err
+				}
+			}
+		}
+	}
 	if eof || failed {
 		return len(buf), r.bodyFailure(p)
 	}
@@ -526,9 +563,18 @@ func (r *MultipartReader) scanBody(p *Part) (int, error) {
 }
 
 // bodyFailure is the error a body the input stopped ends with.
+//
+// Under recovery (HeaderLimits.Recover) the end of the input, io.EOF, ends
+// the last part cleanly: its body is every byte up to there, it ends with
+// io.EOF, and the reader notes that it never saw a closing delimiter
+// (ROB-060-005; see Framing). A failure of the input is reported as before.
 func (r *MultipartReader) bodyFailure(p *Part) error {
 	err := p.readErr
 	if err == io.EOF {
+		if r.limits.Recover {
+			r.unclosed = true
+			return io.EOF
+		}
 		err = io.ErrUnexpectedEOF
 	}
 	return errors.Join(err, ErrMissingBoundaryClose)
@@ -683,6 +729,9 @@ func (r *MultipartReader) prove(m delimMatch, before LineEnding, start, endAt in
 		r.ends.note(m.endKind, endAt)
 	}
 	r.delim = &provenDelimiter{rest: rest, close: m.close, truncated: m.atEOF && !m.close}
+	if m.cut {
+		r.cutClose = true
+	}
 }
 
 // endingOf names the line ending e, which is "\r\n", "\n" or "\r".
@@ -819,6 +868,84 @@ type MultipartReader struct {
 	closed     bool
 	epilogueAt int64
 	epilogue   *epilogueReader
+
+	// Under recovery (limits.Recover): unclosed reports that the input ended
+	// with no closing delimiter, and cutClose that the last delimiter line was
+	// cut short by the end of the input; preamble is the bytes before the
+	// first delimiter line, kept up to preambleMax, and preambleOver that
+	// there were more. See Framing and Preamble.
+	unclosed     bool
+	cutClose     bool
+	preamble     []byte
+	preambleMax  int64
+	preambleOver bool
+}
+
+// defaultPreambleMax is how much of a preamble a recovering reader keeps when
+// SetPreambleLimit was not called.
+const defaultPreambleMax = 1 << 20
+
+// SetPreambleLimit sets how many bytes of the preamble a reader with
+// HeaderLimits.Recover keeps for Preamble; the rest is read and not kept. n of
+// zero or below keeps the default of 1 MiB. It must be called before the
+// first NextPart.
+func (r *MultipartReader) SetPreambleLimit(n int64) {
+	r.preambleMax = n
+}
+
+// Preamble returns the bytes that preceded the first delimiter line, as they
+// were read, line endings included — or, when no delimiter line was found,
+// every byte of the input — and whether more than the limit of
+// SetPreambleLimit was there, in which case the bytes returned are the first
+// of them. It is empty for a reader without HeaderLimits.Recover, which keeps
+// nothing. The slice is the reader's own and must not be modified.
+func (r *MultipartReader) Preamble() (b []byte, truncated bool) {
+	return r.preamble, r.preambleOver
+}
+
+// keepPreamble keeps one preamble line and its line ending.
+func (r *MultipartReader) keepPreamble(line []byte, end LineEnding) {
+	limit := r.preambleMax
+	if limit <= 0 {
+		limit = defaultPreambleMax
+	}
+	var term string
+	switch end {
+	case LineEndingCRLF:
+		term = "\r\n"
+	case LineEndingLF:
+		term = "\n"
+	case LineEndingCR:
+		term = "\r"
+	}
+	room := limit - int64(len(r.preamble))
+	if int64(len(line)+len(term)) > room {
+		r.preambleOver = true
+		if room > 0 {
+			r.preamble = append(r.preamble, line[:min(int64(len(line)), room)]...)
+		}
+		return
+	}
+	r.preamble = append(append(r.preamble, line...), term...)
+}
+
+// A MultipartFraming is how the iteration over a multipart has gone so far.
+type MultipartFraming struct {
+	// Parts is how many delimiter lines introduced a part.
+	Parts int
+	// Closed reports that a closing delimiter line was consumed.
+	Closed bool
+	// Unclosed reports, under HeaderLimits.Recover, that the input ended with
+	// no closing delimiter line: the last part ran to that end.
+	Unclosed bool
+	// CutDelimiter reports, under HeaderLimits.Recover, that the last
+	// delimiter line was cut short by the end of the input and read as one.
+	CutDelimiter bool
+}
+
+// Framing reports how the iteration has gone so far; see MultipartFraming.
+func (r *MultipartReader) Framing() MultipartFraming {
+	return MultipartFraming{Parts: r.partsRead, Closed: r.closed, Unclosed: r.unclosed && !r.closed, CutDelimiter: r.cutClose}
 }
 
 // A heldCandidate is a delimiter candidate whose name — its line ending
@@ -1106,7 +1233,12 @@ func (r *MultipartReader) nextPart() (*Part, error) {
 			return nil, io.EOF
 		case d.truncated:
 			// "--boundary" and the end of the input: the input ended where the
-			// next part should have begun.
+			// next part should have begun. Under recovery that ends the
+			// iteration as an unclosed multipart.
+			if r.limits.Recover {
+				r.unclosed = true
+				return nil, io.EOF
+			}
 			return nil, fmt.Errorf("multipart: NextPart: %w", io.EOF)
 		}
 		return r.startPart()
@@ -1137,7 +1269,20 @@ func (r *MultipartReader) nextPart() (*Part, error) {
 			return nil, io.EOF
 		}
 		if err != nil {
+			if err == io.EOF && r.limits.Recover {
+				// The input ended with no closing delimiter: the iteration
+				// ends, and what was read before any delimiter is kept (see
+				// Framing and Preamble).
+				if r.partsRead == 0 && len(line) > 0 {
+					r.keepPreamble(line, 0)
+				}
+				r.unclosed = true
+				return nil, io.EOF
+			}
 			return nil, fmt.Errorf("multipart: NextPart: %w", err)
+		}
+		if !ok && r.partsRead == 0 && r.limits.Recover {
+			r.keepPreamble(line, end)
 		}
 		if ok {
 			r.noteBefore(start)

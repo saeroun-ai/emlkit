@@ -203,13 +203,24 @@ func checkFramingParts(t *testing.T, name string, f framingForm, s *ParseSession
 		return
 	}
 	p, err := mr.NextPart()
-	if p != nil || err == nil || err == io.EOF || !errors.Is(err, io.EOF) || err.Error() != "multipart: NextPart: EOF" {
+	// Every profile but Strict heals an empty multipart: no part, io.EOF, and
+	// one multipart.empty diagnostic (ROB-060-009).
+	healed := s != nil && s.Profile() != ProfileStrict
+	if healed {
+		if p != nil || err != io.EOF {
+			t.Errorf("%s: first NextPart() = (%v, %v), want no part and io.EOF", name, p != nil, err)
+		}
+	} else if p != nil || err == nil || err == io.EOF || !errors.Is(err, io.EOF) || err.Error() != "multipart: NextPart: EOF" {
 		t.Errorf("%s: first NextPart() = (%v, %v), want no part and an error wrapping io.EOF", name, p != nil, err)
 	}
 	if p, err = mr.NextPart(); p != nil || err != io.EOF {
 		t.Errorf("%s: second NextPart() = (%v, %v), want io.EOF", name, p != nil, err)
 	}
-	if s != nil && (s.Len() != 0 || s.fatalErr() != nil) {
+	if healed {
+		if codes := codesOfDiags(s.Diagnostics()); !reflect.DeepEqual(codes, []Code{CodeMultipartEmpty}) || s.fatalErr() != nil {
+			t.Errorf("%s: iteration recorded %v, stop %v, want multipart.empty alone", name, codes, s.fatalErr())
+		}
+	} else if s != nil && (s.Len() != 0 || s.fatalErr() != nil) {
 		t.Errorf("%s: iteration recorded %v, stop %v", name, codesOfDiags(s.Diagnostics()), s.fatalErr())
 	}
 }
@@ -226,7 +237,13 @@ func checkFramingWalk(t *testing.T, name string, f framingForm, e *Entity) {
 	if !reflect.DeepEqual(visits, []string{"[] <nil>"}) {
 		t.Errorf("%s: Walk visited %q, want the root alone", name, visits)
 	}
-	if f.multipart {
+	healed := e.parse.session != nil && e.parse.session.Profile() != ProfileStrict
+	if f.multipart && healed {
+		// An empty multipart is healed: the walk ends without an error.
+		if werr != nil {
+			t.Errorf("%s: Walk() = %v, want nil", name, werr)
+		}
+	} else if f.multipart {
 		if werr == nil || !errors.Is(werr, io.EOF) || werr.Error() != "multipart: NextPart: EOF" {
 			t.Errorf("%s: Walk() = %v, want the error wrapping io.EOF", name, werr)
 		}
