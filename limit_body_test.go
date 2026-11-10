@@ -1010,13 +1010,13 @@ func TestParse_bodyBudgetsLegacyUnchanged(t *testing.T) {
 		t.Errorf("Parse, body budgets disabled: (%d, %v), %v", len(b), err, s.Diagnostics())
 	}
 
-	// Without a parse, a decoder still reports a failed input in its own words,
-	// as it always has.
+	// Without a parse, the tolerant decoder passes a failed input on as it is
+	// (ROB-070-008); it has no report of its own.
 	_, raw, _ := strings.Cut(qpCutText, "\r\n\r\n")
 	h, _ := textprotoHeader("Content-Transfer-Encoding: quoted-printable")
 	legacy, _ := New(h, &failingSource{s: raw[:5], err: errCut})
-	if b, err := io.ReadAll(legacy.Body); string(b) != "foo" || err == errCut || IsFatal(err) {
-		t.Errorf("New: (%q, %v), want the decoder's own report of the failed input", b, err)
+	if b, err := io.ReadAll(legacy.Body); string(b) != "foo" || err != errCut {
+		t.Errorf("New: (%q, %v), want the bytes before the failure and the failure itself", b, err)
 	}
 }
 
@@ -1058,8 +1058,15 @@ func TestParse_bodyInputStopNotMasked(t *testing.T) {
 					if stop := e.ParseStop(); stop == nil || err != stop {
 						t.Errorf("%s: end = %v, want the input stop %v", name, err, stop)
 					}
-					if codes := codesOfDiags(s.Diagnostics()); !reflect.DeepEqual(codes, []Code{CodeLimitInputBytes}) {
-						t.Errorf("%s: diagnostics = %v", name, codes)
+					wantCodes := []Code{CodeLimitInputBytes}
+					if w == "foo= \r\nbar" && cut >= 7 {
+						// The white space after the soft line break's '=' is a
+						// defect of the body the line ending after it settled
+						// before the input stopped (ROB-070-008).
+						wantCodes = []Code{CodeCTEQPInvalidSoftBreak, CodeLimitInputBytes}
+					}
+					if codes := codesOfDiags(s.Diagnostics()); !reflect.DeepEqual(codes, wantCodes) {
+						t.Errorf("%s: diagnostics = %v, want %v", name, codes, wantCodes)
 					}
 				}
 			}
@@ -1110,15 +1117,24 @@ func TestParse_bodyInputStopNotMasked(t *testing.T) {
 	})
 
 	t.Run("plain input error", func(t *testing.T) {
-		// An ordinary input error is not a stop, but since ROB-010-006 it is
-		// not the decoder's to lose either: quoted-printable's own wording of
-		// the cut is kept, joined after the input's failure.
+		// An ordinary input error is not a stop, and since ROB-010-006 it is
+		// not the decoder's to lose: the tolerant decoder passes it on as it
+		// is, and ProfileStrict's keeps quoted-printable's own wording of the
+		// cut, joined after the input's failure.
 		_, raw, _ := strings.Cut(qpCutText, "\r\n\r\n")
 		_, e, err := Parse(&failingSource{s: header + "\r\n" + raw[:5], err: errCut}, &ParseOptions{Limits: onlyBody("", 0)})
 		if err != nil {
 			t.Fatal(err)
 		}
 		b, err := io.ReadAll(e.Body)
+		if string(b) != "foo" || err != errCut || e.ParseStop() != nil {
+			t.Errorf("tolerant: (%q, %v), want the input's failure itself, and no stop", b, err)
+		}
+		_, e, err = Parse(&failingSource{s: header + "\r\n" + raw[:5], err: errCut}, &ParseOptions{Profile: ProfileStrict, Limits: onlyBody("", 0)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err = io.ReadAll(e.Body)
 		if string(b) != "foo" || err == errCut || !errors.Is(err, errCut) || IsFatal(err) || e.ParseStop() != nil {
 			t.Errorf("(%q, %v), want the input's failure joined with the decoder's report, and no stop", b, err)
 		}

@@ -315,7 +315,14 @@ func TestParse_sourceErrorThroughDecoders(t *testing.T) {
 	t.Run("quoted-printable soft break", func(t *testing.T) {
 		text := "Content-Transfer-Encoding: quoted-printable\r\n\r\nfoo=\r"
 		for _, sticky := range []bool{true, false} {
+			// The tolerant decoder has no report of its own (ROB-070-008): the
+			// failure is what the body ends with.
 			got := consumeStall(&ioSource{data: text, cut: len(text), chunk: 4096, err: errSourceIO, sticky: sticky}, nil)
+			if got.bodies[0] != "foo" || got.bodyErrs[0] != errSourceIO || got.session.Len() != 0 {
+				t.Errorf("tolerant: (%q, %v, %v), want foo and the identical input error", got.bodies[0], got.bodyErrs[0], codesOfDiags(got.session.Diagnostics()))
+			}
+			// ProfileStrict keeps the standard library's decoder and its report.
+			got = consumeStall(&ioSource{data: text, cut: len(text), chunk: 4096, err: errSourceIO, sticky: sticky}, &ParseOptions{Profile: ProfileStrict})
 			if got.bodies[0] != "foo" {
 				t.Errorf("body %q, want foo", got.bodies[0])
 			}
@@ -336,10 +343,16 @@ func TestParse_sourceErrorThroughDecoders(t *testing.T) {
 
 	t.Run("corruption the failure never reached", func(t *testing.T) {
 		text := "Content-Transfer-Encoding: base64\r\n\r\nQUJD!!!!QUJD"
-		got := consumeStall(&ioSource{data: text, cut: len(text), chunk: 4096, err: errSourceIO, withData: true}, nil)
+		got := consumeStall(&ioSource{data: text, cut: len(text), chunk: 4096, err: errSourceIO, withData: true}, &ParseOptions{Profile: ProfileStrict})
 		var corrupt base64.CorruptInputError
 		if !errors.As(got.bodyErrs[0], &corrupt) || errors.Is(got.bodyErrs[0], errSourceIO) {
 			t.Errorf("body ended with %v, want base64's own corruption alone", got.bodyErrs[0])
+		}
+		// The tolerant decoder skips the bytes outside the alphabet and reads
+		// on, so the failure is reached (ROB-070-004).
+		got = consumeStall(&ioSource{data: text, cut: len(text), chunk: 4096, err: errSourceIO, withData: true}, nil)
+		if got.bodies[0] != "ABCABC" || got.bodyErrs[0] != errSourceIO {
+			t.Errorf("tolerant: (%q, %v), want ABCABC and the identical input error", got.bodies[0], got.bodyErrs[0])
 		}
 	})
 
@@ -568,7 +581,8 @@ func TestParse_sourceErrorHostileJoin(t *testing.T) {
 			fail = &trappedError{}
 		}
 		text := "Content-Transfer-Encoding: quoted-printable\r\n\r\nfoo=\r"
-		_, e, err := Parse(&failingSource{s: text, err: fail}, nil)
+		// ProfileStrict, whose decoder has a report of its own to join.
+		_, e, err := Parse(&failingSource{s: text, err: fail}, &ParseOptions{Profile: ProfileStrict})
 		if err != nil {
 			fmt.Println("CHILD-FAIL Parse", reflect.TypeOf(err))
 			os.Exit(1)

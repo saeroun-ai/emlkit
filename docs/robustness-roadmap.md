@@ -3013,23 +3013,23 @@ iterator then failed with an empty boundary. The contract is:
 | ROB-060-009 | Planned | Support empty multipart, consecutive delimiters, and headerless empty parts according to profile. | Strict/tolerant fixtures. |
 | ROB-060-010 | Planned | Recover missing child header/body separators without losing sibling synchronization. | Broken-middle-child tests. |
 | ROB-060-011 | Planned | Handle reused/prefix-related inner and outer boundaries. | Deep nested fixtures. |
-| ROB-060-012 | Planned | Ignore or decode illegal multipart CTE according to explicit policy. | Outlook/broken-gateway fixtures. |
+| ROB-060-012 | Done | Ignore or decode illegal multipart CTE according to explicit policy. Policy: the declared encoding of a multipart is ignored and the parts are framed from the raw body, reported as multipart.illegal_transfer_encoding (Recovered) unless it is 7bit, 8bit or binary; message/rfc822 with base64 or quoted-printable is decoded as declared and reported as message.illegal_transfer_encoding (Info). See docs/robustness-notes/transfer-encodings.md. | Outlook/broken-gateway fixtures. |
 | ROB-060-013 | Planned | Guarantee linear-time boundary scanning under repeated near-matches. | Complexity benchmark. |
 
 ### ROB-070 — Content-Transfer-Encoding
 
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
-| ROB-070-001 | Planned | Normalize CTE tokens with comments, whitespace, and common trailing junk. | Header token tables. |
-| ROB-070-002 | Planned | Preserve raw body and continue for unknown CTE at every API layer. | Root/mail/session compatibility tests. |
-| ROB-070-003 | Planned | Diagnose 7bit violations without discarding bytes. | High-bit/NUL/long-line fixtures. |
-| ROB-070-004 | Planned | Ignore Base64 whitespace and configured nonalphabet junk with diagnostics. | Angus/Python-compatible fixtures. |
-| ROB-070-005 | Planned | Repair missing/invalid Base64 padding and truncated final quanta when possible. | Length modulo 4 matrix. |
-| ROB-070-006 | Planned | Handle data after Base64 padding and URL-safe alphabet policy. | Strict/tolerant tables. |
-| ROB-070-007 | Planned | Return decoded Base64 prefixes and raw fallback for unrecoverable length cases. | Prefix/fallback assertions. |
-| ROB-070-008 | Planned | Complete malformed quoted-printable recovery, including CR-only soft breaks. | Invalid-hex/truncation/control tables. |
-| ROB-070-009 | Planned | Support uuencode aliases and configurable missing begin/end recovery. | Angus-compatible uuencode fixtures. |
-| ROB-070-010 | Planned | Apply decoded-size budgets during streaming, not after allocation. | Expansion and cancellation tests. |
+| ROB-070-001 | Done | Normalize CTE tokens with comments, whitespace, and common trailing junk. Implemented by canonicalCTE (cte_tolerant.go): comments, case and white space are syntax; quotes, trailing text, encoded words and known misspellings are repaired with cte.invalid_token; ProfileStrict repairs nothing. See docs/robustness-notes/transfer-encodings.md. | Header token tables. |
+| ROB-070-002 | Done | Preserve raw body and continue for unknown CTE at every API layer. Unknown mechanisms keep the raw body with the cte.unknown warning at Read, Parse and mail.Reader; pinned by TestParse_cteTokenRepair and the existing warning tests. See docs/robustness-notes/transfer-encodings.md. | Root/mail/session compatibility tests. |
+| ROB-070-003 | Done | Diagnose 7bit violations without discarding bytes. Implemented for bodies that declare 7bit under Parse: the first NUL or 8-bit byte records cte.seven_bit_violation (Info) and every byte is kept. See docs/robustness-notes/transfer-encodings.md. | High-bit/NUL/long-line fixtures. |
+| ROB-070-004 | Done | Ignore Base64 whitespace and configured nonalphabet junk with diagnostics. Implemented by tolerantBase64: white space anywhere is framing, bytes outside the alphabet are skipped with cte.base64_junk. See docs/robustness-notes/transfer-encodings.md. | Angus/Python-compatible fixtures. |
+| ROB-070-005 | Done | Repair missing/invalid Base64 padding and truncated final quanta when possible. Implemented: a final group of two or three characters yields its whole bytes (cte.base64_padding_missing), misplaced padding is ignored (cte.base64_padding_invalid). See docs/robustness-notes/transfer-encodings.md. | Length modulo 4 matrix. |
+| ROB-070-006 | Done | Handle data after Base64 padding and URL-safe alphabet policy. Implemented: data after padding is decoded as a further segment (cte.base64_data_after_padding); '-' and '_' are read as the URL-safe alphabet (cte.base64_url_alphabet); ProfileStrict keeps the standard decoder and its corruption error. See docs/robustness-notes/transfer-encodings.md. | Strict/tolerant tables. |
+| ROB-070-007 | Done | Return decoded Base64 prefixes and raw fallback for unrecoverable length cases. Implemented: the decoded prefix is always delivered; a single left-over character is dropped with cte.base64_length_invalid; a body cut by an input failure yields whole groups and the failure itself. See docs/robustness-notes/transfer-encodings.md. | Prefix/fallback assertions. |
+| ROB-070-008 | Done | Complete malformed quoted-printable recovery, including CR-only soft breaks. Implemented by tolerantQP, a streaming state machine replacing the normalizer over the standard reader: literal malformed escapes, soft breaks with trailing white space or ended by a bare CR or LF, control bytes kept, no line limit. See docs/robustness-notes/transfer-encodings.md. | Invalid-hex/truncation/control tables. |
+| ROB-070-009 | Done | Support uuencode aliases and configurable missing begin/end recovery. Implemented by tolerantUU for x-uuencode and its aliases: text before begin skipped, missing begin or end recovered with diagnostics, stripped trailing spaces restored. See docs/robustness-notes/transfer-encodings.md. | Angus-compatible uuencode fixtures. |
+| ROB-070-010 | Done | Apply decoded-size budgets during streaming, not after allocation. The decoders are streams with one fixed buffer; the decoded budgets of ROB-001-005 bound their output as it is delivered. See docs/robustness-notes/transfer-encodings.md. | Expansion and cancellation tests. |
 
 ### ROB-080 — Charset decoding
 

@@ -59,14 +59,35 @@ func isWarning(err error) bool {
 // every switch on it uses.
 //
 // It exists so that the decoder chosen for a body and the budget applied to it
-// can never disagree about which encoding was declared; see framedEncoding.
+// can never disagree about which encoding was declared; see framedEncoding and
+// canonicalCTE, whose repairs it applies.
 func normalizeEncodingName(enc string) string {
-	return strings.ToLower(enc)
+	name, _ := canonicalCTE(enc)
+	return name
 }
 
+// encodingReader returns the tolerant decoder of enc, a Content-Transfer-Encoding
+// value, reading r, for a body that belongs to no parse; see
+// parseContext.transferDecoder.
 func encodingReader(enc string, r io.Reader) (io.Reader, error) {
+	if dec, ok := (parseContext{}).transferDecoder(normalizeEncodingName(enc), r); ok {
+		return dec, nil
+	}
+	return nil, unhandledEncoding(enc)
+}
+
+// unhandledEncoding is the cause of an UnknownEncodingError for enc.
+func unhandledEncoding(enc string) error {
+	return fmt.Errorf("unhandled encoding %q", enc)
+}
+
+// legacyEncodingReader returns the decoders used before the tolerant ones, and
+// still under ProfileStrict: the standard library's Base64 decoder, which ends
+// with its corruption error at a byte outside the alphabet, and its
+// quoted-printable reader over lenientQPReader. name is a canonical name.
+func legacyEncodingReader(name string, r io.Reader) (io.Reader, error) {
 	var dec io.Reader
-	switch normalizeEncodingName(enc) {
+	switch name {
 	case "quoted-printable":
 		dec = quotedprintable.NewReader(&lenientQPReader{br: bufio.NewReader(r)})
 	case "base64":
@@ -75,7 +96,7 @@ func encodingReader(enc string, r io.Reader) (io.Reader, error) {
 	case "7bit", "8bit", "binary", "":
 		dec = r
 	default:
-		return nil, fmt.Errorf("unhandled encoding %q", enc)
+		return nil, unhandledEncoding(name)
 	}
 	return dec, nil
 }

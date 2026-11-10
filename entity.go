@@ -261,9 +261,49 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 			// input's; see parseContext.watchCTELines, which returns body
 			// unchanged when this parse has no such budget or the encoding has
 			// no line framing.
-			body = ctx.watchCTELines(encoding, body, leaf.shared())
-			if decoded, encErr := encodingReader(encoding, body); encErr != nil {
-				warning := UnknownEncodingError{encErr}
+			//
+			// The value is read as canonicalCTE reads it (ROB-070-001): a
+			// mechanism written with quotes, trailing text or a known
+			// misspelling is repaired and reported, except under
+			// ProfileStrict, which leaves such a value unknown. The decoders
+			// are the tolerant ones of cte_tolerant.go.
+			name, repaired := canonicalCTE(encoding)
+			usable := true
+			if repaired {
+				if ctx.session.Profile() == ProfileStrict {
+					usable = false
+				} else {
+					fatal = ctx.recordHeader(Diagnostic{
+						Code:     CodeCTEInvalidToken,
+						Severity: SeverityRecovered,
+						Message:  fmt.Sprintf("content transfer encoding %q is not written as a mechanism token", encoding),
+						Field:    "Content-Transfer-Encoding",
+						Action:   fmt.Sprintf("read it as %q", name),
+					})
+				}
+			}
+			if fatal == nil && usable {
+				watched := ctx.watchCTELines(name, body, leaf.shared())
+				if decoded, ok := ctx.transferDecoder(name, watched); ok {
+					body = decoded
+					if mediaType == "message/rfc822" && name != "" && name != "7bit" && name != "8bit" && name != "binary" {
+						// RFC 2046 section 5.2.1 forbids it; mail in the wild
+						// has it, and the declared encoding is what the bytes
+						// are in.
+						fatal = ctx.recordHeader(Diagnostic{
+							Code:     CodeMessageIllegalTransferEncoding,
+							Severity: SeverityInfo,
+							Message:  fmt.Sprintf("message/rfc822 declares the content transfer encoding %q", name),
+							Field:    "Content-Transfer-Encoding",
+							Action:   "decoded the body as declared",
+						})
+					}
+				} else {
+					usable = false
+				}
+			}
+			if fatal == nil && !usable {
+				warning := UnknownEncodingError{unhandledEncoding(encoding)}
 				err = warning
 				fatal = ctx.recordHeader(Diagnostic{
 					Code:     CodeCTEUnknown,
@@ -273,8 +313,21 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 					Action:   undecodedTransferAction,
 					Cause:    warning,
 				})
-			} else {
-				body = decoded
+			}
+		}
+	} else if !wide && ctx.session != nil && fatal == nil && local == nil {
+		// The encoding a multipart declares is ignored, as above, and that is
+		// reported when it is one that would have changed the bytes
+		// (ROB-060-012).
+		if raw := header.Get("Content-Transfer-Encoding"); raw != "" {
+			if name, _ := canonicalCTE(raw); name != "" && name != "7bit" && name != "8bit" && name != "binary" {
+				fatal = ctx.recordHeader(Diagnostic{
+					Code:     CodeMultipartIllegalTransferEncoding,
+					Severity: SeverityRecovered,
+					Message:  fmt.Sprintf("multipart entity declares the content transfer encoding %q", raw),
+					Field:    "Content-Transfer-Encoding",
+					Action:   "ignored the encoding and framed the parts from the body as it was read",
+				})
 			}
 		}
 	}
