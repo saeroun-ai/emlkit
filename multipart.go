@@ -65,6 +65,10 @@ type multipartReader struct {
 	inferred bool
 	endNoted bool
 	reused   bool
+
+	// digest reports that the entity is a multipart/digest, whose parts are
+	// message/rfc822 unless they say otherwise.
+	digest bool
 }
 
 // NextPart implements MultipartReader.
@@ -197,6 +201,7 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 	// record, and was ended by the next delimiter line is diagnosed when it is
 	// built; see firstline.go and orphan.go.
 	ctx.separatorMissing = p.HeaderSeparatorMissing()
+	ctx.digestPart = r.digest
 
 	// The budgets on the shape of the tree are charged here, where a child has
 	// been framed and nothing but its header block has been read yet. A refused

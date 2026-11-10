@@ -101,6 +101,12 @@ type Entity struct {
 	// afterwards, because the defects observed while an entity is built have to
 	// be recorded against it.
 	parse parseContext
+
+	// embedded is the message this entity carries, once EmbeddedMessage has
+	// read it, with the error it was read with; see embedded.go.
+	embedded      *Entity
+	embeddedErr   error
+	embeddedTried bool
 }
 
 // New makes a new message with the provided header and body. The entity's
@@ -195,6 +201,11 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 		ct = ctx.contentType(header)
 	}
 	mediaType, mediaParams, mediaErr := ct.value, ct.params, ct.err
+	// RFC 2046 section 5.1.5: a part of a multipart/digest that declares no
+	// Content-Type is a message/rfc822 (ROB-090-003).
+	if ctx.digestPart && mediaErr == nil && !wide && !header.Has("Content-Type") {
+		mediaType, mediaParams = "message/rfc822", nil
+	}
 
 	// A leaf body — one MultipartReader will not frame into parts — is held to
 	// the body budgets of this parse. Its wire bytes go through the encoded
@@ -839,6 +850,7 @@ func (e *Entity) MultipartReader() MultipartReader {
 		healing:                    limits.Recover,
 		declared:                   declared,
 		reused:                     reused,
+		digest:                     e.mediaType == "multipart/digest",
 	}
 }
 
@@ -1106,6 +1118,14 @@ func (e *Entity) Walk(walkFunc WalkFunc) error {
 
 		if mr := part.MultipartReader(); mr != nil {
 			multipartReaders = append(multipartReaders, mr)
+			if strict {
+				containers = append(containers, part)
+			}
+			path = append(path, -1)
+		} else if er := part.walkEmbedded(); er != nil {
+			// A parse that asked for it descends into the message this entity
+			// carries, as its one child; see embedded.go.
+			multipartReaders = append(multipartReaders, er)
 			if strict {
 				containers = append(containers, part)
 			}

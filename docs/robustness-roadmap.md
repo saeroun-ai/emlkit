@@ -3064,13 +3064,13 @@ else: no detection, no repair of wrong declarations, no recovery diagnostics.
 
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
-| ROB-090-001 | Planned | Parse `message/rfc822` and `message/global` as nested entities with independent diagnostics. | Plain/encoded/truncated fixtures. |
-| ROB-090-002 | Planned | Activate the reserved `MaxMessageDepth` budget for the nested entities introduced by ROB-090-001. | Deep message chain. |
-| ROB-090-003 | Planned | Support `multipart/digest` default child type semantics. | Missing child Content-Type fixtures. |
+| ROB-090-001 | Done | Parse `message/rfc822` and `message/global` as nested entities with independent diagnostics. Implemented on request: Entity.EmbeddedMessage and ParseOptions.WalkEmbeddedMessages read the embedded message as an entity of the same parse with its own path and diagnostics; unasked it stays a leaf. See docs/robustness-notes/embedded-messages.md. | Plain/encoded/truncated fixtures. |
+| ROB-090-002 | Done | Activate the reserved `MaxMessageDepth` budget for the nested entities introduced by ROB-090-001. MaxMessageDepth is enforced where an embedded message is read (limit.message_depth, entity-scoped). See docs/robustness-notes/embedded-messages.md. | Deep message chain. |
+| ROB-090-003 | Done | Support `multipart/digest` default child type semantics. A part of a multipart/digest with no Content-Type is message/rfc822. See docs/robustness-notes/embedded-messages.md. | Missing child Content-Type fixtures. |
 | ROB-090-004 | Planned | Preserve `multipart/related` root/start/type relationships. | CID/root-selection fixtures. |
 | ROB-090-005 | Planned | Model `multipart/report` and common delivery/disposition/feedback reports. | RFC samples and malformed blocks. |
 | ROB-090-006 | Planned | Validate `multipart/signed` and `multipart/encrypted` shape without modifying signed raw bytes. | Signature hash invariants. |
-| ROB-090-007 | Planned | Support `text/rfc822-headers` as a header block entity. | Valid/malformed header fixtures. |
+| ROB-090-007 | Done | Support `text/rfc822-headers` as a header block entity. text/rfc822-headers and message/global-headers are read by EmbeddedMessage as a header block entity. See docs/robustness-notes/embedded-messages.md. | Valid/malformed header fixtures. |
 | ROB-090-008 | Planned | Preserve unsupported `message/partial` and `message/external-body` metadata safely. | No external fetch, raw preservation. |
 
 ### ROB-100 — Message body and attachment view

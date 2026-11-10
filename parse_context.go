@@ -55,6 +55,16 @@ type parseContext struct {
 	// bounds is the boundaries of the multiparts this entity is nested in,
 	// innermost first, or nil. See multipart_heal.go.
 	bounds *boundaryChain
+
+	// msgDepth is how many messages this entity's message is embedded in: zero
+	// for the message itself and its parts. It is what Limits.MaxMessageDepth
+	// bounds; see embedded.go.
+	msgDepth int64
+
+	// digestPart reports that this entity is a part of a multipart/digest,
+	// whose default media type is message/rfc822. It is this entity's own and
+	// is never carried to a child.
+	digestPart bool
 }
 
 // rootContext returns the context of the root entity of a message parsed from
@@ -84,10 +94,11 @@ func rootContextAt(session *ParseSession, headerOffset, bodyOffset int64) parseC
 // known.
 func (c parseContext) child(index int, headerOffset, bodyOffset int64) parseContext {
 	return parseContext{
-		session: c.session,
-		origin:  c.origin.child(index, headerOffset, bodyOffset),
-		depth:   c.depth + 1,
-		bounds:  c.bounds,
+		session:  c.session,
+		origin:   c.origin.child(index, headerOffset, bodyOffset),
+		depth:    c.depth + 1,
+		bounds:   c.bounds,
+		msgDepth: c.msgDepth,
 	}
 }
 
@@ -104,7 +115,7 @@ func (c parseContext) child(index int, headerOffset, bodyOffset int64) parseCont
 // descent rather than of the bytes it descended through, so a replacement body
 // does not buy back the nesting budget the entity above it already spent.
 func (c parseContext) detached() parseContext {
-	return parseContext{session: c.session, depth: c.depth, bounds: c.bounds}
+	return parseContext{session: c.session, depth: c.depth, bounds: c.bounds, msgDepth: c.msgDepth}
 }
 
 // fatalErr returns the sticky failure of the parse this context belongs to, or
@@ -181,7 +192,7 @@ func (c parseContext) completeHeader(d Diagnostic) Diagnostic {
 // then leaves the location alone, since what the context would supply instead
 // is also unknown.
 func (c parseContext) headerLocationAt(delta int64) Location {
-	if !c.origin.known {
+	if !c.origin.known || c.origin.unplaced {
 		return Location{}
 	}
 	return LocationAt(c.origin.headerOffset + delta)
@@ -192,7 +203,7 @@ func (c parseContext) headerLocationAt(delta int64) Location {
 // any transfer encoding or charset was decoded, and the zero Location for an
 // entity whose position is not known.
 func (c parseContext) bodyLocationAt(delta int64) Location {
-	if !c.origin.known {
+	if !c.origin.known || c.origin.unplaced {
 		return Location{}
 	}
 	return LocationAt(c.origin.bodyOffset + delta)

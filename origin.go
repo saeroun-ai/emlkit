@@ -41,6 +41,12 @@ type entityOrigin struct {
 	// transfer encoding or charset was decoded, and it is also the point the
 	// offsets of this entity's own parts are measured from.
 	bodyOffset int64
+
+	// unplaced reports that the path is known but the offsets are not: the
+	// entity was read out of bytes a transfer decoder produced — a message
+	// embedded in a Base64 part — so it has a place in the tree and none in
+	// the input. Its parts are unplaced too. See embedded.go.
+	unplaced bool
 }
 
 // rootOrigin returns the origin of the root entity of a parsed message: a nil
@@ -84,6 +90,7 @@ func (o entityOrigin) child(index int, headerOffset, bodyOffset int64) entityOri
 		path:         path,
 		headerOffset: o.bodyOffset + headerOffset,
 		bodyOffset:   o.bodyOffset + bodyOffset,
+		unplaced:     o.unplaced,
 	}
 }
 
@@ -106,7 +113,7 @@ func (o entityOrigin) pathCopy() []int {
 // block — for a Diagnostic observed on it. It returns the zero Location, which
 // reports an unknown position, for an unknown origin.
 func (o entityOrigin) location() Location {
-	if !o.known {
+	if !o.known || o.unplaced {
 		return Location{}
 	}
 	return LocationAt(o.headerOffset)
@@ -116,7 +123,7 @@ func (o entityOrigin) location() Location {
 // for a Diagnostic observed while decoding it rather than on the entity
 // itself. It returns the zero Location for an unknown origin.
 func (o entityOrigin) bodyLocation() Location {
-	if !o.known {
+	if !o.known || o.unplaced {
 		return Location{}
 	}
 	return LocationAt(o.bodyOffset)

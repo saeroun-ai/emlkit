@@ -80,6 +80,15 @@ type ParseOptions struct {
 	// ReadWithOptions and the header of a part never recognize one. See mbox.go
 	// for the grammar recognized, its bound, and what the line costs.
 	RecognizeMboxEnvelope bool
+
+	// WalkEmbeddedMessages makes Entity.Walk descend into the message a
+	// message/rfc822 or message/global entity carries (and the header block of
+	// a text/rfc822-headers one): after walkFunc was given the carrying
+	// entity, the embedded message is visited as its one child, at the
+	// carrying entity's path followed by 0, and its own parts under it. It is
+	// off by default: an embedded message is then a leaf, as it always was,
+	// and Entity.EmbeddedMessage reads one on request. See embedded.go.
+	WalkEmbeddedMessages bool
 }
 
 // Parse reads a message from r and returns the session collecting what the
@@ -396,11 +405,14 @@ type ParseOptions struct {
 // a Strict refusal — still ends its scope with its own FatalError, which still
 // carries its own Diagnostic. See Limits.MaxDiagnosticCount.
 //
-// Limits.MaxMessageDepth is reserved and enforced by nothing: a message/rfc822
-// or message/global body is an opaque leaf to this engine rather than a nested
-// entity, so no nested-message transition exists to count. Such a part is one
-// ordinary part of MaxPartCount, and the structure inside its body costs
-// neither budget.
+// Limits.MaxMessageDepth bounds how deeply messages nest (ROB-090-002). A
+// message/rfc822 or message/global body is a leaf until the caller asks for
+// the message inside it — Entity.EmbeddedMessage, or Entity.Walk under
+// ParseOptions.WalkEmbeddedMessages — and an embedded message past the budget
+// is not read: one limit.message_depth diagnostic and an entity-scoped
+// FatalError, with the carrying entity and the parse left as they were. A
+// carrier nobody asks about is one ordinary part of MaxPartCount, and the
+// structure inside its body costs nothing. See embedded.go.
 //
 // A Content-Type or Content-Disposition whose base is valid — type/subtype, or
 // a disposition token — but whose parameters are malformed, stray empty items

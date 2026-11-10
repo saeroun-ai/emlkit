@@ -99,13 +99,10 @@ import "fmt"
 //
 // # What is not here
 //
-// Limits.MaxMessageDepth is not enforced, and cannot be yet. It counts nested
-// message/rfc822 and message/global entities, and this engine does not parse
-// those bodies as entities at all — they are opaque leaves, so there is no
-// nested-message transition to count. ROB-090-001 introduces that model and
-// ROB-090-002 activates the budget and its reserved limit.message_depth code.
-// A message/rfc822 part is one part like any other here, and the multiparts
-// inside its opaque body are not descended into and so cost nothing.
+// Limits.MaxMessageDepth is enforced where a message embedded in an entity is
+// read, by Entity.EmbeddedMessage or a Walk asked to descend; see embedded.go.
+// A message/rfc822 part nobody asks to read is one part like any other here,
+// and the multiparts inside its body are not descended into and cost nothing.
 
 // The actions a tree budget diagnostic reports. Each names what was not done —
 // nothing is repaired by either — and how far the stop reaches, which is the
