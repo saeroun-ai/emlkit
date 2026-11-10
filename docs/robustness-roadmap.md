@@ -3067,21 +3067,21 @@ else: no detection, no repair of wrong declarations, no recovery diagnostics.
 | ROB-090-001 | Done | Parse `message/rfc822` and `message/global` as nested entities with independent diagnostics. Implemented on request: Entity.EmbeddedMessage and ParseOptions.WalkEmbeddedMessages read the embedded message as an entity of the same parse with its own path and diagnostics; unasked it stays a leaf. See docs/robustness-notes/embedded-messages.md. | Plain/encoded/truncated fixtures. |
 | ROB-090-002 | Done | Activate the reserved `MaxMessageDepth` budget for the nested entities introduced by ROB-090-001. MaxMessageDepth is enforced where an embedded message is read (limit.message_depth, entity-scoped). See docs/robustness-notes/embedded-messages.md. | Deep message chain. |
 | ROB-090-003 | Done | Support `multipart/digest` default child type semantics. A part of a multipart/digest with no Content-Type is message/rfc822. See docs/robustness-notes/embedded-messages.md. | Missing child Content-Type fixtures. |
-| ROB-090-004 | Planned | Preserve `multipart/related` root/start/type relationships. | CID/root-selection fixtures. |
-| ROB-090-005 | Planned | Model `multipart/report` and common delivery/disposition/feedback reports. | RFC samples and malformed blocks. |
-| ROB-090-006 | Planned | Validate `multipart/signed` and `multipart/encrypted` shape without modifying signed raw bytes. | Signature hash invariants. |
+| ROB-090-004 | Done | Preserve `multipart/related` root/start/type relationships. Implemented by Node.RelatedRoot and Node.Resolve. See docs/robustness-notes/structure-view.md. | CID/root-selection fixtures. |
+| ROB-090-005 | Review | Model `multipart/report` and common delivery/disposition/feedback reports. Partial: multipart/report shape is checked and Node.ReportFields returns the field groups of a report part; no typed model per report kind. See docs/robustness-notes/structure-view.md. | RFC samples and malformed blocks. |
+| ROB-090-006 | Done | Validate `multipart/signed` and `multipart/encrypted` shape without modifying signed raw bytes. Shape checked (signed.structure_invalid, encrypted.structure_invalid); Entity.RawSpan and Node.SpanStart/SpanEnd give the signed part's bytes in the input untouched. See docs/robustness-notes/structure-view.md. | Signature hash invariants. |
 | ROB-090-007 | Done | Support `text/rfc822-headers` as a header block entity. text/rfc822-headers and message/global-headers are read by EmbeddedMessage as a header block entity. See docs/robustness-notes/embedded-messages.md. | Valid/malformed header fixtures. |
-| ROB-090-008 | Planned | Preserve unsupported `message/partial` and `message/external-body` metadata safely. | No external fetch, raw preservation. |
+| ROB-090-008 | Done | Preserve unsupported `message/partial` and `message/external-body` metadata safely. message/partial and message/external-body are kept as they are and reported as feature.unsupported_media_type; nothing is reassembled or fetched. See docs/robustness-notes/structure-view.md. | No external fetch, raw preservation. |
 
 ### ROB-100 — Message body and attachment view
 
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
-| ROB-100-001 | Planned | Preserve the complete MIME tree before producing any flattened convenience view. | Hierarchy round-trip tests. |
-| ROB-100-002 | Planned | Classify attachments using disposition, filename candidates, media type, and related references with explainable reasons. | Cross-client corpus. |
-| ROB-100-003 | Planned | Select `multipart/alternative` bodies by caller capability without discarding alternatives. | Nested alternative fixtures. |
-| ROB-100-004 | Planned | Resolve `multipart/related` inline resources by normalized Content-ID/Location. | HTML CID cases. |
-| ROB-100-005 | Planned | Represent embedded messages, calendars, zero-byte files, duplicates, and unknown media types. | Typed-view tests. |
+| ROB-100-001 | Done | Preserve the complete MIME tree before producing any flattened convenience view. Implemented by mail.ReadTree, which keeps every entity as a Node at its place before any view is taken. See docs/robustness-notes/structure-view.md. | Hierarchy round-trip tests. |
+| ROB-100-002 | Done | Classify attachments using disposition, filename candidates, media type, and related references with explainable reasons. Implemented: each Node has a Role and the Reason for it, from disposition, filename, media type and multipart/related membership. See docs/robustness-notes/structure-view.md. | Cross-client corpus. |
+| ROB-100-003 | Done | Select `multipart/alternative` bodies by caller capability without discarding alternatives. Implemented by Node.Bodies, which picks one alternative by the caller's preference and discards none. See docs/robustness-notes/structure-view.md. | Nested alternative fixtures. |
+| ROB-100-004 | Done | Resolve `multipart/related` inline resources by normalized Content-ID/Location. Implemented by Node.Resolve over Content-ID and Content-Location. See docs/robustness-notes/structure-view.md. | HTML CID cases. |
+| ROB-100-005 | Done | Represent embedded messages, calendars, zero-byte files, duplicates, and unknown media types. Embedded messages (RoleMessage, DescendMessages), calendar alternatives, zero-byte parts (Size 0), duplicates (DuplicateOf by SHA-256) and unknown media types (attachment) are represented. See docs/robustness-notes/structure-view.md. | Typed-view tests. |
 | ROB-100-006 | Done | Make unknown charset/CTE nonfatal in `mail.Reader` while retaining diagnostics. | Existing inconsistency regression tests. |
 | ROB-100-007 | Done | Preserve the parse engine's bounded effective MIME metadata consistently in `mail.Reader`, without reparsing original headers to undo decisions or budgets. | Root/child classification agrees with charset decisions and multipart structure; no duplicate diagnostics; unchanged raw headers and standalone accessors; explicit defensively copied snapshot/mutation contract; stopped root/synthetic wrapper respects session stop. |
 
@@ -3193,7 +3193,7 @@ contract is:
 | ROB-110-002 | Planned | Add configurable memory-to-temp-file spooling with deterministic cleanup. | Threshold, close, failure, cancellation tests. |
 | ROB-110-003 | Planned | Support caller-provided blob storage and quotas. | Fake-store contract tests. |
 | ROB-110-004 | Planned | Permit repeatable raw/decoded reads in indexed mode while retaining one-shot streaming mode. | Read-order and concurrent-read policy tests. |
-| ROB-110-005 | Planned | Preserve untouched message/header/body bytes after semantic reads. | Parse-read-write DKIM body/header hash tests. |
+| ROB-110-005 | Review | Preserve untouched message/header/body bytes after semantic reads. Partial: Entity.RawSpan gives the untouched input range of a part after any semantic read; the caller keeps the input. See docs/robustness-notes/structure-view.md. | Parse-read-write DKIM body/header hash tests. |
 | ROB-110-006 | Planned | Compute optional hashes during streaming without extra passes. | Known digest and partial-read tests. |
 | ROB-110-007 | Planned | Ensure no temp files, descriptors, or goroutines leak on any error path. | Stress tests with leak assertions. |
 
@@ -3205,7 +3205,7 @@ contract is:
 | ROB-120-002 | Planned | Make parsing and decoding complexity linear or explicitly budgeted. | Near-match and nesting benchmarks. |
 | ROB-120-003 | Planned | Prevent header injection in all decoded/setter/serialization paths. | CR/LF/NUL tests. |
 | ROB-120-004 | Planned | Keep filename sanitization, HTML safety, archive expansion, and executable handling outside core parsing. | API boundary/documentation tests. |
-| ROB-120-005 | Planned | Never perform network fetches for Content-Location/external-body while parsing. | Hostile URI tests. |
+| ROB-120-005 | Done | Never perform network fetches for Content-Location/external-body while parsing. No code path opens a network connection; Node.Resolve only matches parts of the message. See docs/robustness-notes/structure-view.md. | Hostile URI tests. |
 | ROB-120-006 | Planned | Preserve cryptographic raw representations and clearly mark repaired signed content as unverifiable. | DKIM/S-MIME/PGP invariants. |
 | ROB-120-007 | Done | Make every parser-wide error classification cycle-safe and non-forgeable over input-derived error graphs. | Hostile-graph tests at each predicate: no hang, no panic, no nil dereference, no misclassification. |
 | ROB-120-008 | Done | Make writer generation and serialization refuse a syntactically unparseable Content-Type with an explicit error, never a panic, an invented media type, parameter map or boundary, or silent metadata loss ([issue #58](https://github.com/saeroun-ai/emlkit/issues/58)). | Lowercase/uppercase malformed tail, duplicate boundary, malformed text/plain and missing subtype, at the root and as a part, through `CreateWriter`, `CreatePart`/`CreatePartWithBuffer`, `Parse`→`WriteTo` and `NewMultipart` Body reads: no panic; no output from the refused entity or part before its header is validated (output of its parent and of earlier siblings may already have been written and is not withdrawn); a good part after a refused one, deterministic repeated reads with no blocked worker; valid boundary generation, charset/encoding policy and copy-on-write unchanged. |

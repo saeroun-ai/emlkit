@@ -107,6 +107,10 @@ type Entity struct {
 	embedded      *Entity
 	embeddedErr   error
 	embeddedTried bool
+
+	// wirePart is the framing part this entity was built from, for a part of
+	// a multipart of the input; see RawSpan.
+	wirePart *textproto.Part
 }
 
 // New makes a new message with the provided header and body. The entity's

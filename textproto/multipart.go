@@ -111,6 +111,14 @@ func (p *Part) BodyOffset() int64 {
 	return p.bodyOffset
 }
 
+// BodyLen returns how many bytes of the part's body have been read so far,
+// and whether the body has been read to its end — the delimiter line that
+// ended it, or the end of the input. Once ended, the part's body is the n
+// bytes of the reader's input that begin at BodyOffset.
+func (p *Part) BodyLen() (n int64, ended bool) {
+	return p.total, p.n == 0 && p.err != nil && len(p.mr.out) == 0
+}
+
 // NewMultipartReader creates a new multipart reader reading from r using the
 // given MIME boundary.
 //

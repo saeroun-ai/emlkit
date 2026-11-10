@@ -215,7 +215,13 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 
 	r.next++
 
-	return newWithOptions(Header{p.Header}, p, r.skipTextAttachmentDecoding, ctx)
+	e, err := newWithOptions(Header{p.Header}, p, r.skipTextAttachmentDecoding, ctx)
+	if !r.inferred {
+		// A part of the kept body an inferred boundary framed has no span in
+		// the input the reader below counted.
+		e.setWirePart(p)
+	}
+	return e, err
 }
 
 // Close implements io.Closer.
