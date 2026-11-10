@@ -111,6 +111,10 @@ type Entity struct {
 	// wirePart is the framing part this entity was built from, for a part of
 	// a multipart of the input; see RawSpan.
 	wirePart *textproto.Part
+
+	// partsEnded reports that an iterator over this multipart's parts has
+	// reached its end; see ParseSession.Completion.
+	partsEnded bool
 }
 
 // New makes a new message with the provided header and body. The entity's
@@ -475,6 +479,18 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 		charset:                    charset,
 		skipTextAttachmentDecoding: skipTextAttachmentDecoding,
 		parse:                      ctx,
+	}
+
+	// Counted for ParseSession.Completion: the entity, and the body or the
+	// multipart the caller now has to read for the parse to be complete.
+	if s := ctx.session; s != nil {
+		s.prog.entities.Add(1)
+		switch {
+		case leaf != nil:
+			s.prog.bodies.Add(1)
+		case e.framesParts():
+			s.prog.multiparts.Add(1)
+		}
 	}
 
 	// The entity is usable either way, so it is returned either way. A caller
@@ -855,6 +871,7 @@ func (e *Entity) MultipartReader() MultipartReader {
 		declared:                   declared,
 		reused:                     reused,
 		digest:                     e.mediaType == "multipart/digest",
+		owner:                      e,
 	}
 }
 

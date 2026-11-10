@@ -126,6 +126,7 @@ func (g *progressReader) Read(p []byte) (int, error) {
 	if err != nil {
 		g.srcErr = err
 	}
+	g.session.noteInput(n, err)
 	switch {
 	case n > 0 && n <= len(p):
 		g.empty = 0

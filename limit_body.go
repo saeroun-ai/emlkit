@@ -491,10 +491,26 @@ type bodyGuard struct {
 	// passed on as they are.
 	err   error
 	proof [1]byte
+
+	// ended reports that a read has ended this body; see Read.
+	ended bool
 }
 
-// Read implements io.Reader.
+// Read implements io.Reader. It is read, counted for ParseSession.Completion:
+// the body is read to its end once a read ends it, with io.EOF or otherwise.
 func (g *bodyGuard) Read(p []byte) (int, error) {
+	n, err := g.read(p)
+	if s := g.ctx.session; s != nil {
+		s.prog.touched.Store(true)
+		if err != nil && !g.ended {
+			g.ended = true
+			s.prog.bodiesRead.Add(1)
+		}
+	}
+	return n, err
+}
+
+func (g *bodyGuard) read(p []byte) (int, error) {
 	// The total stop comes first, even for a body that already failed: it ends
 	// all decoded output of the parse. It is the only stop of the whole parse
 	// this guard looks up, because it is the only one that bounds decoded

@@ -186,6 +186,11 @@ type ParseSession struct {
 	// No method of cancelCtx is called with a session lock held. See cancel.go.
 	cancelCtx  context.Context
 	cancelDone <-chan struct{}
+
+	// prog is what the parse counts for Completion, and inputEnd the first
+	// error the input returned, io.EOF included. See completion.go.
+	prog     sessionProgress
+	inputEnd error
 }
 
 // newParseSession returns an empty session that records the profile and
@@ -426,6 +431,8 @@ func (s *ParseSession) record(d Diagnostic) error {
 		return s.cancelStop()
 	}
 	defer s.deliver.Unlock()
+	// Counted for Completion whether or not a slot is left for it.
+	s.prog.noteDiagnostic(d)
 	sink, failed := s.sink, s.sinkFailure
 	// A failed sink implies a published stop, so this is the identity every
 	// other scope of the parse is reporting.

@@ -69,10 +69,28 @@ type multipartReader struct {
 	// digest reports that the entity is a multipart/digest, whose parts are
 	// message/rfc822 unless they say otherwise.
 	digest bool
+
+	// owner is the entity whose parts this iterates, counted as read to its
+	// end once an iterator of it ends; see ParseSession.Completion.
+	owner *Entity
 }
 
-// NextPart implements MultipartReader.
+// NextPart implements MultipartReader. It is nextPart, counted for
+// ParseSession.Completion: the multipart is read to its end once an iterator
+// of it returns io.EOF or fails for good.
 func (r *multipartReader) NextPart() (*Entity, error) {
+	e, err := r.nextPart()
+	if s := r.parent.session; s != nil {
+		s.prog.touched.Store(true)
+		if e == nil && (err == io.EOF || r.fatal != nil || s.fatalErr() != nil) && r.owner != nil && !r.owner.partsEnded {
+			r.owner.partsEnded = true
+			s.prog.multipartsRead.Add(1)
+		}
+	}
+	return e, err
+}
+
+func (r *multipartReader) nextPart() (*Entity, error) {
 	// Iterating to the next part is a scope of this parse, so it does not begin
 	// on a session that has already been stopped. Nothing is recovered here:
 	// the parts already returned stay valid, and this iterator ends with the
@@ -182,7 +200,7 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 				part, herr, again := r.healEnd()
 				switch {
 				case again:
-					return r.NextPart()
+					return r.nextPart()
 				case part != nil || herr != nil:
 					return part, herr
 				}

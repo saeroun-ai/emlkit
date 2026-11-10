@@ -1025,6 +1025,7 @@ Each applicable test asserts:
 | ROB-000-003 | Done | Define partial-result fatal error semantics and error unwrapping. | `errors.Is/As` tests and usable-result tests. |
 | ROB-000-004 | Done | Thread part path and best-known byte offsets through lazy multipart traversal. | Nested-path and chunk-invariance tests. |
 | ROB-000-005 | Done | Bridge legacy `IsUnknownCharset`/`IsUnknownEncoding` behavior to structured diagnostics. | Existing API compatibility plus new-session tests. |
+| ROB-000-006 | Done | State what a parse has and has not established ([issue #10](https://github.com/saeroun-ai/emlkit/issues/10)): `ParseSession.Completion` reports not-consumed, in-progress, complete, incomplete, limited, canceled, stopped or failed, with read and unread scopes, diagnostic counts and ambiguity; `Entity.Drain` reads what is left so the answer is final. See docs/robustness-notes/completion.md. | Header-only, partial read, skipped part, missing close, budget, sink, cancellation and input-error fixtures. |
 
 ### ROB-001 — Budgets, cancellation, and progress
 
