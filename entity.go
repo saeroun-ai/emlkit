@@ -548,13 +548,46 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 // A part from ParseContext whose parse was cancelled ends the body with that
 // parse's stop: a part the writer has not reached yet is not started, and one
 // being written stops at the next read of its body.
+//
+// The header is copied: the caller's Header is never modified, by this call
+// or by reading the body later (ROB-120-009). The entity's own Header is that
+// copy settled as the writer will write it — a boundary generated when the
+// header declares none or one the writer cannot use, and no
+// Content-Transfer-Encoding, which a multipart cannot have — so that Header
+// and Body agree from the start, in every view of the header. The body is
+// generated from the header as it was at this call: editing Entity.Header
+// afterwards changes what WriteTo writes, not what Body yields.
 func NewMultipart(header Header, parts []*Entity) (*Entity, error) {
+	h := header.Copy()
+	settleMultipartHeader(&h)
 	r := &multipartBody{
-		header: header,
+		header: h.Copy(),
 		parts:  parts,
 	}
 
-	return New(header, r)
+	return New(h, r)
+}
+
+// settleMultipartHeader makes h, a private copy, what createWriter would make
+// of it: a usable boundary and no transfer encoding. A header the writer will
+// refuse — a Content-Type that does not parse, a wide byte order mark — and
+// one that is not multipart are left as they are.
+func settleMultipartHeader(h *Header) {
+	if wideMark(h.ByteOrderMark()) {
+		return
+	}
+	mediaType, params, err := h.ContentType()
+	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
+		return
+	}
+	mw := textproto.NewMultipartWriter(io.Discard)
+	if b := params["boundary"]; b == "" || mw.SetBoundary(b) != nil {
+		params["boundary"] = mw.Boundary()
+		h.SetContentType(mediaType, params)
+	}
+	if h.Has("Content-Transfer-Encoding") {
+		h.Del("Content-Transfer-Encoding")
+	}
 }
 
 const defaultMaxHeaderBytes = 1 << 20 // 1 MB

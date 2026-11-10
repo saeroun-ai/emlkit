@@ -152,13 +152,22 @@ func CreateWriter(w io.Writer, header Header) (*Writer, error) {
 	return ww, nil
 }
 
+// errNilWriter is what a nil *Writer returns instead of failing on itself.
+var errNilWriter = errors.New("message: nil Writer")
+
 // Write implements io.Writer.
 func (w *Writer) Write(b []byte) (int, error) {
+	if w == nil || w.w == nil {
+		return 0, errNilWriter
+	}
 	return w.w.Write(b)
 }
 
 // Close implements io.Closer.
 func (w *Writer) Close() error {
+	if w == nil {
+		return errNilWriter
+	}
 	if w.c != nil {
 		return w.c.Close()
 	}

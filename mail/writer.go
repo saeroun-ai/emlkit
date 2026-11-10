@@ -84,7 +84,17 @@ func CreateInlineWriter(w io.Writer, header Header) (*InlineWriter, error) {
 func CreateSingleInlineWriter(w io.Writer, header Header) (io.WriteCloser, error) {
 	header = header.Copy() // don't modify the caller's view
 	initInlineContentTransferEncoding(&header.Header)
-	return message.CreateWriter(w, header.Header)
+	return partWriter(message.CreateWriter(w, header.Header))
+}
+
+// partWriter returns w as an io.WriteCloser. A writer that could not be made
+// is returned as a nil interface: a nil *message.Writer inside a non-nil
+// io.WriteCloser would pass a caller's nil check and fail in its hands.
+func partWriter(w *message.Writer, err error) (io.WriteCloser, error) {
+	if err != nil || w == nil {
+		return nil, err
+	}
+	return w, nil
 }
 
 // CreateRelatedWriter writes a mail header to w. The mail will contain a text
@@ -137,7 +147,7 @@ func (w *Writer) CreateRelated() (*RelatedWriter, error) {
 func (w *Writer) CreateSingleInline(h InlineHeader) (io.WriteCloser, error) {
 	h = InlineHeader{h.Header.Copy()} // don't modify the caller's view
 	initInlineHeader(&h)
-	return w.mw.CreatePart(h.Header)
+	return partWriter(w.mw.CreatePart(h.Header))
 }
 
 // CreateAttachment creates a new attachment with the provided header. The body
@@ -145,7 +155,7 @@ func (w *Writer) CreateSingleInline(h InlineHeader) (io.WriteCloser, error) {
 func (w *Writer) CreateAttachment(h AttachmentHeader) (io.WriteCloser, error) {
 	h = AttachmentHeader{h.Header.Copy()} // don't modify the caller's view
 	initAttachmentHeader(&h)
-	return w.mw.CreatePart(h.Header)
+	return partWriter(w.mw.CreatePart(h.Header))
 }
 
 // Close finishes the Writer.
@@ -163,7 +173,7 @@ type InlineWriter struct {
 func (w *InlineWriter) CreatePart(h InlineHeader) (io.WriteCloser, error) {
 	h = InlineHeader{h.Header.Copy()} // don't modify the caller's view
 	initInlineHeader(&h)
-	return w.mw.CreatePart(h.Header)
+	return partWriter(w.mw.CreatePart(h.Header))
 }
 
 // Close finishes the InlineWriter.
@@ -197,7 +207,7 @@ func (w *RelatedWriter) CreateInline() (*InlineWriter, error) {
 func (w *RelatedWriter) CreateSingleInline(h InlineHeader) (io.WriteCloser, error) {
 	h = InlineHeader{h.Header.Copy()} // don't modify the caller's view
 	initInlineHeader(&h)
-	return w.mw.CreatePart(h.Header)
+	return partWriter(w.mw.CreatePart(h.Header))
 }
 
 // CreateInlineAttachment creates a new inline attachment with the provided
@@ -205,7 +215,7 @@ func (w *RelatedWriter) CreateSingleInline(h InlineHeader) (io.WriteCloser, erro
 func (w *RelatedWriter) CreateInlineAttachment(h InlineAttachmentHeader) (io.WriteCloser, error) {
 	h = InlineAttachmentHeader{h.Header.Copy()} // don't modify the caller's view
 	initInlineAttachmentHeader(&h)
-	return w.mw.CreatePart(h.Header)
+	return partWriter(w.mw.CreatePart(h.Header))
 }
 
 // Close finishes the RelatedWriter.

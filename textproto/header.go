@@ -42,6 +42,13 @@ func (f *headerField) raw() ([]byte, error) {
 			}
 		}
 
+		if pos := strings.IndexByte(f.v, 0); pos != -1 {
+			// RFC 5322 section 2.2 allows no NUL in a field, and a NUL is
+			// what truncates a value in software that reads C strings
+			// (ROB-120-003). Only a field set by the caller is refused: one
+			// read from an input is written back as it was read.
+			return nil, fmt.Errorf("field value contains NUL (at %v)", pos)
+		}
 		if pos := strings.IndexAny(f.v, "\r\n"); pos != -1 {
 			return nil, fmt.Errorf("field value contains \\r\\n (at %v)", pos)
 		}
