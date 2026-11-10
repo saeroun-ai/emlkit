@@ -56,8 +56,10 @@ func TestParse_metadataNoProgress(t *testing.T) {
 						t.Errorf("hook reader returned %d zeros, want %d", d.zeroCalls, min(k, maxConsecutiveEmptyReads))
 					}
 					if k < maxConsecutiveEmptyReads {
-						if got.session.Len() != 0 {
-							t.Errorf("Diagnostics() = %v, want none", codesOfDiags(got.session.Diagnostics()))
+						// The word was decoded, which ROB-050-008 reports: a
+						// parameter value may not hold one.
+						if got := codesOfDiags(got.session.Diagnostics()); !reflect.DeepEqual(got, []Code{CodeMIMEParameterRFC2047}) {
+							t.Errorf("Diagnostics() = %v, want only the decoded word's", got)
 						}
 						return
 					}
@@ -98,8 +100,9 @@ func TestParse_metadataNoProgressBounds(t *testing.T) {
 			content := strings.Repeat("a", 1200)
 			text := "Content-Type: text/plain; note=\"=?x-meta?Q?" + content + "?=\"\r\n\r\nbody"
 			got := consumeStall(strings.NewReader(text), &ParseOptions{Limits: allDisabled()})
-			if _, params, _ := got.entity.EffectiveContentType(); params["note"] != content || got.session.Len() != 0 {
-				t.Errorf("note of %d bytes, %v; want it decoded", len(params["note"]), codesOfDiags(got.session.Diagnostics()))
+			_, params, _ := got.entity.EffectiveContentType()
+			if codes := codesOfDiags(got.session.Diagnostics()); params["note"] != content || !reflect.DeepEqual(codes, []Code{CodeMIMEParameterRFC2047}) {
+				t.Errorf("note of %d bytes, %v; want it decoded, and reported as a decoded word only", len(params["note"]), codes)
 			}
 		})
 	}
@@ -332,15 +335,18 @@ func TestParse_metadataNoProgressSalvage(t *testing.T) {
 		codes  []Code // before the one header.decoder_no_progress
 		stalls int    // x-stall readers built per parse
 	}{
-		{"whole field", "Content-Type: text/plain; " + pair + "\r\n\r\nbody", Limits{}, nil, 1},
+		// The word of z decodes, which is reported (ROB-050-008); the word of a
+		// stalls and is not.
+		{"whole field", "Content-Type: text/plain; " + pair + "\r\n\r\nbody", Limits{},
+			[]Code{CodeMIMEParameterRFC2047}, 1},
 		{"repaired", "Content-Type: text/plain; " + pair + "; broken\r\n\r\nbody", Limits{},
-			[]Code{CodeMIMEContentTypeInvalid}, 1},
+			[]Code{CodeMIMEContentTypeInvalid, CodeMIMEParameterRFC2047}, 1},
 		{"retained prefix", "Content-Type: text/plain; " + pair + "; b=1; c=2\r\n\r\nbody", paramsOnly(2, 0),
-			[]Code{CodeLimitParameterCount}, 1},
-		// The retained prefix is read and then repaired for its empty item;
-		// the value that stalled is not handed to the hook a second time.
+			[]Code{CodeLimitParameterCount, CodeMIMEParameterRFC2047}, 1},
+		// A field with a stray empty item before the cut is read item by item;
+		// the value that stalled is handed to the hook once.
 		{"retained prefix, then repaired", "Content-Type: text/plain; a=\"" + stalled + "\";; z=\"" + good + "\"; b=1\r\n\r\nbody",
-			paramsOnly(2, 0), []Code{CodeLimitParameterCount, CodeMIMEContentTypeInvalid}, 1},
+			paramsOnly(2, 0), []Code{CodeLimitParameterCount, CodeMIMEContentTypeInvalid, CodeMIMEParameterRFC2047}, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -374,7 +380,8 @@ func TestParse_metadataNoProgressSalvage(t *testing.T) {
 			if params["boundary"] != "B" || params["note"] != stalled {
 				t.Fatalf("parse %d: params %v", i, params)
 			}
-			checkMetadataStall(t, got.session.Diagnostics(), "Content-Type")
+			// The boundary is itself an encoded word, decoded and reported.
+			checkMetadataStall(t, got.session.Diagnostics(), "Content-Type", CodeMIMEParameterRFC2047)
 		}
 	})
 }

@@ -294,9 +294,9 @@ func TestReader_issue15Child(t *testing.T) {
 // Header.ContentDisposition, and the part stays inline text. Under Parse with
 // budgets the field fits within, the whole field fails to parse and is then
 // repaired by ROB-050-001 (#22): its valid base "attachment" is kept, the
-// conflicting duplicate a is dropped rather than chosen, one
-// mime.parameter_duplicate is recorded, and the part is the attachment its base
-// declares. Precedence between the conflicting values is ROB-050-005's.
+// conflicting duplicate a takes its first value by the precedence of
+// ROB-050-005 (before it, both were dropped), one mime.parameter_duplicate is
+// recorded, and the part is the attachment its base declares.
 func TestReader_withoutBudgetsKeepsLegacyClassification(t *testing.T) {
 	t.Run("CreateReader", func(t *testing.T) {
 		mr, err := mail.CreateReader(strings.NewReader(issue15Root))
@@ -316,8 +316,8 @@ func TestReader_withoutBudgetsKeepsLegacyClassification(t *testing.T) {
 			t.Fatalf("Parse() = %v", err)
 		}
 		disp, params, dispErr := e.EffectiveContentDisposition()
-		if dispErr != nil || disp != "attachment" || len(params) != 0 {
-			t.Errorf("EffectiveContentDisposition() = (%q, %v, %v), want the repaired attachment without the conflicting a", disp, params, dispErr)
+		if dispErr != nil || disp != "attachment" || !reflect.DeepEqual(params, map[string]string{"a": "1"}) {
+			t.Errorf("EffectiveContentDisposition() = (%q, %v, %v), want the repaired attachment with the first of the conflicting a", disp, params, dispErr)
 		}
 		parts, err := classifyAll(t, mail.NewReader(e))
 		if err != nil || len(parts) != 1 || !parts[0].attachment || parts[0].body != "body" {

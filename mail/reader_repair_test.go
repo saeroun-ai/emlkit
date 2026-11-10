@@ -69,12 +69,11 @@ func TestReader_repairedDispositionIsAnAttachment(t *testing.T) {
 			if ran := message.IsUnknownCharset(got.err); ran == skip {
 				t.Errorf("charset stage ran = %v with skip = %v: a repaired attachment's charset is skipped", ran, skip)
 			}
-			// A known gap, pinned so its change is visible: the standalone
-			// Filename accessor reads the raw header with no repair, so it does
-			// not see the repaired filename, and quietly falls back to the
-			// Content-Type name. Filename policy is ROB-050-009's.
-			if name, err := got.header.(*mail.AttachmentHeader).Filename(); name != "" || err != nil {
-				t.Errorf("Filename() = (%q, %v), want the legacy unrepaired (\"\", nil)", name, err)
+			// Filename reads the header tolerantly (ROB-050-009), so it sees the
+			// filename of the damaged field as the parse does. Before, it read
+			// the raw header with no repair and returned ("", nil).
+			if name, err := got.header.(*mail.AttachmentHeader).Filename(); name != "report;v2.txt" || err != nil {
+				t.Errorf("Filename() = (%q, %v), want the filename of the repaired field", name, err)
 			}
 			want := []message.Code{message.CodeMIMEDispositionInvalid}
 			if !skip {

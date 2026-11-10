@@ -4,19 +4,22 @@ import (
 	"github.com/saeroun-ai/emlkit"
 )
 
-// parseFilename parses the filename from the header's Content-Disposition,
-// falling back to the discouraged "name" parameter of Content-Type.
+// parseFilename returns the filename the header gives its part: the first of
+// message.Header.FilenameCandidates, which reads the filename parameter of
+// Content-Disposition and the discouraged name parameter of Content-Type
+// tolerantly and prefers, in this order, Content-Disposition filename*,
+// Content-Disposition filename, Content-Type name* and Content-Type name.
+//
+// A name that could be read is returned whatever was wrong with the field
+// around it, so the error is always nil; it stays in the signature because it
+// always was there. The name is the sender's own: it is not made safe for a
+// filesystem (see message.SafeFilename), and it is not UTF-8 when its bytes
+// are in a charset that is undeclared or has no decoder.
 func parseFilename(h message.Header) (string, error) {
-	_, params, err := h.ContentDisposition()
-
-	filename, ok := params["filename"]
-	if !ok {
-		// Using "name" in Content-Type is discouraged
-		_, params, err = h.ContentType()
-		filename = params["name"]
+	if names := h.FilenameCandidates(); len(names) > 0 {
+		return names[0].Filename, nil
 	}
-
-	return filename, err
+	return "", nil
 }
 
 // An AttachmentHeader represents an attachment's header.
@@ -29,6 +32,15 @@ var _ PartHeader = (*AttachmentHeader)(nil)
 func (*AttachmentHeader) partHeader() {}
 
 // Filename parses the attachment's filename.
+//
+// It reads the header tolerantly: a filename in a field with malformed
+// parameters, without quotes around its spaces, in an RFC 2231 series or
+// charset the standard library does not read, or given only as the name
+// parameter of Content-Type is returned rather than lost. Every candidate, with
+// its raw text, is available from FilenameCandidates, which AttachmentHeader
+// has through its Header. The error is always nil. The name is the sender's
+// and may hold path separators; use message.SafeFilename before creating a
+// file from it.
 func (h *AttachmentHeader) Filename() (string, error) {
 	return parseFilename(h.Header)
 }
@@ -46,7 +58,8 @@ type InlineAttachmentHeader struct {
 	message.Header
 }
 
-// Filename parses the inline attachment's filename.
+// Filename parses the inline attachment's filename, on the terms of
+// AttachmentHeader.Filename.
 func (h *InlineAttachmentHeader) Filename() (string, error) {
 	return parseFilename(h.Header)
 }

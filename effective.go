@@ -2,6 +2,7 @@ package message
 
 import (
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -120,18 +121,74 @@ type dispositionSnapshot struct {
 	ctx parseContext
 	raw string
 
+	// rawType is the Content-Type the entity was constructed with. It is not
+	// interpreted here — the entity interprets it at construction — but it is
+	// what the candidates of its parameters are read from when a caller asks
+	// for them, and where the charset to try for raw 8-bit bytes in a
+	// disposition parameter comes from.
+	rawType string
+
 	mu     sync.Mutex
 	done   bool
 	disp   string
 	params map[string]string
 	err    error
+
+	// The candidates of the two fields' parameters, and the filename
+	// candidates made from them, each read at most once and only when asked
+	// for; see candidates and filenames. cmu guards them and is never held
+	// while a diagnostic is delivered.
+	cmu        sync.Mutex
+	candDone   bool
+	typeCands  []ParameterCandidate
+	dispCands  []ParameterCandidate
+	namesDone  bool
+	names      []FilenameCandidate
+	namesNoted bool
 }
 
 // newDispositionSnapshot captures the Content-Disposition of header, to be
 // interpreted later under ctx. Capturing it costs nothing beyond keeping the
 // string: no byte of it is read until it is interpreted.
 func newDispositionSnapshot(ctx parseContext, header Header) *dispositionSnapshot {
-	return &dispositionSnapshot{ctx: ctx, raw: header.Get("Content-Disposition")}
+	return &dispositionSnapshot{
+		ctx:     ctx,
+		raw:     header.Get("Content-Disposition"),
+		rawType: header.Get("Content-Type"),
+	}
+}
+
+// typeCharset returns the charset the captured Content-Type declares, read
+// tolerantly and recording nothing, or "" when it declares none. It is the
+// charset raw 8-bit bytes in a disposition parameter are tried in.
+func (d *dispositionSnapshot) typeCharset() string {
+	for _, c := range d.ctx.candidatesOf("Content-Type", d.rawType, nil) {
+		if c.Name == "charset" && c.Chosen {
+			return c.Value
+		}
+	}
+	return ""
+}
+
+// candidates returns the candidates of the parameters of both captured
+// fields, reading them on the first call. The slices are the snapshot's own
+// and are never written after that; callers outside this file get copies.
+func (d *dispositionSnapshot) candidates() (typeCands, dispCands []ParameterCandidate) {
+	d.cmu.Lock()
+	defer d.cmu.Unlock()
+	if !d.candDone {
+		d.typeCands = d.ctx.candidatesOf("Content-Type", d.rawType, nil)
+		d.dispCands = d.ctx.candidatesOf("Content-Disposition", d.raw, func() string {
+			for _, c := range d.typeCands {
+				if c.Name == "charset" && c.Chosen {
+					return c.Value
+				}
+			}
+			return ""
+		})
+		d.candDone = true
+	}
+	return d.typeCands, d.dispCands
 }
 
 // get returns the interpretation of the captured value, making it on the first
@@ -145,7 +202,7 @@ func (d *dispositionSnapshot) get() (string, map[string]string, error) {
 		d.mu.Unlock()
 		return disp, params, err
 	}
-	r := d.ctx.interpretDisposition(d.raw)
+	r := d.ctx.interpretDisposition(d.raw, d.typeCharset)
 	if r.cancelled {
 		// The parse's context was cancelled while the field was being read, so
 		// there is no interpretation to publish: nothing is cached, nothing is
@@ -218,20 +275,30 @@ func (d *dispositionSnapshot) isAttachment() bool {
 // constructed. For an entity from New, Read or ReadWithOptions, which have no
 // budgets, they are what Header.ContentType returned for the header as it was
 // at construction. A missing Content-Type is "text/plain" with no parameters,
-// as there. A field that did not parse is returned as Header.ContentType returns
-// one: the raw value as the media type, no parameters, and the error.
+// as there. For those entities a field that did not parse is returned as
+// Header.ContentType returns one: the raw value as the media type, no
+// parameters, and the error.
 //
-// Under Parse, a field with a valid base but malformed parameters is the
-// exception (ROB-050-001; see metadata_repair.go). Under ProfileTolerant and
-// ProfileForensic it is repaired: the normalized base and the well-formed,
-// unambiguous parameters are returned with a nil error, because they are the
-// interpretation the entity was built from, and the defect is reported by the
-// diagnostics recorded at construction, not by this error. Header.ContentType
-// still returns the legacy failure for the same raw field. Under ProfileStrict
-// it is not interpreted: the media type is empty, the parameters nil, and the
-// error the entity-scoped FatalError that construction returned, which does not
-// stop the parse. Because the Content-Type is read before any decoder is
-// chosen, such an entity's body is exactly the bytes of the input. An entity
+// Under Parse a field the whole-field parser refuses, or does not read in
+// full, is read all the same (ROB-050-001 to ROB-050-008; see
+// metadata_repair.go and mediatype_tolerant.go). Under ProfileTolerant and
+// ProfileForensic it is repaired: a media type missing its type, subtype or
+// slash is read by conservative defaults ("text" is text/plain), values that
+// are not tokens and quotes that are never closed are recovered, RFC 2231
+// values are assembled in any order and decoded in any charset CharsetReader
+// knows, and a repeated parameter takes one value by a fixed precedence — all
+// with a nil error, because that is the interpretation the entity was built
+// from, and with the repair reported by the diagnostics recorded at
+// construction, not by this error. Header.ContentType still returns the legacy
+// failure for the same raw field. A parameter value is UTF-8 unless its bytes
+// could not be decoded, in which case it holds the bytes and a
+// mime.parameter_unknown_charset diagnostic says so. ParameterCandidates returns
+// every occurrence of a repeated parameter, where this returns the chosen one.
+// Under ProfileStrict a field that needs repair is not interpreted: the media
+// type is empty, the parameters nil, and the error the entity-scoped FatalError
+// that construction returned, which does not stop the parse. Because the
+// Content-Type is read before any decoder is chosen, such an entity's body is
+// exactly the bytes of the input. An entity
 // ProfileStrict refused for its header's line endings — a line ended by a bare
 // '\r', or a last line with no line ending (ROB-010-002) — is reported the same
 // way, whatever its Content-Type says: nothing of the field is interpreted. So
@@ -274,13 +341,16 @@ func (e *Entity) EffectiveContentType() (mediaType string, params map[string]str
 // budget diagnostic, and every later call returns that same interpretation and
 // records nothing. For an entity from New, Read or ReadWithOptions it is what
 // Header.ContentDisposition returned for the header as it was at construction.
-// A missing or unparseable field is returned as Header.ContentDisposition
-// returns one: the raw value, which is empty for a missing field, no
-// parameters, and the error. A field with a valid disposition but malformed
-// parameters is repaired, or under ProfileStrict refused, on the terms
-// EffectiveContentType describes; a repaired "attachment" is an attachment to
-// the charset stage and to mail.Reader alike. Its diagnostics are recorded once,
-// by the first reading.
+// A missing field is returned as Header.ContentDisposition returns one: an
+// empty value, no parameters, and the error. Under Parse a field that is
+// present is always read: one the whole-field parser refuses is repaired, or
+// under ProfileStrict refused, on the terms EffectiveContentType describes. A
+// field with parameters and no readable disposition type is an "attachment",
+// as RFC 2183 section 2.8 has an unrecognized disposition treated, and raw
+// 8-bit bytes in a parameter are tried in the charset of the entity's
+// Content-Type. A repaired "attachment" is an attachment to the charset stage
+// and to mail.Reader alike. Its diagnostics are recorded once, by the first
+// reading.
 //
 // A strict refusal of the disposition differs from one of the Content-Type in
 // what it can still prevent, because it is known only when the field is first
@@ -339,4 +409,96 @@ func (e *Entity) EffectiveContentDisposition() (disp string, params map[string]s
 // stopped, and ParseStop returns nil for it.
 func (e *Entity) ParseStop() error {
 	return e.parse.fatalErr()
+}
+
+// ParameterCandidates returns every candidate value of every parameter of the
+// Content-Type or the Content-Disposition this entity was constructed with —
+// field is one of those two names, in any case — in the order the field holds
+// them. It returns nil for any other field, and for a field the entity does not
+// have.
+//
+// EffectiveContentType and EffectiveContentDisposition return one value per
+// parameter. A field that repeats a parameter, or gives it both as name and as
+// name*, offers more than one, and none is discarded: each is a candidate here,
+// with the raw text it was read from, and the one the entity uses is marked
+// Chosen. A parameter whose candidates are never resolved by choosing — a
+// boundary that repeats with different values — has candidates and no chosen
+// one. See ParameterCandidate, and mediatype_tolerant.go for the precedence.
+//
+// The candidates are read tolerantly whatever the profile, under the parameter
+// budgets of the parse the entity came from (the default budgets for an entity
+// that came from no parse), so a field past a budget offers the candidates
+// within it. They are a reading of their own, made on the first call and kept:
+// it reads the field as it was at construction, records no diagnostic — the
+// entity's construction already recorded what the field is owed — and may call
+// the configured CharsetReader again for the values it decodes. The result is a
+// fresh copy on every call.
+func (e *Entity) ParameterCandidates(field string) []ParameterCandidate {
+	var typeCands, dispCands []ParameterCandidate
+	if e.disposition == nil {
+		typeCands, dispCands = e.Header.parameterCandidates()
+	} else {
+		typeCands, dispCands = e.disposition.candidates()
+	}
+	switch {
+	case strings.EqualFold(field, "Content-Type"):
+		return slices.Clone(typeCands)
+	case strings.EqualFold(field, "Content-Disposition"):
+		return slices.Clone(dispCands)
+	}
+	return nil
+}
+
+// FilenameCandidates returns every filename this entity's header offers, the
+// one to use first; see Header.FilenameCandidates for the sources, their
+// precedence and what a candidate holds. It returns nil when the entity names
+// no file.
+//
+// It differs from Header.FilenameCandidates in what it reads and what it
+// records. It reads the Content-Disposition and Content-Type the entity was
+// constructed with, under the parameter budgets of its parse, rather than the
+// header as it is now. And the first call that finds candidates with different
+// names records one mime.filename_conflict diagnostic, of SeverityInfo, in the
+// parse's session: nothing was lost, since every candidate is returned, but a
+// caller that only takes the first should know there was a choice. Later calls
+// record nothing. Under ProfileStrict a field the parse refused offers no
+// candidates.
+//
+// Reading the disposition for the first time records its diagnostics, as
+// EffectiveContentDisposition does, so the same rule holds for a
+// DiagnosticSink: it may call this for an entity whose filenames were already
+// asked for, and must not be the first to ask, since recording from inside a
+// delivery blocks (see "Reading from a DiagnosticSink" at the top of this
+// file). The result is a fresh copy on every call.
+func (e *Entity) FilenameCandidates() []FilenameCandidate {
+	d := e.disposition
+	if d == nil {
+		return e.Header.FilenameCandidates()
+	}
+	// The disposition is interpreted first, with no lock of the candidates
+	// held, so that its diagnostics are delivered as for any other reading.
+	_, _, dispErr := d.get()
+	typeCands, dispCands := d.candidates()
+	if IsFatal(e.mediaErr) {
+		typeCands = nil
+	}
+	if IsFatal(dispErr) {
+		dispCands = nil
+	}
+
+	d.cmu.Lock()
+	if !d.namesDone {
+		d.names, d.namesDone = filenameCandidates(dispCands, typeCands), true
+	}
+	names := d.names
+	note := !d.namesNoted && filenamesConflict(names)
+	if note {
+		d.namesNoted = true
+	}
+	d.cmu.Unlock()
+
+	if note && d.ctx.fatalErr() == nil {
+		_ = d.ctx.recordHeader(filenameConflictDiagnostic(names))
+	}
+	return slices.Clone(names)
 }

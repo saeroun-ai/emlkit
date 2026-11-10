@@ -56,9 +56,9 @@ import (
 // segments all arrived before the cut, because what an assembler would build
 // from a series this scan stopped reading is a value that looks complete and may
 // not be. Reporting a truncated value as the parameter's value is the one
-// outcome worth losing a parameter to avoid. ROB-050 owns the wider question of
-// recovering malformed and partial parameters; this item only refuses to claim
-// more than it knows.
+// outcome worth losing a parameter to avoid. ROB-050-007 recovers the partial
+// series of a field no budget cut — a gap in it is known to be a gap — but
+// leaves this rule alone: past a cut nothing says whether the series went on.
 
 // The actions a parameter budget diagnostic reports. Both say the same two
 // things: what was kept, and that parsing went on.
@@ -445,7 +445,7 @@ func (c parseContext) contentType(h Header) fieldReading {
 	if v == "" {
 		return fieldReading{value: "text/plain"}
 	}
-	r := c.interpretParameterized("Content-Type", v)
+	r := c.interpretParameterized("Content-Type", v, nil)
 	if r.cancelled {
 		// Nothing of the field is interpreted, nothing it was owed is recorded,
 		// and the parse's stop is its error. Built here, where no lock is held.
@@ -461,8 +461,12 @@ func (c parseContext) contentType(h Header) fieldReading {
 // raw value rather than a Header because the engine reads the value an entity
 // was constructed with, which it captures then and interprets at most once; see
 // dispositionSnapshot for why the recording is separate.
-func (c parseContext) interpretDisposition(raw string) fieldReading {
-	return c.interpretParameterized("Content-Disposition", raw)
+//
+// hint returns the charset of the entity's Content-Type, which raw 8-bit bytes
+// in a value are tried in; it may be nil, and is called at most once and only
+// when there are such bytes.
+func (c parseContext) interpretDisposition(raw string, hint func() string) fieldReading {
+	return c.interpretParameterized("Content-Disposition", raw, hint)
 }
 
 // interpretParameterized reads one parameterized header field under this
@@ -475,13 +479,15 @@ func (c parseContext) interpretDisposition(raw string) fieldReading {
 // field. The whole value is never parsed as a second attempt — reaching for the
 // assembler this scan exists to bound would give back the work it saved.
 //
-// A field whose bounded parse fails is read again item by item, from the
-// occurrences the scan retained, when its base is valid on its own; see
-// metadata_repair.go. Otherwise it is reported exactly as an unparseable field
-// has always been reported: the raw value as the media type, no parameters, and
-// the error of the parse. Under ProfileStrict a field that would need repair is
-// not interpreted: the error is an entity-scoped FatalError and the value is
-// empty.
+// A field the whole-field parser reads in full is read by it, exactly as it
+// always was. Any other field — one whose bounded parse fails, whose base is
+// missing its slash, or that holds something that parser does not read at all,
+// such as an RFC 2231 value in another charset — is read item by item from the
+// occurrences the scan retained; see metadata_repair.go. Under ProfileStrict a
+// field that would need repair is not interpreted: the error is an
+// entity-scoped FatalError and the value is empty. An absent
+// Content-Disposition is reported as it always was: an empty value, no
+// parameters, and the error of the parse.
 //
 // It does not deliver diagnostics; encoded-word decoding can still call the
 // configured CharsetReader. A caller may cache this interpretation and record
@@ -490,19 +496,20 @@ func (c parseContext) interpretDisposition(raw string) fieldReading {
 // DiagnosticSink, which may read it back; see dispositionSnapshot.
 //
 // A parse that can be cancelled is polled at the work boundaries of every step
-// — before it starts, in the scan, in the whole-field parse and in the repair —
-// and a reading the cancellation reached is returned with cancelled set and
-// nothing else: no value, no parameters, nothing owed. The caller turns that
-// into the parse's stop where it holds no lock; the poll itself calls no method
-// of the context, so this may run under an entity's lock. See cancel.go.
+// — before it starts, in the scan, in the whole-field parse and in the
+// item-by-item reading — and a reading the cancellation reached is returned
+// with cancelled set and nothing else: no value, no parameters, nothing owed.
+// The caller turns that into the parse's stop where it holds no lock; the poll
+// itself calls no method of the context, so this may run under an entity's
+// lock. See cancel.go.
 //
-// The encoded words of parameter values are decoded through a metadataDecoder
-// that holds the CharsetReader's readers to the no-progress rule. A value whose
-// reader stalled keeps its raw text while the field's other values decode as
-// usual, and a field with any such value is owed one header.decoder_no_progress
-// diagnostic after everything else it is owed; a cancelled reading owes
-// nothing. See progress.go.
-func (c parseContext) interpretParameterized(field, raw string) fieldReading {
+// The encoded words and charsets of parameter values are decoded through a
+// metadataDecoder that holds the CharsetReader's readers to the no-progress
+// rule. A value whose reader stalled keeps its raw text while the field's other
+// values decode as usual, and a field with any such value is owed one
+// header.decoder_no_progress diagnostic after everything else it is owed; a
+// cancelled reading owes nothing. See progress.go.
+func (c parseContext) interpretParameterized(field, raw string, hint func() string) fieldReading {
 	limits, ok := c.limits()
 	if !ok {
 		// No parse, so nothing to bound and nothing to repair.
@@ -511,35 +518,76 @@ func (c parseContext) interpretParameterized(field, raw string) fieldReading {
 	}
 	poll := c.cancelPoll()
 	dec := &metadataDecoder{poll: poll}
-	r := c.interpretBounded(field, raw, limits, poll, dec)
+	r := c.interpretBounded(field, raw, limits, poll, dec, hint, false)
 	if len(dec.stalled) > 0 && !r.cancelled {
 		r.owed = append(r.owed, c.completeHeader(metadataNoProgressDiagnostic(field)))
 	}
 	return r
 }
 
+// wholeFieldSuffices reports whether the whole-field parser reads everything
+// raw can hold: whether raw has none of the bytes that begin something only
+// the item-by-item reading reads or reports — an RFC 2231 name, an encoded
+// word, a backslash, or a byte above 0x7f. It is a test of bytes and says
+// nothing of whether raw is well formed; a field that fails it may still be
+// perfectly conformant, and is then read to the same result the long way.
+func wholeFieldSuffices(raw string) bool {
+	for i := 0; i < len(raw); i++ {
+		switch c := raw[i]; {
+		case c >= 0x80, c == '*', c == '\\':
+			return false
+		case c == '=' && i+1 < len(raw) && raw[i+1] == '?':
+			return false
+		}
+	}
+	return true
+}
+
+// validWholeBase reports whether base, as the whole-field parser returned it,
+// is a base the field may have: a type and a subtype for Content-Type, which
+// that parser does not insist on, and a single token for Content-Disposition.
+func validWholeBase(field, base string) bool {
+	slash := strings.IndexByte(base, '/')
+	if field == "Content-Disposition" {
+		return slash < 0
+	}
+	return slash > 0 && slash < len(base)-1
+}
+
 // interpretBounded is interpretParameterized for a parse, with its limits, its
-// cancellation poll and the decoder of the field's encoded words.
-func (c parseContext) interpretBounded(field, raw string, limits Limits, poll func() bool, dec *metadataDecoder) fieldReading {
+// cancellation poll and the decoder of the field's encoded words. noWords
+// leaves encoded words undecoded in the item-by-item reading; see
+// tolerantField, the one caller that sets it.
+func (c parseContext) interpretBounded(field, raw string, limits Limits, poll func() bool, dec *metadataDecoder, hint func() string, noWords bool) fieldReading {
 	if poll != nil && poll() {
 		return fieldReading{cancelled: true}
 	}
-	var cancelled bool
+	if field == "Content-Disposition" && strings.TrimSpace(raw) == "" {
+		// The field is absent, which is not a defect: the same empty value and
+		// error as ever, and nothing recorded.
+		_, _, cancelled, err := parseHeaderWithParamsDecoder(raw, poll, dec)
+		if cancelled {
+			return fieldReading{cancelled: true}
+		}
+		return fieldReading{value: raw, err: err}
+	}
 
 	var (
-		f      string
-		params map[string]string
-		err    error
-		owed   []Diagnostic
+		f         string
+		params    map[string]string
+		err       error
+		cancelled bool
+		owed      []Diagnostic
 	)
+	whole := wholeFieldSuffices(raw)
 	budgeted := limits.MaxParameterCount > 0 || limits.MaxParameterSegments > 0
-	if !budgeted {
+	if !budgeted && whole {
 		// Nothing to bound, so nothing is scanned unless the field turns out to
-		// need repair: a scan that can refuse nothing would only walk the field
-		// to reach the same answer.
+		// need the item-by-item reading: a scan that can refuse nothing would
+		// only walk the field to reach the same answer.
 		if f, params, cancelled, err = parseHeaderWithParamsDecoder(raw, poll, dec); cancelled {
 			return fieldReading{cancelled: true}
-		} else if err == nil {
+		} else if err == nil && validWholeBase(field, f) {
 			return fieldReading{value: f, params: params}
 		}
 	}
@@ -548,45 +596,91 @@ func (c parseContext) interpretBounded(field, raw string, limits Limits, poll fu
 	if scanCancelled {
 		return fieldReading{cancelled: true}
 	}
-	head, occurrences, refusal := scan.head, scan.occurrences, scan.refusal
-	if refusal == nil {
-		if budgeted {
-			if f, params, cancelled, err = parseHeaderWithParamsDecoder(raw, poll, dec); cancelled {
-				return fieldReading{cancelled: true}
-			}
-		}
-		if err == nil {
-			return fieldReading{value: f, params: params}
-		}
-	} else {
+	if scan.refusal != nil {
 		// The diagnostic is owed whether or not what remains turns out to be
-		// parseable at all.
-		owed = append(owed, parameterDiagnostic(field, refusal))
+		// readable at all.
+		owed = append(owed, parameterDiagnostic(field, scan.refusal))
+	}
+	if budgeted && whole {
+		subject := raw
+		if scan.refusal != nil {
+			subject = retainedParameters(raw, scan.head, scan.occurrences)
+		}
+		if f, params, cancelled, err = parseHeaderWithParamsDecoder(subject, poll, dec); cancelled {
+			return fieldReading{cancelled: true}
+		}
 		// The retained prefix is rebuilt without empty items, so a stray one
 		// before the cut would vanish from it unreported; such a field is read
-		// by the repair instead, which reports it.
-		if f, params, cancelled, err = parseHeaderWithParamsDecoder(retainedParameters(raw, head, occurrences), poll, dec); cancelled {
-			return fieldReading{cancelled: true}
-		} else if err == nil && scan.strayEmpty == 0 {
+		// item by item instead, which reports it.
+		if err == nil && validWholeBase(field, f) && (scan.refusal == nil || scan.strayEmpty == 0) {
 			return fieldReading{value: f, params: params, owed: owed}
 		}
 	}
 
-	repaired, ok := c.repairParameterized(field, raw, scan, dec)
-	if repaired.cancelled {
+	healed := c.healParameterized(field, raw, scan, dec, hint, noWords, err)
+	if healed.cancelled {
 		return fieldReading{cancelled: true}
 	}
-	if !ok {
-		if err == nil {
-			// The retained prefix parsed, and only its stray empty items sent
-			// it here, but its base is not one this repair may keep: the
-			// budget's own reading stands, as it did before.
-			return fieldReading{value: f, params: params, owed: owed}
-		}
-		return fieldReading{value: raw, owed: owed, err: err}
+	healed.owed = append(owed, healed.owed...)
+	return healed
+}
+
+// tolerantField reads a field that belongs to no parse — a value a caller
+// holds — the way Parse reads one under ProfileTolerant: under the default
+// parameter budgets, with the CharsetReader's readers guarded, and with the
+// diagnostics returned rather than recorded, since there is no session to
+// record them in and no position to give them.
+//
+// No header budget bounds a value a caller holds, and the encoded-word decoder
+// is not linear in what it is given, so a value longer than a parse admits by
+// default — oversizedField — keeps its encoded words undecoded.
+func tolerantField(field, raw string, hint func() string) fieldReading {
+	var c parseContext
+	dec := &metadataDecoder{}
+	r := c.interpretBounded(field, raw, DefaultLimits(), nil, dec, hint, oversizedField(raw))
+	if len(dec.stalled) > 0 {
+		r.owed = append(r.owed, metadataNoProgressDiagnostic(field))
 	}
-	repaired.owed = append(owed, repaired.owed...)
-	return repaired
+	return r
+}
+
+// oversizedField reports whether raw is longer than the default budget of one
+// header field, which is the longest value a parse hands the encoded-word
+// decoder unless its caller raised that budget.
+func oversizedField(raw string) bool {
+	return int64(len(raw)) > defaultMaxHeaderFieldBytes
+}
+
+// candidatesOf returns every candidate value of every parameter of a field,
+// read tolerantly under this parse's parameter budgets — or the default ones,
+// for a context with no parse — and records nothing. It is a reading of its
+// own: the interpretation the entity was built from keeps only the chosen
+// values, and a caller that wants the rest asks for them here, at the cost of
+// reading the retained occurrences once more. It returns nil for an absent
+// field and for a parse that was cancelled.
+func (c parseContext) candidatesOf(field, raw string, hint func() string) []ParameterCandidate {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	limits, ok := c.limits()
+	if !ok {
+		limits = DefaultLimits()
+	}
+	poll := c.cancelPoll()
+	scan, cancelled := scanParametersPoll(raw, limits.MaxParameterCount, limits.MaxParameterSegments, poll)
+	if cancelled {
+		return nil
+	}
+	t := readTolerant(tolerantInput{
+		field: field, raw: raw, scan: scan, dec: &metadataDecoder{poll: poll}, poll: poll, hint: hint,
+		// A parse's own header budgets bound its fields; nothing bounds a
+		// header a caller built.
+		noWords: !ok && oversizedField(raw),
+	})
+	if t.cancelled {
+		return nil
+	}
+	return t.candidates
 }
 
 // recordParameterDiagnostics records the diagnostics interpretParameterized

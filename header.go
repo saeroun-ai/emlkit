@@ -134,10 +134,12 @@ func HeaderFromMap(m map[string][]string) Header {
 // answer: the Content-Type an entity was constructed with, as its parse
 // interpreted it, which is what the entity's body was decoded by.
 //
-// It also repairs nothing. A field with a valid media type but a malformed
-// parameter fails here as it always has — the raw value, no parameters, and the
-// error — even where Parse kept that media type and its well-formed parameters
-// for the entity; see metadata_repair.go.
+// It also repairs nothing. A field with a malformed media type or parameter
+// fails here as it always has — the raw value, no parameters, and the error —
+// even where Parse read that field for the entity; see metadata_repair.go.
+// ParseMediaTypeTolerant is the reading that does not fail, for a caller that
+// wants it without a parse, and FilenameCandidates reads the filename
+// tolerantly.
 func (h *Header) ContentType() (t string, params map[string]string, err error) {
 	v := h.Get("Content-Type")
 	if v == "" {
@@ -154,9 +156,10 @@ func (h *Header) SetContentType(t string, params map[string]string) {
 // ContentDisposition parses the Content-Disposition header field, as defined in
 // RFC 2183.
 //
-// Like ContentType, it parses under no budget and reads the header as it is
-// now; see there, and Entity.EffectiveContentDisposition for the field as an
-// entity was constructed with it.
+// Like ContentType, it parses under no budget, repairs nothing, and reads the
+// header as it is now; see there, Entity.EffectiveContentDisposition for the
+// field as an entity was constructed with it, and
+// ParseContentDispositionTolerant for the reading that does not fail.
 func (h *Header) ContentDisposition() (disp string, params map[string]string, err error) {
 	return parseHeaderWithParams(h.Get("Content-Disposition"))
 }

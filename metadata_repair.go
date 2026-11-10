@@ -6,99 +6,98 @@ import (
 	"strings"
 )
 
-// Recovery of a valid base media type or disposition whose parameters are
-// malformed (ROB-050-001, issue #22).
+// The parse engine's reading of a Content-Type or Content-Disposition that the
+// whole-field parser does not accept as it stands, or does not read in full
+// (ROB-050-001 to ROB-050-008, issues #22, #23 and #24).
 //
-// # What is repaired
+// # What is read
 //
-// RFC 2045 section 5.1 makes the base of a Content-Type a type, a slash and a
-// subtype, and RFC 2183 makes the base of a Content-Disposition one token. When
-// that base is well formed, its meaning does not depend on the parameters after
-// it: "multipart/mixed; boundary=B; broken" is a multipart/mixed entity whose
-// boundary is B and whose third item is damaged. The whole-field parser cannot
-// say so — mime.ParseMediaType refuses the whole field over one bad item, and
-// the legacy fallback then reports the raw value as if it were the media type —
-// so under Parse a field whose whole parse fails is read again, item by item,
-// from the occurrences the parameter budget scan already retained:
+// mime.ParseMediaType refuses a whole field over one bad item, and the legacy
+// fallback then reports the raw value as if it were the media type. Under
+// Parse such a field is read item by item instead, from the occurrences the
+// parameter budget scan retained, by the tolerant reading of
+// mediatype_tolerant.go and rfc2231.go:
 //
-//   - The base is kept, normalized as the whole-field parser normalizes it,
-//     only if it is valid on its own: type "/" subtype for Content-Type, a
-//     single token for Content-Disposition. A missing type, subtype or slash
-//     is ROB-050-002 and is left exactly as before: the raw value, no
-//     parameters, and the parser's error.
-//   - Every parameter item that parses on its own is kept, whether it comes
-//     before or after a damaged one. Items are the top-level semicolon
-//     separated items of the field, found by the quote-aware scan of
-//     limit_parameters.go, so a semicolon inside a quoted string or after a
-//     backslash inside one never separates anything.
-//   - An item that does not parse on its own is malformed and ignored. An
-//     unterminated quoted string runs to the end of the field, as the scan
-//     reads it, so the item it opens is the damaged suffix: everything before
-//     it is kept and nothing is guessed about what it swallowed.
-//   - An empty item between semicolons — "multipart/mixed;; boundary=B",
-//     "boundary=B; ;" — declares nothing but is rejected by the whole-field
-//     parser, which accepts only one trailing semicolon followed by
-//     whitespace. It is ignored like a malformed item and reported as an empty
-//     one. It is still not a parameter occurrence: scanParameters only counts
-//     it, and no budget charges it. The single trailing semicolon mime accepts
-//     never reaches the repair.
-//   - A parameter that occurs more than once with one value is kept with that
-//     value and without comment, as the whole-field parser keeps such a
-//     parameter in a field that is otherwise conformant. One that occurs with
-//     different values is dropped, every occurrence: choosing one would pick,
-//     for a boundary, the framing of the whole body arbitrarily. An occurrence
-//     whose value is unknown — a damaged item that still names the parameter,
-//     "boundary=B; boundary=\"C", or an RFC 2231 extended value whose charset
-//     has no decoder — conflicts with a well-formed one in the same way.
-//     Precedence between conflicting values is ROB-050-005.
-//   - Every parameter that has an RFC 2231 continuation segment among the
-//     retained occurrences — the whole family, well-formed segments, damaged
-//     ones, and a whole parameter of the same name alike — is dropped, as the
-//     parameter budgets already drop one: in a field known to be damaged the
-//     series cannot be shown complete. A well-formed segment is not malformed
-//     and is not reported as one; it is dropped by this deferred policy, which
-//     ROB-050-006 and ROB-050-007 own.
-//   - A well-formed RFC 2231 extended value whose charset has no decoder is
-//     not malformed either. The whole-field parser keeps nothing for it, and
-//     neither does the repair.
+//   - The base — type "/" subtype for Content-Type, one token for
+//     Content-Disposition — is kept as the whole-field parser normalizes it
+//     when it is valid on its own. A base missing its type, subtype or slash is
+//     read by the conservative defaults of healMediaType (ROB-050-002).
+//   - Every item is read on its own, whether it comes before or after a
+//     damaged one. Items are the top-level semicolon separated items found by
+//     the quote-aware scan of limit_parameters.go, so a semicolon inside a
+//     quoted string never separates anything. An item the whole-field parser
+//     accepts reads exactly as it does there; values that are not tokens,
+//     quoted strings that are never closed and stray quotes and backslashes
+//     are recovered (ROB-050-003, ROB-050-004).
+//   - An item with no name, no "=" or no value is malformed and declares
+//     nothing. An empty item between semicolons — "multipart/mixed;;
+//     boundary=B" — declares nothing either; it is not a parameter occurrence,
+//     and no budget charges it. Both are reported for the field as a whole.
+//   - RFC 2231 extended and continued values are assembled whatever order
+//     their segments arrive in, with their charset decoded through the
+//     configured CharsetReader, and a series with a gap, a bad percent escape
+//     or an unknown charset keeps what it has (ROB-050-006, ROB-050-007).
+//   - A parameter that repeats keeps every occurrence as a candidate and
+//     chooses one by a fixed precedence, except that a boundary is never
+//     chosen among differing candidates (ROB-050-005).
+//   - RFC 2047 encoded words and raw 8-bit bytes in a value are read and
+//     reported (ROB-050-008).
+//
+// A field with none of these — which is every conformant field — never
+// reaches this reading, or leaves it with the result the whole-field parser
+// gives and no diagnostic.
 //
 // # A multipart that kept no boundary
 //
-// A repair of a multipart Content-Type can end with no boundary it may use:
-// the boundary was repeated with conflicting values, a damaged item named it, or
-// an unterminated quote swallowed it. Nothing is chosen or invented then, and
-// the media type is still reported as what the field declares. But a body with
-// no known boundary cannot be framed, and iterating it would fail at once and
-// cost the siblings after it to every reader that stops at the first error, so
-// such an entity is unframed: MultipartReader returns nil and the body is one
-// opaque, uninterpreted part holding the bytes of the input. Its diagnostics
-// are SeverityInvalidMetadata, and their Action says the parts inside were not
-// read. A multipart with no boundary that no repair touched keeps its existing
-// behavior; inferring a boundary is ROB-060-002.
+// A repaired multipart Content-Type can end with no boundary it may use: the
+// boundary was repeated with conflicting values, a damaged item named it, an
+// unterminated quote swallowed it, or the field never had one and its type was
+// only inferred. Nothing is chosen or invented then, and the media type is
+// still reported. But a body with no known boundary cannot be framed, and
+// iterating it would fail at once and cost the siblings after it to every
+// reader that stops at the first error, so such an entity is unframed:
+// MultipartReader returns nil and the body is one opaque, uninterpreted part
+// holding the bytes of the input. Its diagnostics are SeverityInvalidMetadata,
+// and their Action says the parts inside were not read. A multipart with no
+// boundary that no repair touched keeps its existing behavior; inferring a
+// boundary is ROB-060-002.
 //
 // # What is bounded
 //
 // Only the occurrences the budget scan retained are read, so a field past
-// MaxParameterCount or MaxParameterSegments is never parsed whole as a second
+// MaxParameterCount or MaxParameterSegments is never read whole as a second
 // attempt, and with both budgets disabled the field is scanned once before it
-// is read item by item. Each item is parsed once on its own, parameter names
-// are tracked in map sets, and the names a diagnostic lists are kept in
-// first-occurrence order rather than sorted, so the work is linear in the
-// retained bytes, never a reparse of shorter and shorter prefixes.
+// is read item by item. Each item is read once, parameter names are tracked in
+// maps, the segments of a series are sorted only when they arrive out of
+// order, and a field records at most one diagnostic per code, each listing at
+// most maxDiagnosticNames parameter names. A continued parameter among the
+// occurrences a budget cut is still dropped whole, as limit_parameters.go
+// explains: a series that may go on past the cut is not reported as a value.
 //
-// # Profiles
+// # Diagnostics and profiles
 //
-// This producer is the first to read ParseOptions.Profile, and it reads it
-// locally:
+// A field records, after any budget diagnostic and in this order: the code of
+// a repaired base (mime.content_type_missing_type, _missing_subtype,
+// _missing_slash), one mime.content_type_invalid or mime.disposition_invalid
+// for malformed and empty items and for a base with unexpected text, and then
+// one diagnostic per parameter code that applies, in the order of
+// parameterNoteOrder. They share one Action, which names the base, the
+// parameters kept, and what was ignored.
 //
-//	Profile           result for a valid base with damaged parameters
-//	Tolerant (zero)   the repair above, with diagnostics of SeverityRecovered
-//	                  (SeverityInvalidMetadata for an unframed multipart)
+// Findings are of two kinds. A repair — anything the whole-field parser would
+// have refused, or read to a different value — is SeverityRecovered, or
+// SeverityInvalidMetadata for an unframed multipart. An observation that
+// changes nothing this package did not already do — encoded words decoded, raw
+// UTF-8 kept, a backslash kept as a backslash, bytes left undecoded for want of
+// a charset — is SeverityInfo or SeverityUnsupported.
+//
+//	Profile           a field that needs repair
+//	Tolerant (zero)   repaired, as above
 //	Forensic          the same repair and diagnostics as Tolerant
-//	Strict            no interpretation: an entity-scoped FatalError, the same
-//	                  diagnostics with SeverityInvalidMetadata; see below for
-//	                  what that does to the body
+//	Strict            not interpreted: an entity-scoped FatalError, and only
+//	                  the repair diagnostics, as SeverityInvalidMetadata
 //
+// A field with observations only is interpreted alike under every profile.
 // What a strict refusal can still affect depends on when it is known, and
 // nothing is rewound or read early to make it more:
 //
@@ -111,13 +110,12 @@ import (
 //     on it, has already been set up. Read later — by EffectiveContentDisposition,
 //     mail.Reader or a walk callback — it can only refuse the entity: the
 //     decoders chosen at construction stay, and bytes already read stay read.
-
-// Forensic adds nothing here because the raw field is already preserved
-// byte for byte in the header, for every profile; the raw spans Forensic
-// promises in general are ROB-110. Every Compatibility value takes the
-// conservative choices above: this producer has no tie for a policy to break.
-// A conformant field parses as it always has under every profile, and Read,
-// ReadWithOptions, New and the Header accessors do not repair anything.
+//
+// Forensic adds nothing here because the raw field is already preserved byte
+// for byte in the header, for every profile; the raw spans Forensic promises
+// in general are ROB-110. Every Compatibility value takes the same choices.
+// Read, ReadWithOptions, New and the Header accessors ContentType and
+// ContentDisposition repair nothing.
 
 // A fieldReading is how the parse engine read one parameterized header field:
 // the interpretation, the diagnostics it is owed, and the error that goes with
@@ -147,172 +145,239 @@ func fieldInvalidCode(field string) Code {
 	return CodeMIMEContentTypeInvalid
 }
 
-// repairParameterized reads a field whose whole parse failed, item by item,
-// from the occurrences the budget scan retained, and reports whether it could:
-// it cannot when the base itself is not valid, or when no item explains the
-// failure, and the caller then reports the whole-field failure as before.
+// parameterNoteOrder is the order a field's parameter diagnostics are recorded
+// in.
+var parameterNoteOrder = []Code{
+	CodeMIMEParameterUnquotedValue,
+	CodeMIMEParameterUnclosedQuote,
+	CodeMIMEParameterInvalidEscape,
+	CodeMIMEParameterDuplicate,
+	CodeMIMEParameterSegmentMissing,
+	CodeMIMEParameterSegmentDuplicate,
+	CodeMIMEParameterBadPercentEscape,
+	CodeMIMEParameterUnknownCharset,
+	CodeMIMEParameterRFC2047,
+	CodeMIMEParameterRawUTF8,
+}
+
+// healParameterized reads a field item by item, from the occurrences the
+// budget scan retained, and returns the interpretation with the diagnostics it
+// is owed; see the top of this file.
 //
 // scan is what scanParameters returned for raw; a refusal in it means a budget
-// cut the field short. The returned diagnostics are complete, in a fixed order
-// — malformed and empty items, then conflicts — and owed to the session. Under
-// ProfileStrict the returned value is empty, the parameters nil, and the error
-// an entity-scoped FatalError carrying the first of them.
+// cut the field short. wholeErr is the error of the whole-field parse when the
+// caller made one, and nil otherwise: a field that parser refused is never
+// handed back as if nothing were wrong with it. The returned diagnostics are
+// complete and in a fixed order. Under ProfileStrict a field that needs repair
+// has an empty value, nil parameters, and an entity-scoped FatalError carrying
+// the first of them.
 //
-// dec decodes the encoded words of the items, as for the whole-field parse.
-func (c parseContext) repairParameterized(field, raw string, scan parameterScan, dec *metadataDecoder) (fieldReading, bool) {
-	occurrences, truncated, empty := scan.occurrences, scan.refusal != nil, scan.strayEmpty
-	base, valid := validBase(field, raw[:scan.head])
-	if !valid {
-		return fieldReading{}, false
-	}
-
-	var (
-		malformed int
-		unclosed  bool
-		// order holds every parameter name in first-occurrence order, which is
-		// the order every list below is reported in.
-		order []string
-		known = map[string]bool{}
-		// count is how many whole (non-segment) occurrences declare a name,
-		// whatever became of them.
-		count  = map[string]int{}
-		values = map[string]string{}
-		// clash marks a name declared twice with different values; unknown a
-		// name one of whose occurrences has a value nothing could read.
-		clash     = map[string]bool{}
-		unknown   = map[string]bool{}
-		continued = map[string]bool{}
-		undecoded = map[string]bool{}
-	)
-	note := func(name string) {
-		if !known[name] {
-			known[name] = true
-			order = append(order, name)
-		}
-	}
-	// Each item is one parse of its own, and can decode its value through the
-	// configured CharsetReader, so a parse that can be cancelled is polled
-	// before each; a repair the cancellation reached is discarded whole.
+// dec decodes the encoded words and charsets of the items, hint supplies the
+// charset to try for raw 8-bit bytes, and noWords leaves encoded words
+// undecoded, as for readTolerant.
+func (c parseContext) healParameterized(field, raw string, scan parameterScan, dec *metadataDecoder, hint func() string, noWords bool, wholeErr error) fieldReading {
 	poll := c.cancelPoll()
-	for _, occ := range occurrences {
-		if poll != nil && poll() {
-			return fieldReading{cancelled: true}, true
-		}
-		item := raw[occ.start:occ.end]
-		key, val, wellFormed, decoded := parseParameterItem(item, dec)
-		switch {
-		case !wellFormed:
-			malformed++
-			if hasUnclosedQuote(item) {
-				unclosed = true
-			}
-			if occ.base == "" {
-				continue
-			}
-			note(occ.base)
-			if occ.segment {
-				continued[occ.base] = true
-				continue
-			}
-			count[occ.base]++
-			unknown[occ.base] = true
-		case occ.segment:
-			// Well formed on its own, but one piece of a series; see above.
-			note(occ.base)
-			continued[occ.base] = true
-		case !decoded:
-			// Well formed, and kept by nothing: an extended value whose
-			// charset has no decoder.
-			note(occ.base)
-			count[occ.base]++
-			unknown[occ.base] = true
-			undecoded[occ.base] = true
-		default:
-			note(key)
-			count[key]++
-			if prev, dup := values[key]; !dup {
-				values[key] = val
-			} else if prev != val {
-				clash[key] = true
-			}
-		}
-	}
-
-	if poll != nil && poll() {
-		return fieldReading{cancelled: true}, true
-	}
-
-	var kept, conflicting, dropped, unsupported []string
-	for _, name := range order {
-		switch {
-		case continued[name]:
-			// A series and a whole parameter of the same name cannot be told
-			// apart from a conflict either, so neither is kept.
-			dropped = append(dropped, name)
-			delete(values, name)
-		case count[name] > 1 && (clash[name] || unknown[name]):
-			conflicting = append(conflicting, name)
-			delete(values, name)
-		case undecoded[name]:
-			unsupported = append(unsupported, name)
-		}
-		if _, ok := values[name]; ok {
-			kept = append(kept, name)
-		}
-	}
-
-	if malformed == 0 && empty == 0 && len(conflicting) == 0 {
-		// Nothing here explains why the whole field did not parse, so nothing
-		// is claimed about it.
-		return fieldReading{}, false
-	}
-
 	strict := c.session != nil && c.session.Profile() == ProfileStrict
-	unframed := !strict && field == "Content-Type" && strings.HasPrefix(base, "multipart/") && values["boundary"] == ""
+	t := readTolerant(tolerantInput{
+		field: field, raw: raw, scan: scan, dec: dec, poll: poll, hint: hint, noHint: strict, noWords: noWords,
+	})
+	if t.cancelled || (poll != nil && poll()) {
+		// A reading the cancellation reached is discarded whole.
+		return fieldReading{cancelled: true}
+	}
 
-	action := repairAction(field, base, kept, conflicting, dropped, unsupported, empty > 0, truncated, unframed)
-	severity := SeverityRecovered
-	switch {
-	case strict:
+	// unexplained: the whole-field parser refused the field and nothing found
+	// here says why. It is still a field that needed this reading.
+	unexplained := wholeErr != nil && !t.needsRepair()
+	repair := unexplained || t.needsRepair()
+	if !repair && len(t.notes) == 0 {
+		return fieldReading{value: t.base, params: t.params}
+	}
+
+	refused := strict && repair
+	unframed := !strict && repair && field == "Content-Type" &&
+		strings.HasPrefix(t.base, "multipart/") && t.params["boundary"] == ""
+
+	action := t.action(field, unframed)
+	if refused {
 		action = strictAction(field)
-		severity = SeverityInvalidMetadata
-	case unframed:
-		severity = SeverityInvalidMetadata
 	}
-
 	var owed []Diagnostic
-	if malformed > 0 || empty > 0 {
-		var defects []string
-		if malformed > 0 {
-			d := fmt.Sprintf("%d malformed parameter %s", malformed, plural(malformed, "item", "items"))
-			if unclosed {
-				d += ", the last of them an unterminated quoted string running to the end of the field"
-			}
-			defects = append(defects, d)
+	add := func(code Code, severity Severity, refuse bool, message string) {
+		switch {
+		case refused && !refuse:
+			// Nothing of a refused field was interpreted, so nothing is said
+			// about how its values were read.
+			return
+		case refuse && (refused || unframed):
+			severity = SeverityInvalidMetadata
 		}
-		if empty > 0 {
-			defects = append(defects, fmt.Sprintf("%d empty parameter %s between semicolons",
-				empty, plural(empty, "item", "items")))
-		}
-		msg := fmt.Sprintf("%s has a valid %s %q but %s",
-			field, baseNoun(field), base, strings.Join(defects, " and "))
 		owed = append(owed, c.completeHeader(Diagnostic{
-			Code: fieldInvalidCode(field), Severity: severity, Field: field, Message: msg, Action: action,
-		}))
-	}
-	if len(conflicting) > 0 {
-		owed = append(owed, c.completeHeader(Diagnostic{
-			Code: CodeMIMEParameterDuplicate, Severity: severity, Field: field,
-			Message: fmt.Sprintf("%s repeats parameters with conflicting or unreadable values: %s",
-				field, strings.Join(conflicting, ", ")),
-			Action: action,
+			Code: code, Severity: severity, Field: field, Message: message, Action: action,
 		}))
 	}
 
-	if strict {
-		return fieldReading{owed: owed, err: newFatalDiagnostic(owed[0])}, true
+	invalid := fieldInvalidCode(field)
+	if t.baseCode != "" && t.baseCode != invalid {
+		add(t.baseCode, SeverityRecovered, true, field+" "+t.baseDetail)
 	}
-	return fieldReading{value: base, params: values, owed: owed, unframed: unframed}, true
+	if t.baseCode == invalid || t.malformed > 0 || t.empty > 0 || unexplained {
+		add(invalid, SeverityRecovered, true, t.invalidMessage(field, unexplained))
+	}
+	for _, code := range parameterNoteOrder {
+		if f := t.notes[code]; f != nil {
+			add(code, f.severity, f.refuse, noteMessage(field, code, f))
+		}
+	}
+
+	if refused {
+		return fieldReading{owed: owed, err: newFatalDiagnostic(owed[0])}
+	}
+	return fieldReading{value: t.base, params: t.params, owed: owed, unframed: unframed}
+}
+
+// invalidMessage is the message of the field-level diagnostic: what is wrong
+// with the base, when it is the base that is invalid, and how many items
+// declare nothing.
+func (t *tolerantReading) invalidMessage(field string, unexplained bool) string {
+	var defects []string
+	if t.malformed > 0 {
+		d := fmt.Sprintf("%d malformed parameter %s", t.malformed, plural(t.malformed, "item", "items"))
+		if t.unclosed {
+			d += ", the last of them an unterminated quoted string running to the end of the field"
+		}
+		defects = append(defects, d)
+	}
+	if t.empty > 0 {
+		defects = append(defects, fmt.Sprintf("%d empty parameter %s between semicolons",
+			t.empty, plural(t.empty, "item", "items")))
+	}
+	if unexplained && len(defects) == 0 {
+		defects = append(defects, "syntax the whole-field parser refuses")
+	}
+	switch {
+	case t.baseCode == "":
+		return fmt.Sprintf("%s has a valid %s %q but %s",
+			field, baseNoun(field), t.base, strings.Join(defects, " and "))
+	case t.baseCode != fieldInvalidCode(field):
+		return fmt.Sprintf("%s, read as the %s %q, has %s",
+			field, baseNoun(field), t.base, strings.Join(defects, " and "))
+	case len(defects) == 0:
+		return field + " " + t.baseDetail
+	}
+	return fmt.Sprintf("%s %s, and has %s", field, t.baseDetail, strings.Join(defects, " and "))
+}
+
+// noteMessage is the message of one parameter diagnostic.
+func noteMessage(field string, code Code, f *finding) string {
+	names := listNames(f.names)
+	if f.more {
+		names += " and others"
+	}
+	subject := fmt.Sprintf("%s %s %s", field, plural(len(f.names), "parameter", "parameters"), names)
+	switch code {
+	case CodeMIMEParameterUnquotedValue:
+		return subject + ": an unquoted value that is not a token was read up to the next semicolon"
+	case CodeMIMEParameterUnclosedQuote:
+		return subject + ": a quoted string that is never closed was read to the end of the field"
+	case CodeMIMEParameterInvalidEscape:
+		if f.refuse {
+			return subject + ": a quote or backslash inside a quoted string that escapes nothing was read literally"
+		}
+		return subject + ": a backslash before a character that needs no escaping was kept as a backslash"
+	case CodeMIMEParameterDuplicate:
+		return fmt.Sprintf("%s repeats parameters with conflicting or unreadable values: %s", field, names)
+	case CodeMIMEParameterSegmentMissing:
+		return subject + ": an RFC 2231 series does not run from section 0 without a gap; the segments present were joined in order"
+	case CodeMIMEParameterSegmentDuplicate:
+		return subject + ": an RFC 2231 section repeats with a different value; the first was kept"
+	case CodeMIMEParameterBadPercentEscape:
+		return subject + ": a percent sign in an RFC 2231 value is not followed by two hex digits and was kept literally"
+	case CodeMIMEParameterUnknownCharset:
+		switch {
+		case f.refuse:
+			return subject + ": an RFC 2231 extended value does not declare its charset on its first segment"
+		case f.severity == SeverityUnsupported:
+			return subject + ": bytes whose charset is undeclared, has no decoder, or does not match them were kept undecoded"
+		}
+		return subject + ": raw 8-bit bytes with no declared charset were read in the charset of the entity's Content-Type"
+	case CodeMIMEParameterRFC2047:
+		return subject + ": RFC 2047 encoded words, which a parameter value may not hold, were decoded"
+	case CodeMIMEParameterRawUTF8:
+		return subject + ": raw UTF-8 in a parameter value was kept"
+	}
+	return subject
+}
+
+// maxListedNameBytes caps one parameter name in a Message or an Action. A name
+// is a token, so cutting it cannot split a character.
+const maxListedNameBytes = 64
+
+// listNames joins parameter names for a Message or an Action: at most
+// maxDiagnosticNames of them, each at most maxListedNameBytes long, and a count
+// of the rest. A field may name as many parameters as its budget allows, and
+// what is said about it stays short all the same.
+func listNames(names []string) string {
+	var b strings.Builder
+	for i, n := range names {
+		if i == maxDiagnosticNames {
+			fmt.Fprintf(&b, " and %d more", len(names)-i)
+			break
+		}
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		if len(n) > maxListedNameBytes {
+			n = n[:maxListedNameBytes] + "..."
+		}
+		b.WriteString(n)
+	}
+	return b.String()
+}
+
+// action is the Action every diagnostic of the field carries: what was kept of
+// it and what was not.
+func (t *tolerantReading) action(field string, unframed bool) string {
+	var b strings.Builder
+	if t.defaulted {
+		fmt.Fprintf(&b, "read the %s as %q", baseNoun(field), t.base)
+	} else {
+		fmt.Fprintf(&b, "kept the %s %q", baseNoun(field), t.base)
+	}
+	switch {
+	case len(t.wellFormed) > 0 && len(t.repaired) > 0:
+		fmt.Fprintf(&b, " and the well-formed parameters %s, with the repaired parameters %s",
+			listNames(t.wellFormed), listNames(t.repaired))
+	case len(t.wellFormed) > 0:
+		fmt.Fprintf(&b, " and the well-formed parameters %s", listNames(t.wellFormed))
+	case len(t.repaired) > 0:
+		fmt.Fprintf(&b, " and the repaired parameters %s", listNames(t.repaired))
+	default:
+		b.WriteString(" with no parameters")
+	}
+	switch {
+	case t.malformed > 0 && t.empty > 0:
+		b.WriteString(", ignored every malformed item and every empty item between semicolons")
+	case t.malformed > 0:
+		b.WriteString(", ignored every malformed item")
+	case t.empty > 0:
+		b.WriteString(", ignored every empty item between semicolons")
+	}
+	if len(t.conflicting) > 0 {
+		fmt.Fprintf(&b, ", dropped every occurrence of the conflicting %s, which is never chosen among candidates", listNames(t.conflicting))
+	}
+	if len(t.dropped) > 0 {
+		fmt.Fprintf(&b, ", dropped the RFC 2231 continued %s", listNames(t.dropped))
+	}
+	if t.truncated {
+		b.WriteString(", read only the occurrences within the parameter budget")
+	}
+	b.WriteString(", left the raw field unchanged")
+	if unframed {
+		b.WriteString(", found no boundary it could use and so kept the body as one opaque, uninterpreted part without reading the parts inside it")
+	}
+	b.WriteString(", and continued parsing")
+	return b.String()
 }
 
 // validBase returns the normalized base of a field and whether it is valid on
@@ -332,27 +397,6 @@ func validBase(field, raw string) (string, bool) {
 	return base, slash > 0 && slash < len(base)-1
 }
 
-// parseParameterItem parses one raw parameter item on its own, exactly as the
-// whole-field parser would parse it inside a field.
-//
-// wellFormed reports whether the item is valid syntax. decoded reports whether
-// the parser also produced a value for it, and key and value are that value's
-// lower-case name and decoded text. A well-formed item can produce none: an
-// RFC 2231 continuation segment other than the first is only a piece of a
-// value, and an extended value whose charset has no decoder is dropped by the
-// whole-field parser too. dec decodes the item's encoded words.
-func parseParameterItem(item string, dec *metadataDecoder) (key, value string, wellFormed, decoded bool) {
-	_, params, _, err := parseHeaderWithParamsDecoder("a/b;"+item, nil, dec)
-	if err != nil {
-		return "", "", false, false
-	}
-	for k, v := range params {
-		// One item declares one parameter, so this runs at most once.
-		return k, v, true, true
-	}
-	return "", "", true, false
-}
-
 // hasUnclosedQuote reports whether a quoted string opened in item is still open
 // at its end, reading quotes and escapes as the parameter scan reads them.
 func hasUnclosedQuote(item string) bool {
@@ -368,38 +412,6 @@ func hasUnclosedQuote(item string) bool {
 		}
 	}
 	return in
-}
-
-func repairAction(field, base string, kept, conflicting, dropped, unsupported []string, empty, truncated, unframed bool) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "kept the %s %q", baseNoun(field), base)
-	if len(kept) > 0 {
-		fmt.Fprintf(&b, " and the well-formed parameters %s", strings.Join(kept, ", "))
-	} else {
-		b.WriteString(" with no parameters")
-	}
-	b.WriteString(", ignored every malformed item")
-	if empty {
-		b.WriteString(" and every empty item between semicolons")
-	}
-	if len(conflicting) > 0 {
-		fmt.Fprintf(&b, ", dropped every occurrence of the conflicting %s", strings.Join(conflicting, ", "))
-	}
-	if len(dropped) > 0 {
-		fmt.Fprintf(&b, ", dropped the RFC 2231 continued %s", strings.Join(dropped, ", "))
-	}
-	if len(unsupported) > 0 {
-		fmt.Fprintf(&b, ", kept no value for the well-formed %s, for which the whole-field parser produces none either (as for an RFC 2231 extended value whose charset has no decoder)", strings.Join(unsupported, ", "))
-	}
-	if truncated {
-		b.WriteString(", read only the occurrences within the parameter budget")
-	}
-	b.WriteString(", left the raw field unchanged")
-	if unframed {
-		b.WriteString(", found no boundary it could use and so kept the body as one opaque, uninterpreted part without reading the parts inside it")
-	}
-	b.WriteString(", and continued parsing")
-	return b.String()
 }
 
 func strictAction(field string) string {

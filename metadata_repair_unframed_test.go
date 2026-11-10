@@ -37,10 +37,17 @@ func TestParse_unframedMultipartIsOneOpaquePart(t *testing.T) {
 	}{
 		{"conflicting boundaries", "multipart/mixed; boundary=B; boundary=C", Limits{},
 			[]Code{CodeMIMEParameterDuplicate}},
+		// An unterminated quote is read to the end of the field (ROB-050-004)
+		// and reported as such; the boundary it repeats, or swallows, is still
+		// not one the body may be framed by.
 		{"damaged repeat of the boundary", `multipart/mixed; boundary=B; boundary="C`, Limits{},
-			[]Code{CodeMIMEContentTypeInvalid, CodeMIMEParameterDuplicate}},
+			[]Code{CodeMIMEParameterUnclosedQuote, CodeMIMEParameterDuplicate}},
 		{"unterminated quote hides the only boundary", `multipart/related; type="text/html; boundary=B`, Limits{},
-			[]Code{CodeMIMEContentTypeInvalid}},
+			[]Code{CodeMIMEParameterUnclosedQuote}},
+		{"unterminated boundary that swallowed a parameter", `multipart/mixed; boundary="B; charset=utf-8`, Limits{},
+			[]Code{CodeMIMEParameterUnclosedQuote}},
+		{"type inferred, and no boundary to frame it by", "multipart", Limits{},
+			[]Code{CodeMIMEContentTypeMissingSlash}},
 		{"boundary past the budget behind a broken item", "multipart/mixed; broken; boundary=B", paramsOnly(2, 0),
 			[]Code{CodeLimitParameterCount, CodeMIMEContentTypeInvalid}},
 	} {
@@ -267,9 +274,11 @@ func TestParse_strictRefusalIsNotSuccessForWalk(t *testing.T) {
 }
 
 // TestParse_repairLabelsRFC2231ItemsAccurately pins that a well-formed RFC 2231
-// item that yields no value on its own — a later continuation segment, or an
-// extended value whose charset has no decoder — is not counted as malformed,
-// while the deferred policy still drops it.
+// item — a continuation segment, or an extended value whose charset has no
+// decoder — is not counted as malformed, and that its value is kept
+// (ROB-050-006, ROB-050-007): a series is assembled from the segments present,
+// an undecodable value keeps its bytes, and the RFC 2231 form of a parameter
+// outranks its plain form. Before those items, each of these was dropped.
 func TestParse_repairLabelsRFC2231ItemsAccurately(t *testing.T) {
 	for _, tc := range []struct {
 		name, value string
@@ -279,20 +288,20 @@ func TestParse_repairLabelsRFC2231ItemsAccurately(t *testing.T) {
 		codes       []Code
 	}{
 		{"well-formed series beside a broken item", "text/plain; filename*0=a; filename*1=b; broken; format=flowed",
-			map[string]string{"format": "flowed"}, "1 malformed parameter item", "dropped the RFC 2231 continued filename",
+			map[string]string{"filename": "ab", "format": "flowed"}, "1 malformed parameter item", "well-formed parameters filename, format",
 			[]Code{CodeMIMEContentTypeInvalid}},
 		{"lone later segment beside a broken item", "text/plain; filename*1=b; broken",
-			map[string]string{}, "1 malformed parameter item", "dropped the RFC 2231 continued filename",
-			[]Code{CodeMIMEContentTypeInvalid}},
-		{"damaged segment drops its family", "text/plain; filename*0=a; filename*1=b c; format=flowed",
-			map[string]string{"format": "flowed"}, "1 malformed parameter item", "dropped the RFC 2231 continued filename",
-			[]Code{CodeMIMEContentTypeInvalid}},
+			map[string]string{"filename": "b"}, "1 malformed parameter item", "repaired parameters filename",
+			[]Code{CodeMIMEContentTypeInvalid, CodeMIMEParameterSegmentMissing}},
+		{"damaged segment is read loosely", "text/plain; filename*0=a; filename*1=b c; format=flowed",
+			map[string]string{"filename": "ab c", "format": "flowed"}, "an unquoted value that is not a token", "with the repaired parameters filename",
+			[]Code{CodeMIMEParameterUnquotedValue}},
 		{"undecodable extended value is not malformed", "text/plain; name*=iso-8859-1''caf%E9; broken; format=flowed",
-			map[string]string{"format": "flowed"}, "1 malformed parameter item", "kept no value for the well-formed name",
+			map[string]string{"name": "caf\xe9", "format": "flowed"}, "1 malformed parameter item", "well-formed parameters name, format",
+			[]Code{CodeMIMEContentTypeInvalid, CodeMIMEParameterUnknownCharset}},
+		{"extended form outranks the plain one", "text/plain; name=x; name*=iso-8859-1''y; broken",
+			map[string]string{"name": "y"}, "1 malformed parameter item", "well-formed parameters name",
 			[]Code{CodeMIMEContentTypeInvalid}},
-		{"undecodable repeat makes a plain value ambiguous", "text/plain; name=x; name*=iso-8859-1''y; broken",
-			map[string]string{}, "1 malformed parameter item", "dropped every occurrence of the conflicting name",
-			[]Code{CodeMIMEContentTypeInvalid, CodeMIMEParameterDuplicate}},
 		{"names are reported in first-occurrence order", "text/plain; zeta=1; alpha=2; broken",
 			map[string]string{"zeta": "1", "alpha": "2"}, "1 malformed parameter item", "well-formed parameters zeta, alpha",
 			[]Code{CodeMIMEContentTypeInvalid}},

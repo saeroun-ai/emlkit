@@ -32,13 +32,13 @@ var profiles = []Profile{ProfileTolerant, ProfileForensic, ProfileStrict}
 type repairCase struct {
 	name  string
 	value string
-	// mt and params are the repaired interpretation. legacy marks a field
-	// this item does not repair, whose result is the raw value, no
-	// parameters and the parse error, under every profile.
-	mt     string
-	params map[string]string
-	legacy bool
-	codes  []Code
+	// mt and params are the repaired interpretation. defaulted marks a base
+	// that is a default (ROB-050-002) rather than what the field names, which
+	// the Action reports as read rather than kept.
+	mt        string
+	params    map[string]string
+	defaulted bool
+	codes     []Code
 }
 
 var contentTypeRepairs = []repairCase{
@@ -52,10 +52,13 @@ var contentTypeRepairs = []repairCase{
 		mt: "multipart/mixed", params: map[string]string{"boundary": "a;b"}, codes: []Code{CodeMIMEContentTypeInvalid}},
 	{name: "escaped quote does not end the value", value: `multipart/mixed; boundary="a\";b"; broken`,
 		mt: "multipart/mixed", params: map[string]string{"boundary": `a";b`}, codes: []Code{CodeMIMEContentTypeInvalid}},
+	// ROB-050-004: an unterminated quoted string is read to the end of the
+	// field instead of being dropped. What it swallowed stays swallowed, so a
+	// boundary behind it is still not found.
 	{name: "unterminated quote keeps what precedes it", value: `multipart/mixed; boundary=B; name="open; x=1`,
-		mt: "multipart/mixed", params: map[string]string{"boundary": "B"}, codes: []Code{CodeMIMEContentTypeInvalid}},
+		mt: "multipart/mixed", params: map[string]string{"boundary": "B", "name": "open; x=1"}, codes: []Code{CodeMIMEParameterUnclosedQuote}},
 	{name: "unterminated quote hides a later boundary", value: `multipart/mixed; name="open; boundary=B`,
-		mt: "multipart/mixed", params: map[string]string{}, codes: []Code{CodeMIMEContentTypeInvalid}},
+		mt: "multipart/mixed", params: map[string]string{"name": "open; boundary=B"}, codes: []Code{CodeMIMEParameterUnclosedQuote}},
 	{name: "conflicting boundaries are both dropped", value: "multipart/mixed; boundary=B; boundary=C",
 		mt: "multipart/mixed", params: map[string]string{}, codes: []Code{CodeMIMEParameterDuplicate}},
 	{name: "boundaries differing in case conflict", value: "multipart/mixed; boundary=B; BOUNDARY=b",
@@ -65,9 +68,13 @@ var contentTypeRepairs = []repairCase{
 	{name: "identical boundaries around a broken item keep the one value", value: "multipart/mixed; boundary=B; broken; Boundary=B",
 		mt: "multipart/mixed", params: map[string]string{"boundary": "B"}, codes: []Code{CodeMIMEContentTypeInvalid}},
 	{name: "damaged second boundary conflicts", value: `multipart/mixed; boundary=B; boundary="C`,
+		mt: "multipart/mixed", params: map[string]string{}, codes: []Code{CodeMIMEParameterUnclosedQuote, CodeMIMEParameterDuplicate}},
+	{name: "unreadable second boundary conflicts", value: "multipart/mixed; boundary=B; boundary=",
 		mt: "multipart/mixed", params: map[string]string{}, codes: []Code{CodeMIMEContentTypeInvalid, CodeMIMEParameterDuplicate}},
+	// ROB-050-005: a parameter that does not frame the body takes its first
+	// value rather than none.
 	{name: "malformed and conflicting together", value: "text/plain; charset=utf-8; junk; charset=us-ascii; format=flowed",
-		mt: "text/plain", params: map[string]string{"format": "flowed"}, codes: []Code{CodeMIMEContentTypeInvalid, CodeMIMEParameterDuplicate}},
+		mt: "text/plain", params: map[string]string{"charset": "utf-8", "format": "flowed"}, codes: []Code{CodeMIMEContentTypeInvalid, CodeMIMEParameterDuplicate}},
 	{name: "missing value", value: "text/plain; charset=; format=flowed",
 		mt: "text/plain", params: map[string]string{"format": "flowed"}, codes: []Code{CodeMIMEContentTypeInvalid}},
 	{name: "missing name", value: "text/plain; =x; format=flowed",
@@ -87,15 +94,25 @@ var contentTypeRepairs = []repairCase{
 		mt: "multipart/mixed", params: map[string]string{"boundary": "B"}, codes: []Code{CodeMIMEContentTypeInvalid}},
 	{name: "RFC 2231 extended value is kept", value: "text/plain; name*=utf-8''caf%C3%A9; broken",
 		mt: "text/plain", params: map[string]string{"name": "café"}, codes: []Code{CodeMIMEContentTypeInvalid}},
-	{name: "RFC 2231 continuation is dropped whole", value: "text/plain; name*0=a; name*1=b; broken; format=flowed",
-		mt: "text/plain", params: map[string]string{"format": "flowed"}, codes: []Code{CodeMIMEContentTypeInvalid}},
-	{name: "continuation and whole parameter of one name are both dropped", value: "text/plain; name=x; name*0=y; broken",
-		mt: "text/plain", params: map[string]string{}, codes: []Code{CodeMIMEContentTypeInvalid}},
-	// Outside this item: the base itself is not valid (ROB-050-002).
-	{name: "missing slash is not repaired", value: "multipart; boundary=B; broken", legacy: true},
-	{name: "missing subtype is not repaired", value: "multipart/; boundary=B; broken", legacy: true},
-	{name: "missing type is not repaired", value: "/mixed; boundary=B; broken", legacy: true},
-	{name: "quote in the base is not repaired", value: `multipart/mixed"; boundary=B; broken`, legacy: true},
+	// ROB-050-006: a continued value is assembled in a damaged field as in a
+	// conformant one, and the RFC 2231 form of a parameter outranks its plain
+	// form.
+	{name: "RFC 2231 continuation is assembled", value: "text/plain; name*0=a; name*1=b; broken; format=flowed",
+		mt: "text/plain", params: map[string]string{"name": "ab", "format": "flowed"}, codes: []Code{CodeMIMEContentTypeInvalid}},
+	{name: "continuation outranks a whole parameter of one name", value: "text/plain; name=x; name*0=y; broken",
+		mt: "text/plain", params: map[string]string{"name": "y"}, codes: []Code{CodeMIMEContentTypeInvalid}},
+	// ROB-050-002: a base that is not valid on its own is read by conservative
+	// defaults. Before, these four kept the raw value and the parse error.
+	{name: "missing slash", value: "multipart; boundary=B; broken", defaulted: true,
+		mt: "multipart/mixed", params: map[string]string{"boundary": "B"}, codes: []Code{CodeMIMEContentTypeMissingSlash, CodeMIMEContentTypeInvalid}},
+	{name: "missing subtype", value: "multipart/; boundary=B; broken", defaulted: true,
+		mt: "multipart/mixed", params: map[string]string{"boundary": "B"}, codes: []Code{CodeMIMEContentTypeMissingSubtype, CodeMIMEContentTypeInvalid}},
+	{name: "missing type", value: "/mixed; boundary=B; broken", defaulted: true,
+		mt: "multipart/mixed", params: map[string]string{"boundary": "B"}, codes: []Code{CodeMIMEContentTypeMissingType, CodeMIMEContentTypeInvalid}},
+	// The quote opens a string that runs to the end of the field, so the type
+	// before it is all that is read, and the multipart is unframed.
+	{name: "quote in the base", value: `multipart/mixed"; boundary=B; broken`,
+		mt: "multipart/mixed", params: map[string]string{}, codes: []Code{CodeMIMEContentTypeInvalid}},
 }
 
 func parseWith(t *testing.T, text string, opts ParseOptions) (*ParseSession, *Entity, error) {
@@ -160,16 +177,6 @@ func checkRepair(t *testing.T, tc repairCase, profile Profile, session *ParseSes
 	diags := session.Diagnostics()
 	mt, params, ctErr := e.EffectiveContentType()
 
-	if tc.legacy {
-		if err != nil || ctErr == nil || mt != tc.value || params != nil {
-			t.Errorf("legacy field: err %v, EffectiveContentType() = (%q, %v, %v), want the raw value, no parameters and the parse error", err, mt, params, ctErr)
-		}
-		if d := diags; d != nil {
-			t.Errorf("legacy field: Diagnostics() = %v, want none", codesOfDiags(d))
-		}
-		return
-	}
-
 	if got := codesOfDiags(diags); !reflect.DeepEqual(got, tc.codes) {
 		t.Fatalf("Diagnostics() = %v, want %v", got, tc.codes)
 	}
@@ -221,8 +228,12 @@ func checkRepair(t *testing.T, tc repairCase, profile Profile, session *ParseSes
 	if unframed {
 		wantSeverity = SeverityInvalidMetadata
 	}
+	wantBase := "kept the media type " + fmt.Sprintf("%q", tc.mt)
+	if tc.defaulted {
+		wantBase = "read the media type as " + fmt.Sprintf("%q", tc.mt)
+	}
 	for _, d := range diags {
-		if d.Severity != wantSeverity || !strings.Contains(d.Action, "kept the media type "+fmt.Sprintf("%q", tc.mt)) ||
+		if d.Severity != wantSeverity || !strings.Contains(d.Action, wantBase) ||
 			!strings.Contains(d.Action, "left the raw field unchanged") ||
 			strings.Contains(d.Action, "opaque") != unframed {
 			t.Errorf("diagnostic %v severity %v action %q", d.Code, d.Severity, d.Action)
@@ -365,10 +376,16 @@ func TestParse_dispositionRepair(t *testing.T) {
 			})
 		}
 	}
-	// A disposition with a slash is not a valid disposition base.
+	// A disposition with a slash is not a valid disposition base: its first
+	// token is the disposition and the rest is reported (ROB-050-002). Before,
+	// the raw value and the parse error were returned with no diagnostic.
 	session, e, _ := parseWith(t, "Content-Disposition: attachment/x; broken\r\n\r\nraw", ParseOptions{})
-	if disp, _, err := e.EffectiveContentDisposition(); err == nil || disp != "attachment/x; broken" || session.Diagnostics() != nil {
-		t.Errorf("invalid disposition base: (%q, %v), diags %v; want the legacy failure", disp, err, codesOfDiags(session.Diagnostics()))
+	disp, params, err := e.EffectiveContentDisposition()
+	if err != nil || disp != "attachment" || len(params) != 0 {
+		t.Errorf("invalid disposition base: (%q, %v, %v), want the attachment with no parameters", disp, params, err)
+	}
+	if got := codesOfDiags(session.Diagnostics()); !reflect.DeepEqual(got, []Code{CodeMIMEDispositionInvalid}) {
+		t.Errorf("invalid disposition base: Diagnostics() = %v, want one mime.disposition_invalid", got)
 	}
 }
 
@@ -574,11 +591,12 @@ func TestParse_repairWorkIsLinear(t *testing.T) {
 }
 
 // FuzzParseContentTypeRepair runs arbitrary Content-Type values through every
-// profile: nothing panics, a value the whole-field parser accepts is
-// interpreted exactly as it always was, a repaired value keeps a valid base and
-// only parameters the field names, and Strict refuses exactly where Tolerant
-// repairs. It is a focused target for ROB-050-001, not the general fuzzing of
-// ROB-130.
+// profile: nothing panics, a value the whole-field parser reads in full — it
+// accepts it, with a type and a subtype, and the value holds nothing only the
+// item-by-item reading reads — is interpreted exactly as it always was, every
+// other value is read to a valid base and only parameters the field names, and
+// Strict refuses exactly where Tolerant repairs. It is a focused target for
+// ROB-050-001 to ROB-050-008, not the general fuzzing of ROB-130.
 func FuzzParseContentTypeRepair(f *testing.F) {
 	for _, tc := range contentTypeRepairs {
 		f.Add(tc.value)
@@ -603,32 +621,67 @@ func FuzzParseContentTypeRepair(f *testing.F) {
 
 		tSession, tolerant, _ := Parse(strings.NewReader(text), &ParseOptions{Limits: allDisabled()})
 		mt, params, ctErr := tolerant.EffectiveContentType()
-		if wholeErr == nil {
-			// An unknown charset is still diagnosed; no metadata repair is.
-			if ctErr != nil || mt != wantType || !reflect.DeepEqual(params, wantParams) || hasMIMEDiagnostic(tSession.Diagnostics()) {
-				t.Fatalf("conformant %q changed: (%q, %v, %v)", raw, mt, params, ctErr)
+		if ctErr != nil {
+			t.Fatalf("tolerant %q was not read: %v", raw, ctErr)
+		}
+		whole := wholeErr == nil && validWholeBase("Content-Type", wantType) && wholeFieldSuffices(raw)
+		if whole {
+			// An unknown charset is still diagnosed; nothing about the field is.
+			if mt != wantType || !reflect.DeepEqual(params, wantParams) || hasMIMEDiagnostic(tSession.Diagnostics()) {
+				t.Fatalf("conformant %q changed: (%q, %v)", raw, mt, params)
 			}
-		} else if ctErr == nil {
+		} else {
 			if base, ok := validBase("Content-Type", mt); !ok || base != mt {
-				t.Fatalf("repaired %q kept an invalid base %q", raw, mt)
+				t.Fatalf("%q was read to an invalid base %q", raw, mt)
 			}
 			lower := strings.ToLower(raw)
 			for k := range params {
 				if !strings.Contains(lower, k) {
-					t.Fatalf("repaired %q invented parameter %q", raw, k)
+					t.Fatalf("%q was read to a parameter %q it does not name", raw, k)
 				}
 			}
+		}
+
+		// What Tolerant repaired is what the reading itself says needed repair,
+		// or what the whole-field parser refused when it was asked.
+		reading := readTolerant(tolerantInput{
+			field: "Content-Type", raw: raw, scan: scanParameters(raw, LimitDisabled, LimitDisabled), dec: &metadataDecoder{},
+		})
+		repaired := reading.needsRepair() || (wholeFieldSuffices(raw) && wholeErr != nil)
+		if got := hasRepairDiagnostic(tSession.Diagnostics()); got != repaired {
+			t.Fatalf("%q: repair diagnostics %v, want %v", raw, codesOfDiags(tSession.Diagnostics()), repaired)
 		}
 
 		_, strict, strictErr := Parse(strings.NewReader(text), &ParseOptions{Limits: allDisabled(), Profile: ProfileStrict})
 		if strict == nil {
 			t.Fatalf("strict Parse(%q) returned no entity", raw)
 		}
-		repaired := wholeErr != nil && ctErr == nil
 		if IsFatal(strictErr) != repaired {
 			t.Fatalf("%q: strict refusal %v, tolerant repair %v", raw, strictErr, repaired)
 		}
 	})
+}
+
+// hasRepairDiagnostic reports whether diags hold a MIME metadata diagnostic of
+// a repair rather than of an observation: one a strict profile refuses over.
+func hasRepairDiagnostic(diags []Diagnostic) bool {
+	for _, d := range diags {
+		if !strings.HasPrefix(string(d.Code), "mime.") {
+			continue
+		}
+		switch d.Code {
+		case CodeMIMEParameterRFC2047, CodeMIMEParameterRawUTF8:
+			continue
+		case CodeMIMEParameterUnknownCharset, CodeMIMEParameterInvalidEscape:
+			// These two report repairs and observations alike; the message of
+			// a repair is its own.
+			if !strings.Contains(d.Message, "does not declare its charset") && !strings.Contains(d.Message, "escapes nothing") {
+				continue
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func hasMIMEDiagnostic(diags []Diagnostic) bool {
