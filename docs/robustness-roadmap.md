@@ -3036,14 +3036,14 @@ iterator then failed with an empty boundary. The contract is:
 
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
-| ROB-080-001 | Planned | Maintain a tested alias/quirk registry for common mail charset labels. | Provider corpus and IANA aliases. |
+| ROB-080-001 | Done | Maintain a tested alias/quirk registry for common mail charset labels. Implemented: charset.Lookup resolves registered encodings, a tested alias table of 421 labels, then IANA and WHATWG names, case-insensitively and with decoration stripped. See docs/robustness-notes/charset-plugin.md. | Provider corpus and IANA aliases. |
 | ROB-080-002 | Planned | Expose raw bytes and decoded UTF-8 view simultaneously. | Read-order independence tests. |
 | ROB-080-003 | Planned | Define strict/replace/raw policies for invalid byte sequences and midstream errors. | Prefix preservation tests. |
-| ROB-080-004 | Planned | Detect BOM/declaration conflicts without silently overriding metadata. | UTF-8/16/32 matrix. |
-| ROB-080-005 | Planned | Support important legacy mail charsets through the optional plugin. | Japanese/Korean/Chinese/Cyrillic fixtures. |
-| ROB-080-006 | Planned | Keep standard UTF-7 and IMAP modified UTF-7 behavior separate and explicit. | Cross-codec negative tests. |
+| ROB-080-004 | Review | Detect BOM/declaration conflicts without silently overriding metadata. Partial, plugin side: utf-16 and utf-32 use and consume a BOM, BOM-less utf-16 is sniffed, a UTF-8 BOM is kept; a BOM that contradicts the declaration is not reported. See docs/robustness-notes/charset-plugin.md. | UTF-8/16/32 matrix. |
+| ROB-080-005 | Done | Support important legacy mail charsets through the optional plugin. Implemented with fixtures for Japanese, Korean, Chinese, Cyrillic, European, Greek, Hebrew, Arabic, Turkish, Thai and Vietnamese charsets; ISO-2022-JP, ISO-2022-KR and HZ are decoded by a 7-bit state machine. See docs/robustness-notes/charset-plugin.md. | Japanese/Korean/Chinese/Cyrillic fixtures. |
+| ROB-080-006 | Done | Keep standard UTF-7 and IMAP modified UTF-7 behavior separate and explicit. utf-7 labels decode RFC 2152 only; no label reaches the IMAP codec. See docs/robustness-notes/charset-plugin.md. | Cross-codec negative tests. |
 | ROB-080-007 | Planned | Add opt-in declaration-suspicion heuristics without making guessing the default. | False-positive/negative corpus. |
-| ROB-080-008 | Planned | Bound charset decode expansion and state-machine work. | Adversarial charset tests. |
+| ROB-080-008 | Done | Bound charset decode expansion and state-machine work. Plugin decoders are streams: malformed sequences become U+FFFD and decoding goes on, output is at most three times the input, escape floods are linear, and a stalled input ends with io.ErrNoProgress. See docs/robustness-notes/charset-plugin.md. | Adversarial charset tests. |
 | ROB-080-011 | Done | Accept the Korean compatibility labels `cp949` and `x-windows-949`, case-insensitively, in the optional charset plugin. | Fixed CP949 bytes including an extended syllable, body and RFC 2047 B/Q headers, near-miss labels still unknown. |
 
 `ROB-080-011` ([issue #1](https://github.com/saeroun-ai/emlkit/issues/1)) maps
