@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
+	"strings"
 )
 
 // Reads that make no progress (ROB-001-007, issue #7).
@@ -54,13 +54,23 @@ import (
 //     field's other values are still decoded, and the field records one
 //     header.decoder_no_progress diagnostic however many of its values stalled.
 //
-// Read, ReadWithOptions, New, NewMultipart, mail.CreateReader, the Header
-// accessors and textproto are unchanged: on them a reader that returns (0, nil)
-// for ever still spins wherever it did. A reader that blocks, or loops inside
-// one call without returning — a source, a CharsetReader or the reader it
-// returned — cannot be interrupted. A count below zero or above len(p) breaks
-// io.Reader and is outside this item (ROB-120-001): it is passed on, neither
-// counted nor reset.
+// The text of a header field is a fourth place since ROB-030: Header.Text,
+// HeaderFields.Text, DecodeHeaderText and their variants hold the CharsetReader
+// readers of the encoded words they decode to the same count, whatever read the
+// header. A stall leaves the words of that reader verbatim in the result and
+// asks the hook for no further reader for that value. Text returns
+// io.ErrNoProgress with the result, unless an earlier word of the value had
+// already failed for its charset, and the functions that report diagnostics an
+// rfc2047.invalid_word with that cause (see rfc2047.go). No session is
+// involved, so nothing is published to one.
+//
+// Read, ReadWithOptions, New, NewMultipart, mail.CreateReader, the Header's
+// ContentType and ContentDisposition and textproto are unchanged: on them a
+// reader that returns (0, nil) for ever still spins wherever it did. A reader
+// that blocks, or loops inside one call without returning — a source, a
+// CharsetReader or the reader it returned — cannot be interrupted. A count
+// below zero or above len(p) breaks io.Reader and is outside this item
+// (ROB-120-001): it is passed on, neither counted nor reset.
 
 // maxConsecutiveEmptyReads is how many consecutive (0, nil) reads are a stall,
 // the same number bufio gives up after.
@@ -212,20 +222,26 @@ func (g *bodyGuard) noProgress(before int64) error {
 // A metadataDecoder decodes the encoded words in the parameter values of one
 // Content-Type or Content-Disposition the parse engine interprets, through the
 // configured CharsetReader, with every reader that hook returns held to the
-// no-progress rule. A nil *metadataDecoder decodes exactly as decodeHeader
-// does, which is what every entry point but Parse uses.
+// no-progress rule. A nil *metadataDecoder decodes the same words the same way
+// (see decodeParameterValue in rfc2047.go) but waits on a reader for as long as
+// it returns nothing, which is what every entry point but Parse uses.
+//
+// The words are decoded tolerantly, and one that cannot be — unknown charset,
+// unknown encoding, text beyond repair — stays in the value as it was written
+// while the value's other words are decoded (ROB-030-003). Everything outside
+// the words is passed on byte for byte.
 //
 // It belongs to one interpretation of one field and is used by one goroutine.
 // A stall is decided per parameter value: the reader that stalled fails its
-// word, mime.WordDecoder stops at that word, and the value keeps its whole raw
-// text, as for an unknown charset. Every other value of the field is decoded
-// independently, so which values decode never depends on the order they are
-// visited in. stalled remembers the raw values that stalled, so that the
-// whole-field reading and a later repair or retained-prefix reading of the same
-// field do not hand the same value to the hook again, and makes the field owe
-// one diagnostic however many values stalled. The parameter budgets bound how
-// many values a field has, the header budgets how long they are, and each
-// hook reader is called at most 100 times without progress.
+// word, no reader is asked for in that value again, and the value keeps its
+// whole raw text. Every other value of the field is decoded independently, so
+// which values decode never depends on the order they are visited in. stalled
+// remembers the raw values that stalled, so that the whole-field reading and a
+// later repair or retained-prefix reading of the same field do not hand the
+// same value to the hook again, and makes the field owe one diagnostic however
+// many values stalled. The parameter budgets bound how many values a field
+// has, the header budgets how long they are, and each hook reader is called at
+// most 100 times without progress.
 type metadataDecoder struct {
 	poll    func() bool // the parse's cancellation poll, or nil
 	stalled map[string]bool
@@ -239,19 +255,18 @@ var (
 	errMetadataCancelled = errors.New("message: parse cancelled while decoding an encoded word")
 )
 
-// decode returns v with its encoded words decoded, or v itself if any of them
-// could not be, as decodeHeader does.
+// decode returns v with its encoded words decoded. A word that could not be
+// decoded stays as it was written; v itself is returned if one of them stalled
+// its charset decoder, or the parse was cancelled while one was decoded.
 func (d *metadataDecoder) decode(v string) string {
 	if d == nil {
-		s, _ := decodeHeader(v)
-		return s
+		return decodeParameterValue(v, charsetReader)
 	}
-	if d.stalled[v] {
+	if d.stalled[v] || !strings.Contains(v, "=?") {
 		return v
 	}
 	w := &valueDecoder{poll: d.poll}
-	wd := mime.WordDecoder{CharsetReader: w.charsetReader}
-	s, err := wd.DecodeHeader(v)
+	s := decodeParameterValue(v, w.charsetReader)
 	if w.stalled {
 		if d.stalled == nil {
 			d.stalled = make(map[string]bool)
@@ -259,23 +274,30 @@ func (d *metadataDecoder) decode(v string) string {
 		d.stalled[v] = true
 		return v
 	}
-	if err != nil {
+	if w.cancelled {
 		return v
 	}
 	return s
 }
 
-// A valueDecoder guards the hook readers of the encoded words of one parameter
-// value. stalled is set by the first of them that stalls.
+// A valueDecoder guards the hook readers of the encoded words of one value: a
+// parameter value under Parse, or the text of a header field (rfc2047.go).
+// stalled is set by the first of them that stalls, cancelled by the first that
+// sees the parse cancelled; after either the hook is not asked again for that
+// value.
 type valueDecoder struct {
-	poll    func() bool
-	stalled bool
+	poll      func() bool
+	stalled   bool
+	cancelled bool
 }
 
 // charsetReader is charsetReader with the reader the hook returns guarded.
 func (w *valueDecoder) charsetReader(charset string, input io.Reader) (io.Reader, error) {
 	if w.stalled {
 		return nil, errMetadataStalled
+	}
+	if w.cancelled {
+		return nil, errMetadataCancelled
 	}
 	in := &countedInput{r: input}
 	r, err := charsetReader(charset, in)
@@ -322,6 +344,7 @@ func (m *metadataReader) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	if m.val.poll != nil && m.val.poll() {
+		m.val.cancelled = true
 		return 0, errMetadataCancelled
 	}
 	before := m.in.n
@@ -341,6 +364,7 @@ func (m *metadataReader) Read(p []byte) (int, error) {
 		}
 	}
 	if m.val.poll != nil && m.val.poll() {
+		m.val.cancelled = true
 		return n, errMetadataCancelled
 	}
 	return n, err

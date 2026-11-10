@@ -61,6 +61,11 @@ func isCharsetWarning(err error) bool {
 // lower-case. utf-8 and us-ascii charsets are handled by default. One of the
 // the CharsetReader's result values must be non-nil.
 //
+// It also converts the encoded words of header text and parameter values. For
+// those the label arrives without an RFC 2231 language suffix, adjacent words
+// of one charset are handed over as one input, and iso-8859-1 is handled
+// without it as well.
+//
 // Importing github.com/saeroun-ai/emlkit/charset will set CharsetReader to
 // a function that handles most common charsets. Alternatively, CharsetReader
 // can be set to e.g. golang.org/x/net/html/charset.NewReaderLabel.
@@ -83,17 +88,19 @@ func charsetReader(charset string, input io.Reader) (io.Reader, error) {
 	return input, UnknownCharsetError{fmt.Errorf("message: unhandled charset %q", charset)}
 }
 
-// decodeHeader decodes an internationalized header field. If it fails, it
-// returns the input string and the error.
+// decodeHeader decodes an internationalized header field: its RFC 2047 encoded
+// words, tolerantly (see rfc2047.go), and its raw text to valid UTF-8.
+//
+// It always returns the best decoding there is. An encoded word whose charset
+// could not be converted is left in the string as it was written while the
+// rest is decoded, and the error is then the first such failure: the
+// UnknownCharsetError of an unknown charset, or whatever the CharsetReader's
+// reader failed with. Nothing else is an error.
 func decodeHeader(s string) (string, error) {
-	wordDecoder := mime.WordDecoder{CharsetReader: charsetReader}
-	dec, err := wordDecoder.DecodeHeader(s)
-	if err != nil {
-		return s, err
-	}
-	return dec, nil
+	return decodeHeaderText(s)
 }
 
+// encodeHeader encodes s as RFC 2047 Q words in UTF-8 if it needs encoding.
 func encodeHeader(s string) string {
 	return mime.QEncoding.Encode("utf-8", s)
 }

@@ -255,6 +255,11 @@ const (
 	CodeRFC2047EmbeddedWord       Code = "rfc2047.embedded_word"
 	CodeRFC2047RawUTF8            Code = "rfc2047.raw_utf8"
 	CodeRFC2047HeaderInjection    Code = "rfc2047.header_injection"
+
+	// CodeRFC2047WordLimit reports that one header value held more encoded
+	// words than are decoded per value (10 000); the words up to there were
+	// decoded and the rest of the value was left as it was written.
+	CodeRFC2047WordLimit Code = "rfc2047.word_limit"
 )
 
 // Structured metadata codes.

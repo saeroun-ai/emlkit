@@ -65,10 +65,16 @@ func formatHeaderWithParams(f string, params map[string]string) string {
 type HeaderFields interface {
 	textproto.HeaderFields
 
-	// Text parses the value of the current field as plaintext. The field
-	// charset is decoded to UTF-8. If the header field's charset is unknown,
-	// the raw field value is returned and the error verifies IsUnknownCharset.
+	// Text parses the value of the current field as plaintext, as Header.Text
+	// does: encoded words are decoded to UTF-8, and one whose charset is
+	// unknown is left as it was written while the error verifies
+	// IsUnknownCharset.
 	Text() (string, error)
+
+	// TextDiagnostics parses the value of the current field as plaintext and
+	// reports what was repaired, as Header.TextDiagnostics does. Field is the
+	// key of the current field.
+	TextDiagnostics() (string, []Diagnostic)
 
 	headerFields()
 }
@@ -81,6 +87,20 @@ func (*headerFields) headerFields() {}
 
 func (hf *headerFields) Text() (string, error) {
 	return decodeHeader(hf.Value())
+}
+
+func (hf *headerFields) TextDiagnostics() (string, []Diagnostic) {
+	return fieldDiagnostics(hf.Key(), hf.Value(), nil)
+}
+
+// fieldDiagnostics decodes the value v of the field named k and names that
+// field in every diagnostic.
+func fieldDiagnostics(k, v string, opts *HeaderTextOptions) (string, []Diagnostic) {
+	s, diags := DecodeHeaderTextWithOptions(v, opts)
+	for i := range diags {
+		diags[i].Field = k
+	}
+	return s, diags
 }
 
 // A Header represents the key-value pairs in a message header.
@@ -147,11 +167,43 @@ func (h *Header) SetContentDisposition(disp string, params map[string]string) {
 	h.Set("Content-Disposition", formatHeaderWithParams(disp, params))
 }
 
-// Text parses a plaintext header field. The field charset is automatically
-// decoded to UTF-8. If the header field's charset is unknown, the raw field
-// value is returned and the error verifies IsUnknownCharset.
+// Text parses a plaintext header field. Its RFC 2047 encoded words are decoded
+// to UTF-8, tolerantly: a word glued to other text, split by folding, longer
+// than 75 bytes, missing its padding or its closing "?=" is still decoded, and
+// adjacent words of one charset are joined before conversion, so a character
+// split across two words is read whole.
+//
+// The result is the best decoding there is, and it is always valid UTF-8. An
+// encoded word that cannot be decoded is left in it as it was written, and the
+// rest is decoded around it. If that was for the word's charset — unknown to
+// CharsetReader, or its reader failed — the error is the first such failure:
+// for an unknown charset it verifies IsUnknownCharset, and for a reader that
+// returned nothing 100 times in a row it is io.ErrNoProgress. The string
+// returned with it is still the usable result. A value with a single such word
+// comes back unchanged, as it did before. Nothing else is an error.
+//
+// A CR, LF or NUL that an encoded word decodes to is replaced (a line break by
+// a space, NUL by U+FFFD), and raw text that is not valid UTF-8 has each
+// invalid byte replaced by U+FFFD. The raw value stays available through Get
+// and Raw. TextDiagnostics returns the same string with a report of every
+// repair, and TextWithOptions adds a fallback charset for raw 8-bit text.
 func (h *Header) Text(k string) (string, error) {
 	return decodeHeader(h.Get(k))
+}
+
+// TextDiagnostics parses a plaintext header field as Text does and reports what
+// it had to repair to do so, instead of an error. Every diagnostic names k as
+// its Field and locates itself by byte offsets into the field's value, as Get
+// returns it. See DecodeHeaderText for what is reported.
+func (h *Header) TextDiagnostics(k string) (string, []Diagnostic) {
+	return fieldDiagnostics(k, h.Get(k), nil)
+}
+
+// TextWithOptions is TextDiagnostics with options, of which a nil pointer means
+// none: HeaderTextOptions.FallbackCharset names the charset of raw 8-bit text
+// that is not valid UTF-8.
+func (h *Header) TextWithOptions(k string, opts *HeaderTextOptions) (string, []Diagnostic) {
+	return fieldDiagnostics(k, h.Get(k), opts)
 }
 
 // SetText sets a plaintext header field.
