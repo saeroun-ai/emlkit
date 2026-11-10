@@ -37,6 +37,21 @@ const (
 	whitespaceSepHealNote = "read the white space only line as the end of the field before it and ended the header block before the first line that is no header field; that line begins the body"
 )
 
+// damagedLinePolicy is how a damaged header line that continues no field is
+// decided under each Compatibility: CompatibilityConservative looks at the
+// lines after it; CompatibilityPythonEmail and CompatibilityMimeKit begin the
+// body with it, as those parsers do; CompatibilityAngus keeps it apart and
+// reads on to the empty line, as Angus Mail does.
+func damagedLinePolicy(c Compatibility) textproto.DamagedLinePolicy {
+	switch c {
+	case CompatibilityPythonEmail, CompatibilityMimeKit:
+		return textproto.DamagedLineBody
+	case CompatibilityAngus:
+		return textproto.DamagedLineHeader
+	}
+	return textproto.DamagedLineAuto
+}
+
 // recoveryNotes appends the notes of what header recovery did to h.
 func (c parseContext) recoveryNotes(h *textproto.Header, notes []headerNote) []headerNote {
 	if n, at := h.UnindentedContinuations(); n > 0 {

@@ -73,7 +73,30 @@ type HeaderLimits struct {
 	// recover.go, and ReadHeaderRecover for the bytes a block ended that way
 	// hands back.
 	Recover bool
+
+	// DamagedLine says, under Recover, how a damaged line that continues no
+	// field is decided. The zero value, DamagedLineAuto, looks at the lines
+	// after it.
+	DamagedLine DamagedLinePolicy
 }
+
+// A DamagedLinePolicy is how header recovery decides a damaged line — one
+// with no colon, or with an invalid name — that is not a continuation line
+// that lost its indentation.
+type DamagedLinePolicy uint8
+
+const (
+	// DamagedLineAuto keeps the line apart when a line with a well-known
+	// field name follows it before the block's empty line, and otherwise ends
+	// the block before it, as the first line of the body.
+	DamagedLineAuto DamagedLinePolicy = iota
+	// DamagedLineBody always ends the block before it: the line begins the
+	// body. This is how Python's email package and MimeKit read one.
+	DamagedLineBody
+	// DamagedLineHeader always keeps it apart and reads on to the block's
+	// empty line. This is how Angus Mail and Apache Mime4j read one.
+	DamagedLineHeader
+)
 
 // A HeaderLimitKind names which budget of a header block was exceeded.
 //

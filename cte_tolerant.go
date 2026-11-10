@@ -55,7 +55,7 @@ var cteNoteInfo = [cteNoteCount]struct {
 	noteB64Junk:             {CodeCTEBase64Junk, SeverityRecovered, "base64 body holds bytes outside the base64 alphabet", "skipped those bytes and decoded the rest"},
 	noteB64PaddingMissing:   {CodeCTEBase64PaddingMissing, SeverityRecovered, "base64 body ends without the padding its length needs", "decoded the final incomplete group as if it were padded"},
 	noteB64PaddingInvalid:   {CodeCTEBase64PaddingInvalid, SeverityRecovered, "base64 body holds padding where none belongs", "ignored the misplaced padding"},
-	noteB64DataAfterPadding: {CodeCTEBase64DataAfterPadding, SeverityRecovered, "base64 body continues after its padding", "decoded the data after the padding as a further base64 segment"},
+	noteB64DataAfterPadding: {CodeCTEBase64DataAfterPadding, SeverityRecovered, "base64 body continues after its padding", "decoded the data after the padding as a further base64 segment, or ignored it under CompatibilityPythonEmail"},
 	noteB64LengthInvalid:    {CodeCTEBase64LengthInvalid, SeverityIncomplete, "base64 body ends with a single character that encodes no whole byte", "decoded everything before it and dropped that character"},
 	noteB64URLAlphabet:      {CodeCTEBase64URLAlphabet, SeverityRecovered, "base64 body uses the URL-safe alphabet", "read '-' and '_' as '+' and '/'"},
 	noteQPInvalidHex:        {CodeCTEQPInvalidHex, SeverityRecovered, "quoted-printable body holds '=' not followed by two hexadecimal digits", "kept the '=' and what follows it as literal text"},
@@ -287,6 +287,11 @@ type tolerantBase64 struct {
 	// afterPad is 0 inside data, 1 after the one '=' of a two-character group
 	// (one more may follow), 2 after a complete padding.
 	afterPad uint8
+
+	// stopAtPadding makes padding end the data, and stopped reports that it
+	// did: what follows is read and not decoded.
+	stopAtPadding bool
+	stopped       bool
 }
 
 func (d *tolerantBase64) Read(p []byte) (int, error) {
@@ -324,6 +329,9 @@ func (d *tolerantBase64) Read(p []byte) (int, error) {
 
 func (d *tolerantBase64) decode(b []byte) {
 	for i, c := range b {
+		if d.stopped {
+			break
+		}
 		v := b64Class[c]
 		switch {
 		case v < 64:
@@ -350,6 +358,12 @@ func (d *tolerantBase64) decode(b []byte) {
 				d.notes.note(noteB64PaddingInvalid, d.consumed+int64(i))
 			}
 			d.notes.note(noteB64DataAfterPadding, d.consumed+int64(i))
+			if d.stopAtPadding {
+				// CompatibilityPythonEmail: padding ends the data, and what
+				// follows it is not decoded.
+				d.stopped = true
+				continue
+			}
 			d.afterPad = 0
 		}
 		d.quad[d.nq] = v
@@ -853,7 +867,7 @@ func (c parseContext) transferDecoder(name string, r io.Reader) (dec io.Reader, 
 	case "quoted-printable":
 		return &tolerantQP{r: r, notes: notes}, true
 	case "base64":
-		return &tolerantBase64{r: r, notes: notes}, true
+		return &tolerantBase64{r: r, notes: notes, stopAtPadding: c.session.Compatibility() == CompatibilityPythonEmail}, true
 	case "x-uuencode":
 		return &tolerantUU{r: r, notes: notes}, true
 	case "7bit":

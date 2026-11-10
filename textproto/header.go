@@ -2303,9 +2303,16 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 			}
 			// Recovery: the block goes on after it, or ends before it
 			// (ROB-020-003 to ROB-020-006; see recover.go).
-			on, ferr := scan.goesOn(r)
-			if ferr != nil {
-				return result(ferr)
+			var on bool
+			switch scan.lim.DamagedLine {
+			case DamagedLineBody:
+			case DamagedLineHeader:
+				on = true
+			default:
+				var ferr error
+				if on, ferr = scan.goesOn(r); ferr != nil {
+					return result(ferr)
+				}
 			}
 			raw, rawLast := scan.exact(kv)
 			if on {
