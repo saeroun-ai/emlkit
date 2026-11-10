@@ -9,6 +9,32 @@ layered — `textproto` (wire format) → root `message` (MIME semantics) →
 `mail` (convenience API), with an optional `charset` plugin. References name the
 lowest layer where the behavior lives.
 
+
+## Healing and where it is specified
+
+Since 2026-11-10 `Parse` heals damaged mail under every profile but
+`ProfileStrict`. The rule for each case, the diagnostics it records and its
+known limits are written per area in `docs/robustness-notes/`:
+
+| Area | Note |
+| --- | --- |
+| Damaged header lines, missing separators, duplicate singletons | `header-recovery.md` |
+| Unclosed, undeclared or mismatched multipart boundaries, preamble | `multipart-recovery.md` |
+| Base64, quoted-printable, uuencode, Content-Transfer-Encoding values | `transfer-encodings.md` |
+| RFC 2047 encoded words | `rfc2047.md` |
+| Media types, parameters, RFC 2231, filenames | `mime-parameters.md` |
+| Charset labels and legacy decoders | `charset-plugin.md` |
+| Embedded messages, digests, message depth | `embedded-messages.md` |
+| Addresses, dates, Message-IDs, Received, List-* | `mail-structured-headers.md` |
+| MIME tree view, roles, related resources, signed spans | `structure-view.md` |
+| Spooling bodies for repeated reads | `spool.md` |
+| What a parse has established | `completion.md` |
+
+`docs/spam-adapter-contract.md` says what a consumer may rely on. The sections
+below describe the framing and budget contracts that preceded this work; where
+one of them says a malformed header line or an unclosed multipart is an error,
+that now holds for `ProfileStrict`, `Read`, `ReadWithOptions` and `New` only.
+
 ## Implemented standards
 
 | Standard | Scope | Implemented in |

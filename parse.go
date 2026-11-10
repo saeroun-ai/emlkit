@@ -135,21 +135,15 @@ type ParseOptions struct {
 // its own terms:
 //
 //   - The session is never nil, including when the header could not be read at
-//     all, so there is always somewhere to look. What it holds, though, is what
-//     some producer has been implemented to record, which today is the two
-//     decoding warnings below, the fifteen enforced resource budgets, the
-//     no-progress rule, the repair of a valid media type or disposition
-//     with malformed parameters, the header line-ending and byte order
-//     mark notes described below, the mbox envelope line a caller asked
-//     to have recognized, and, under ProfileForensic, a trailing input a
-//     caller read that begins like another message,
-//     up to Limits.MaxDiagnosticCount, whose last slot holds one terminal
-//     limit.diagnostic_count diagnostic in place of the rest. A framing
-//     failure that nothing diagnoses yet is carried by err alone and leaves the
-//     session empty, so read both rather than treating an empty session as a
-//     clean parse. Later releases add diagnostics for the remaining resource
-//     limits and for header framing, and they will appear here without changing
-//     this contract.
+//     all, so there is always somewhere to look. It holds every diagnostic the
+//     parse has produced so far, up to Limits.MaxDiagnosticCount, whose last
+//     slot holds one terminal limit.diagnostic_count diagnostic in place of the
+//     rest: the resource budgets, the decoding warnings, and every repair the
+//     healing described below made to headers, multipart framing, transfer
+//     encodings, encoded words and parameters. Because the body and the parts
+//     are read lazily, an empty session after Parse returns says only that the
+//     header was clean: ParseSession.Completion says how much of the message
+//     has been read, and Entity.Drain reads the rest.
 //   - A non-nil entity is usable and belongs to the caller, whatever err says.
 //     An unknown transfer encoding or charset is a warning of exactly this
 //     kind: err verifies IsUnknownEncoding or IsUnknownCharset, the entity is
@@ -460,6 +454,18 @@ type ParseOptions struct {
 // whole session, so every later scope of this parse — MultipartReader.NextPart
 // and Entity.Walk — reports the identical error and recovers nothing further,
 // while everything already returned stays valid.
+//
+// Under every profile but ProfileStrict, Parse heals damaged mail instead of
+// failing on it, and records each repair: a header line with no colon or an
+// invalid name is joined to the field before it, kept apart, or begins the
+// body (header_recover.go); a multipart that is never closed, declares no
+// boundary or the wrong one, or holds no delimiter at all is still framed or
+// returned as one part (multipart_heal.go); damaged Base64, quoted-printable
+// and uuencoded bodies are decoded as far as their bytes allow
+// (cte_tolerant.go); encoded words and MIME parameters are read tolerantly
+// (rfc2047.go, mediatype_tolerant.go). ProfileStrict keeps the errors those
+// defects always were. A message embedded in a message/rfc822 part is read on
+// request (embedded.go). docs/robustness-notes has the rule for each case.
 //
 // Parse cannot be cancelled. It is ParseContext with no context; see there for
 // a parse that can be.
