@@ -2739,12 +2739,12 @@ separators (`ROB-020-005`), whole raw replay (`ROB-020-007`, #41), #17, #29.
 
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
-| ROB-030-001 | Planned | Decode conformant B/Q words and adjacent-word whitespace correctly. | RFC examples and round-trip tests. |
-| ROB-030-002 | Planned | Recover embedded encoded words in tolerant mode. | Strict/tolerant differential fixtures. |
-| ROB-030-003 | Planned | Preserve malformed/unknown encoded words while decoding valid neighbors. | Partial decode tests. |
-| ROB-030-004 | Planned | Diagnose raw UTF-8/8-bit header text and apply configured fallback charset. | Valid/invalid UTF-8 fixtures. |
-| ROB-030-005 | Planned | Reject or neutralize decoded CR/LF/NUL header injection. | Security tests. |
-| ROB-030-006 | Planned | Limit encoded-word count, nesting-like work, and decode expansion. | Adversarial complexity tests. |
+| ROB-030-001 | Done | Decode conformant B/Q words and adjacent-word whitespace correctly. Implemented by the bounded decoder in rfc2047.go, which Header.Text and parameter values use; conformant values decode as before. See docs/robustness-notes/rfc2047.md. | RFC examples and round-trip tests. |
+| ROB-030-002 | Done | Recover embedded encoded words in tolerant mode. Implemented: glued words, words in quoted strings, folds inside a word, unterminated words, and adjacent same-charset words joined as bytes before conversion. See docs/robustness-notes/rfc2047.md. | Strict/tolerant differential fixtures. |
+| ROB-030-003 | Done | Preserve malformed/unknown encoded words while decoding valid neighbors. Implemented: an undecodable word stays verbatim while its neighbours decode; Base64 is repaired and bad Q escapes kept literal. See docs/robustness-notes/rfc2047.md. | Partial decode tests. |
+| ROB-030-004 | Done | Diagnose raw UTF-8/8-bit header text and apply configured fallback charset. Implemented: raw UTF-8 passes with rfc2047.raw_utf8; invalid raw 8-bit uses HeaderTextOptions.FallbackCharset or U+FFFD; the raw value stays in the header. See docs/robustness-notes/rfc2047.md. | Valid/invalid UTF-8 fixtures. |
+| ROB-030-005 | Done | Reject or neutralize decoded CR/LF/NUL header injection. Implemented: decoded CR and LF become a space and NUL becomes U+FFFD, reported as rfc2047.header_injection. See docs/robustness-notes/rfc2047.md. | Security tests. |
+| ROB-030-006 | Done | Limit encoded-word count, nesting-like work, and decode expansion. Implemented: one forward pass, 10 000 words per value, bounded hook output and 64 diagnostics per value (rfc2047.word_limit). See docs/robustness-notes/rfc2047.md. | Adversarial complexity tests. |
 
 ### ROB-040 — Structured RFC 5322 headers
 

@@ -535,7 +535,7 @@ func (d *tolerantQP) step(c byte, offset int64) {
 		}
 	case qpEqHex:
 		if isHexByte(c) {
-			d.out = append(d.out, unhex(d.hex1)<<4|unhex(c))
+			d.out = append(d.out, qpUnhex(d.hex1)<<4|qpUnhex(c))
 			d.state = qpText
 			return
 		}
@@ -630,7 +630,7 @@ func (d *tolerantQP) finish(eof bool) {
 	d.run, d.eqWS = d.run[:0], d.eqWS[:0]
 }
 
-func unhex(c byte) byte {
+func qpUnhex(c byte) byte {
 	switch {
 	case c >= '0' && c <= '9':
 		return c - '0'
