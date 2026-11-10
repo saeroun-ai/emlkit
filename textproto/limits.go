@@ -50,7 +50,8 @@ type HeaderLimits struct {
 
 	// MaxCount bounds how many logical fields one block may contain. Every
 	// field candidate is charged, including one that is later skipped for
-	// having an empty name, so that a block of nothing but empty names costs
+	// having an empty name, or kept as a malformed prefix or an orphan record
+	// rather than a field, so that a block of nothing but empty names costs
 	// what a block of that many fields costs. The empty line that ends the block
 	// is not a candidate and is not charged, so an empty block spends nothing.
 	MaxCount int64

@@ -45,7 +45,8 @@ type parseContext struct {
 	depth int64
 
 	// separatorMissing reports that this entity is a part whose header block,
-	// which began with a malformed prefix, was ended by its multipart's next
+	// which began with a malformed prefix or held an orphan record, was ended
+	// by its multipart's next
 	// delimiter line rather than by an empty line (textproto
 	// Part.HeaderSeparatorMissing). It is this entity's own and is never carried
 	// to a child. See firstline.go.

@@ -17,6 +17,14 @@ type headerField struct {
 
 	k string
 	v string
+
+	// seq is where this field stood among the fields of the block it was
+	// read from, counting from 1, or 0 for a field that was not read from a
+	// block (Add, AddRaw, Set, HeaderFromMap). It is never modified, so the
+	// copies of a Header that share this field agree on it. WriteHeader writes
+	// a header's orphan records in their place among the fields read with
+	// them by it; see OrphanContinuation.
+	seq int
 }
 
 func newHeaderField(k, v string, b []byte) *headerField {
@@ -56,7 +64,10 @@ func (f *headerField) raw() ([]byte, error) {
 // (see ReadHeader, WriteHeader and ByteOrderMark). A block that began with a
 // UTF-16 or UTF-32 mark is not read, and is not written. A block whose first
 // lines began with white space keeps those lines apart, as its malformed prefix,
-// and writes them back first, before every field (see MalformedPrefix).
+// and writes them back first, before every field (see MalformedPrefix). A
+// damaged line that continuation lines followed keeps them, with it, apart as
+// an orphan record, written back in its place among the fields (see
+// OrphanContinuation); a damaged line with no continuation line is not.
 //
 // Mutating the header is restricted: the only two allowed operations are
 // inserting a new header field at the top and deleting a header field. This is
@@ -82,6 +93,13 @@ type Header struct {
 	// with, or nil. Like bom it is the header's own and is never modified once
 	// set: Copy shares it and every mutation keeps it. See MalformedPrefix.
 	prefix *malformedPrefix
+
+	// orphans is the orphan records of the block this header was read from,
+	// in the order they were read, or nil. Like prefix it is the header's own
+	// and is never modified once set — its length is its capacity, so nothing
+	// appends to it in place: Copy shares it and every mutation keeps it. See
+	// OrphanContinuation.
+	orphans []*orphanRecord
 }
 
 func makeHeaderMap(fs []*headerField) map[string][]*headerField {
@@ -249,7 +267,7 @@ func (h *Header) Copy() Header {
 	l := make([]*headerField, len(h.l))
 	copy(l, h.l)
 	m := makeHeaderMap(l)
-	return Header{l: l, m: m, ends: h.ends, bom: h.bom, prefix: h.prefix}
+	return Header{l: l, m: m, ends: h.ends, bom: h.bom, prefix: h.prefix, orphans: h.orphans}
 }
 
 // Len returns the number of fields in the header.
@@ -826,18 +844,41 @@ type headerScan struct {
 	capLast   int
 
 	// parent is the multipart reader whose part header this block is, or nil.
-	// It is looked at only after a malformed prefix, to end the block at that
-	// reader's next delimiter line rather than read the line as a field; and
-	// atDelim reports that it did. See prefix.go.
+	// It is looked at only after a malformed prefix or an orphan record, to
+	// end the block at that reader's next delimiter line rather than read the
+	// line as a field, and after a damaged line whose '\r' is still to be
+	// settled; atDelim reports that the block ended there. See prefix.go and
+	// orphan.go.
 	parent  *MultipartReader
 	atDelim bool
 
-	// replay is the beginning of a line that looked like such a delimiter and
-	// was taken out of the reader to decide it, and proved not to be one: the
-	// first bytes of the next line, which nextChunk returns before reading on.
-	// They were not charged when they were taken out; they are charged when
-	// they are read, as any bytes of a line are. They hold no '\r' or '\n'.
+	// replay is bytes taken out of the reader to decide something and then
+	// read as the block's: the beginning of a line that looked like such a
+	// delimiter and proved not to be one (holdDelimiter), which holds no '\r'
+	// or '\n', or the lines a '\r' that is content joins to a damaged line,
+	// with their line endings and the first byte of the continuation line that
+	// proved them a record (settleCR). They are the next bytes of the input:
+	// nextChunk returns them before reading on, and hasContinuationLine and
+	// atBlockEnd look at them first (see vpeek). They were not charged when
+	// they were taken out; they are charged when they are read, as any bytes
+	// of a line are.
 	replay []byte
+
+	// vbuf is the room vpeek joins the end of replay and the reader's next
+	// bytes in.
+	vbuf [2]byte
+
+	// terms is how each physical line of the logical candidate being read
+	// ended, in order: the first termsFix entries in termsFix, the rest in
+	// termsMore. It is what turns a candidate's lines, which are kept ended by
+	// "\r\n" whatever ended them, back into the input's exact bytes when the
+	// candidate proves to be an orphan record (see orphan.go). It is one byte
+	// a line, in storage the scan owns, reused by every candidate of the
+	// block: a candidate of up to len(termsFix) lines allocates nothing for
+	// it, and a longer one grows termsMore, which the next keeps.
+	termsN    int
+	termsFix  [16]lineTerm
+	termsMore []lineTerm
 }
 
 // A crLine is what a line ended by a bare '\r' that may still prove to be
@@ -930,13 +971,49 @@ func (s *headerScan) nextChunk(r *bufio.Reader) (b []byte, end lineEnd, next int
 	// The beginning of a line taken out of the reader to be decided comes
 	// first, as content of a line that goes on; see holdDelimiter.
 	// It is handed out a buffer at a time, as the reader would have.
+	// Bytes settleCR took out of the reader for a record are the next bytes
+	// of the input too, line endings included, and are read on the same
+	// terms as the reader's: content a buffer at a time, a line ending as
+	// soon as it is whole, and a '\r' they end with decided by the reader's
+	// next byte.
 	if len(s.replay) > 0 {
-		n := min(len(s.replay), r.Size())
-		b, s.replay = s.replay[:n], s.replay[n:]
-		if len(s.replay) == 0 {
-			s.replay = nil
+		rp := s.replay
+		i := bytes.IndexAny(rp, "\r\n")
+		take := func(n int) []byte {
+			b := rp[:n]
+			s.replay = rp[n:]
+			if len(s.replay) == 0 {
+				s.replay = nil
+			}
+			return b
 		}
-		return b, endNone, 0, nil
+		switch {
+		case i < 0 || i >= r.Size():
+			return take(min(len(rp), r.Size())), endNone, 0, nil
+		case rp[i] == '\n':
+			return take(i + 1), endLF, 0, nil
+		case i+1 < len(rp) && rp[i+1] == '\n':
+			return take(i + 2), endCRLF, 0, nil
+		case i+1 < len(rp):
+			return take(i + 1), endCR, int(rp[i+1]), nil
+		case i > 0:
+			// The '\r' is the last byte held: the bytes before it are
+			// content either way, and the next call decides it.
+			return take(i), endNone, 0, nil
+		}
+		// The replay is that '\r' alone: the reader's next byte decides it.
+		nb, perr := s.peek(r, 1)
+		switch {
+		case len(nb) == 1 && nb[0] == '\n':
+			take(1)
+			r.Discard(1)
+			return crlf, endCRLF, 0, nil
+		case len(nb) == 1:
+			return take(1), endCR, int(nb[0]), nil
+		case perr == io.EOF:
+			return take(1), endCR, eofNext, nil
+		}
+		return take(1), endInput, 0, perr
 	}
 
 	// scanned is how many held bytes are known to hold neither '\r' nor '\n',
@@ -1304,6 +1381,11 @@ func readLineSlice(r *bufio.Reader, line []byte, scan *headerScan) ([]byte, erro
 			scan.keep(b)
 			scan.lineKept(capStart)
 			scan.ends.note(kind, scan.consumed-int64(term))
+			if end == endCRLF {
+				scan.noteTerm(termCRLF)
+			} else {
+				scan.noteTerm(termLF)
+			}
 			return append(line, content...), nil
 
 		case endCR:
@@ -1325,6 +1407,9 @@ func readLineSlice(r *bufio.Reader, line []byte, scan *headerScan) ([]byte, erro
 			}
 			scan.keep(b)
 			scan.lineKept(capStart)
+			// The '\r' is this line's last byte whether it proves to end the
+			// line or to be content the next candidate joins to it.
+			scan.noteTerm(termCR)
 			cr := scan.consumed - 1
 			if !atStart && next != eofNext && validHeaderKeyByte(nb) {
 				// Whether this '\r' ended the line is settled by the next
@@ -1357,6 +1442,7 @@ func readLineSlice(r *bufio.Reader, line []byte, scan *headerScan) ([]byte, erro
 				}
 				scan.keep(b)
 				scan.lineKept(capStart)
+				scan.noteTerm(termNone)
 				scan.ends.unterminated = true
 				scan.ends.untermStart, scan.ends.untermEnd = scan.lineStart, scan.consumed
 				return append(line, b...), nil
@@ -1406,11 +1492,25 @@ func trim(s []byte) []byte {
 // line, without consuming it. A failed look is no continuation: the scanner has
 // recorded the failure, and the next read of the block reports it.
 func hasContinuationLine(r *bufio.Reader, scan *headerScan) bool {
-	b, err := scan.peek(r, 1)
+	b, err := scan.vpeek(r, 1)
 	if err != nil || len(b) == 0 {
 		return false
 	}
 	return isSpace(b[0])
+}
+
+// vpeek is peek over the input as the scanner reads it: the replay, if any,
+// then r. n is at most 2. Nothing is consumed.
+func (s *headerScan) vpeek(r *bufio.Reader, n int) ([]byte, error) {
+	if len(s.replay) == 0 {
+		return s.peek(r, n)
+	}
+	if len(s.replay) >= n {
+		return s.replay[:n], nil
+	}
+	b, err := s.peek(r, n-len(s.replay))
+	out := append(append(s.vbuf[:0], s.replay...), b...)
+	return out, err
 }
 
 // atBlockEnd reports whether the next bytes of r are the empty line that ends a
@@ -1441,12 +1541,12 @@ func hasContinuationLine(r *bufio.Reader, scan *headerScan) bool {
 // with no byte left — its end, or a failed read — is neither. A failed look is
 // recorded by the scanner, and the read that follows reports it.
 func atBlockEnd(r *bufio.Reader, scan *headerScan) (end, candidate bool) {
-	if len(scan.replay) > 0 {
-		// A line taken out of the reader to be decided as a delimiter, which it
-		// was not: it begins with "--", so it is a candidate.
-		return false, true
-	}
-	b, err := scan.peek(r, 1)
+	// The replay, if any, is the next bytes of the input: a line taken out to
+	// be decided as a delimiter begins with "--", and lines settleCR took out
+	// for a record begin with a name byte or white space, so both begin a
+	// candidate or a continuation, never the empty line; they are looked at
+	// as any bytes are.
+	b, err := scan.vpeek(r, 1)
 	if err != nil || len(b) == 0 {
 		return false, false
 	}
@@ -1454,7 +1554,7 @@ func atBlockEnd(r *bufio.Reader, scan *headerScan) (end, candidate bool) {
 	case '\n':
 		return true, false
 	case '\r':
-		b, err := scan.peek(r, 2)
+		b, err := scan.vpeek(r, 2)
 		if len(b) == 2 || (err == io.EOF && len(b) == 1) {
 			return true, false
 		}
@@ -1472,6 +1572,9 @@ func atBlockEnd(r *bufio.Reader, scan *headerScan) (end, candidate bool) {
 // content, scan.rejoined reports that what is returned continues the previous
 // field rather than beginning one.
 func readContinuedLineSlice(r *bufio.Reader, scan *headerScan) ([]byte, int, error) {
+	// The line endings noted from here on are this candidate's.
+	scan.resetTerms()
+
 	// The empty line that ends the block is a line of the block but not a
 	// logical field, so it is read outside any field's budget. Settling that
 	// here — from bytes that are looked at and not consumed — is what keeps a
@@ -1693,6 +1796,17 @@ func trimAroundNewlines(v []byte) string {
 // See prefix.go and Header.MalformedPrefix. Before, such a block was refused
 // with a "malformed MIME header initial line" error and no fields; that error
 // is no longer returned.
+//
+// # Orphan continuation lines
+//
+// A damaged line — no colon or semicolon, an invalid name, or an empty one —
+// followed by at least one continuation line read whole is kept, with those
+// lines, apart from the fields as an orphan record, byte for byte, and the
+// block is read on after it (ROB-020-002). See orphan.go and
+// Header.OrphanContinuations. Before, such a block was refused with a
+// "malformed MIME header line" or "malformed MIME header key" error, or, for
+// an empty name, lost the lines silently. A damaged line with no continuation
+// line is read as it always was.
 func ReadHeader(r *bufio.Reader) (Header, error) {
 	return readHeader(r, &headerScan{})
 }
@@ -1860,30 +1974,66 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 	// the next candidate may still continue it (a '\r' that turns out to be
 	// content; see take). It is built exactly once, when what follows settles
 	// that it is complete, so a run of such continuations costs one pass over
-	// its bytes. skipping reports that the last candidate was skipped for an
-	// empty name, whose continuations are skipped with it. A malformed prefix
-	// is held the same way, and is built into prefix instead of a field.
+	// its bytes. A malformed prefix is held the same way, and is built into
+	// prefix instead of a field; so is an orphan record, built into orphans
+	// (ROB-020-002; see orphan.go), and a damaged line still waiting for a
+	// '\r' to say whether a continuation follows it, which is kept only if
+	// one does.
 	var pend pendingField
 	var prefix *malformedPrefix
-	skipping := false
+	var orphans []*orphanRecord
+	// recovered reports that an orphan record has been recovered in this
+	// block: in a part's header every later line is then first looked at as
+	// a delimiter line, as after a malformed prefix.
+	recovered := false
 	finish := func() {
 		switch {
 		case pend.kv == nil:
-		case pend.prefix:
+		case pend.kind == pendPrefix:
 			prefix = scan.prefixOf(prefixStart, pend.kv)
+		case pend.kind == pendRecord:
+			if o := pend.record(len(fs)); o != nil {
+				orphans = append(orphans, o)
+			}
+		case pend.kind == pendDamaged:
+			// A damaged line that nothing continued: no field, and not kept,
+			// as before. Every path that must still report it as an error
+			// settles it before it gets here.
 		default:
-			fs = append(fs, pend.field())
+			fs = append(fs, pend.field(len(fs)+1))
 		}
 		pend = pendingField{}
 	}
-	// result is headerResult with the prefix: a block a budget refused keeps
-	// neither.
+	// result is headerResult with the prefix and the orphan records: a block
+	// a budget refused keeps none of them.
 	result := func(err error) (Header, error) {
 		h, err := headerResult(fs, err)
 		if !isBudgetExhausted(err) {
 			h.prefix = prefix
+			h.orphans = orphans[:len(orphans):len(orphans)]
 		}
 		return h, err
+	}
+	// settleDamaged ends a damaged line held for its '\r' now that no
+	// continuation line follows it: it is decided as it always was, with no
+	// continuation — an empty name is skipped, which is nil, and any other is
+	// the error it always was, built when the line was read.
+	settleDamaged := func() error {
+		err := pend.headErr
+		pend = pendingField{}
+		return err
+	}
+	// unseen returns the read failure, other than io.EOF, that a read of the
+	// block has observed, or nil. A damaged line read whole whose continuation
+	// lines could not be looked at — the look past it, or the line after it,
+	// met that failure — is not known to have none: the failure is what is
+	// returned, as itself, rather than the error the line would be if nothing
+	// continued it.
+	unseen := func() error {
+		if scan.fail != nil && scan.fail != io.EOF {
+			return scan.fail
+		}
+		return nil
 	}
 	// ended returns the header of a block that ended without a failure of its
 	// own: at its empty line, at the end of the input, or at a delimiter.
@@ -1907,15 +2057,24 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 	}
 
 	for {
-		// In a part's header that began with a malformed prefix, the next line
-		// is looked at as a delimiter of the multipart before it is read as
-		// anything else. A proved one is never read as a field or as part of
-		// one: the block ends before it, and the part's body is empty. A '\r'
-		// that ended the line before it, and was still waiting for that line to
-		// say whether it was content, was a line ending. A line that is not
-		// proved one is read below, from its first byte, as it always was. See
-		// prefix.go.
-		if prefixed && !first && scan.parent != nil {
+		// In a part's header that began with a malformed prefix, or in which
+		// an orphan record has been recovered, the next line is looked at as a
+		// delimiter of the multipart before it is read as anything else. A
+		// proved one is never read as a field or as part of one: the block ends
+		// before it, and the part's body is empty. A '\r' that ended the line
+		// before it, and was still waiting for that line to say whether it was
+		// content, was a line ending. A line that is not proved one is read
+		// below, from its first byte, as it always was. See prefix.go and
+		// orphan.go.
+		//
+		// The lines a '\r' that is content joins to a damaged line that
+		// settleCR proved a record (a pendDamaged with an error, which is held
+		// only once proved) are not looked at here: settleCR already looked at
+		// every line of them as a delimiter line, and they may be in the
+		// replay, ahead of what r holds. Nothing is looked at while a replay
+		// is still to be read, for the same reason.
+		provedJoin := pend.kind == pendDamaged && pend.headErr != nil
+		if scan.parent != nil && len(scan.replay) == 0 && !provedJoin && ((prefixed && !first) || recovered) {
 			look, m := scan.parentDelimiter(r)
 			proved := look == lookProved
 			if look == lookLong {
@@ -1940,11 +2099,12 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 		kv, last, err := readContinuedLineSlice(r, scan)
 		rejoined, dropPrev := scan.rejoined, scan.dropPrev
 		scan.rejoined, scan.dropPrev = false, false
-		if dropPrev && !skipping {
+		if dropPrev {
 			// A failure cut the line a '\r' that was content, or was never
 			// settled, ended: that line is cut with the line after it. Its
-			// bytes leave a prefix's capture with it.
-			if pend.prefix {
+			// bytes leave a prefix's capture, or an orphan record's exact
+			// bytes, with it.
+			if pend.kind == pendPrefix {
 				scan.unkeep(scan.capLast)
 			}
 			pend.dropLastLine()
@@ -1959,10 +2119,10 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 				if cerr := scan.chargeField(); cerr != nil {
 					return result(cerr)
 				}
-				pend = pendingField{kv: kv, lastLine: last, prefix: true}
+				pend = pendingField{kv: kv, lastLine: last, kind: pendPrefix}
 				continue
 			}
-		} else if scan.capturing && !(rejoined && len(kv) > 0 && pend.prefix) {
+		} else if scan.capturing && !(rejoined && len(kv) > 0 && pend.kind == pendPrefix) {
 			// What this read is not the prefix's: its bytes leave the capture,
 			// and the prefix can no longer grow.
 			scan.endCapture(mark)
@@ -1971,6 +2131,11 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 		if len(kv) == 0 {
 			scan.endCapture(len(scan.capture))
 			if err == nil {
+				if pend.kind == pendDamaged {
+					if derr := settleDamaged(); derr != nil {
+						return result(derr)
+					}
+				}
 				return ended()
 			}
 			finish()
@@ -1979,11 +2144,44 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 
 		if rejoined {
 			// Not a field: the rest of the field before it, read whole. It
-			// was never charged to the field count, and is not now.
-			if !skipping {
-				pend.join(kv, last)
+			// was never charged to the field count, and is not now. An orphan
+			// record, or a damaged line held for its '\r', takes the exact
+			// bytes too.
+			var raw []byte
+			rawLast := 0
+			if pend.rawKind() {
+				raw, rawLast = scan.exact(kv)
+			}
+			pend.join(kv, last, raw, rawLast)
+			if pend.kind == pendDamaged {
+				switch {
+				case pend.lastLine > 0:
+					// The line the '\r' joined to it brought a continuation
+					// line with it, read whole: an orphan record after all.
+					pend.kind = pendRecord
+					recovered = true
+				case !scan.crKey.ok:
+					// Still no continuation, and no '\r' left to bring one.
+					if pend.headErr != nil {
+						if ferr := unseen(); ferr != nil {
+							pend = pendingField{}
+							return result(ferr)
+						}
+					}
+					if derr := settleDamaged(); derr != nil {
+						return result(derr)
+					}
+				}
 			}
 			continue
+		}
+
+		// A damaged line held for its '\r' is not continued by this candidate:
+		// the '\r' ended it, and nothing continues it.
+		if pend.kind == pendDamaged {
+			if derr := settleDamaged(); derr != nil {
+				return result(derr)
+			}
 		}
 
 		// One logical field candidate has been read, so it is charged to the
@@ -2000,52 +2198,152 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 			return result(cerr)
 		}
 
-		// Key ends at first colon; should not have trailing spaces but they
-		// appear in the wild, violating specs, so we remove them if present.
-		i := bytes.IndexByte(kv, ':')
-		if i < 0 {
-			// Some malformed messages use a semicolon instead of a colon as
-			// the field separator; accept it as a fallback.
-			i = bytes.IndexByte(kv, ';')
-			if i < 0 {
-				finish()
-				return result(fmt.Errorf("message: malformed MIME header line: %v", string(kv)))
-			}
-		}
-
-		keyBytes := trim(kv[:i])
-
-		// Verify that there are no invalid characters in the header key.
-		// See RFC 5322 Section 2.2
-		for _, c := range keyBytes {
-			if !validHeaderKeyByte(c) {
-				finish()
-				return result(fmt.Errorf("message: malformed MIME header key: %v", string(keyBytes)))
-			}
-		}
-
-		key := textproto.CanonicalMIMEHeaderKey(string(keyBytes))
-
-		// The field before this one is complete now.
-		finish()
-
-		// As per RFC 7230 field-name is a token, tokens consist of one or more
-		// chars. We could return a an error here, but better to be liberal in
-		// what we accept, so if we get an empty key, skip it.
-		if key == "" {
-			skipping = true
+		head, key, i := classifyCandidate(kv)
+		if head == headField {
+			// The field before this one is complete now.
+			finish()
+			pend = pendingField{key: key, kv: kv, valueStart: i + 1, lastLine: last}
 			continue
 		}
-		skipping = false
 
-		pend = pendingField{key: key, kv: kv, valueStart: i + 1, lastLine: last}
-
-		if err != nil {
-			finish()
-			return result(err)
+		// A damaged line: no colon or semicolon, an invalid name, or an empty
+		// one, which nothing here makes a field. The field before it is
+		// complete either way.
+		finish()
+		start := scan.fieldStart
+		switch {
+		case last > 0:
+			// Continuation lines followed it, read whole: it and they are an
+			// orphan record, kept apart byte for byte, and the block goes on
+			// (ROB-020-002; see orphan.go). It is held, as a field is, for a
+			// '\r' that may still join the next line to it.
+			raw, rawLast := scan.exact(kv)
+			pend = pendingField{kv: kv, lastLine: last, kind: pendRecord,
+				raw: raw, rawLast: rawLast, start: start}
+			recovered = true
+		case scan.crKey.ok:
+			// Its line ended with a '\r' that the next line settles: that
+			// line may still join it, and bring continuation lines. An empty
+			// name, which was always read on past (its joined lines skipped
+			// with it, the next field read as a field), is held as before.
+			// Any other damaged line was refused here, with the next line
+			// left unread: it is read on only once settleCR has proved,
+			// within what the budgets admit, that the bytes after the '\r'
+			// join it and bring a continuation line. Otherwise it is the
+			// error it always was, everything past its '\r' still in r —
+			// unless the shared count refuses first, or the look met a read
+			// failure, which is returned as itself.
+			derr := damageError(head, kv, i)
+			if derr != nil {
+				cont, ferr := scan.settleCR(r)
+				if ferr != nil {
+					return result(ferr)
+				}
+				if !cont {
+					return result(derr)
+				}
+			}
+			raw, rawLast := scan.exact(kv)
+			pend = pendingField{kv: kv, lastLine: last, kind: pendDamaged,
+				raw: raw, rawLast: rawLast, start: start, headErr: derr}
+		case head == headEmptyName:
+			// As per RFC 7230 field-name is a token, tokens consist of one or
+			// more chars. An empty name with nothing continuing it is skipped,
+			// as it always was (ROB-020-006 owns it).
+		default:
+			// Nothing continues it: the error it always was (ROB-020-003 and
+			// ROB-020-006 own these) — unless a read failure kept its
+			// continuation lines from being looked at.
+			if ferr := unseen(); ferr != nil {
+				return result(ferr)
+			}
+			return result(damageError(head, kv, i))
 		}
 	}
 }
+
+// A candidateHead is what a logical candidate's first bytes make it, by the
+// rules a header block has always been read with: the name is everything
+// before the first colon of the whole candidate — or, with no colon in it, the
+// first semicolon — less white space around it, and it must be one or more
+// printable US-ASCII bytes other than the colon (RFC 5322 section 2.2).
+type candidateHead uint8
+
+const (
+	// headField: a field, read as one.
+	headField candidateHead = iota
+	// headNoSeparator: neither a colon nor a semicolon anywhere in it.
+	headNoSeparator
+	// headInvalidName: a name with a byte a name cannot hold — white space,
+	// a control byte, an 8-bit byte, or a line ending when the separator was
+	// found only on a continuation line.
+	headInvalidName
+	// headEmptyName: nothing before the separator but white space.
+	headEmptyName
+)
+
+// classifyCandidate reads kv, a logical candidate read whole, on those rules:
+// what it is, and for a field its canonical key; i is where its separator is,
+// or -1 when it has none.
+func classifyCandidate(kv []byte) (head candidateHead, key string, i int) {
+	// Key ends at first colon; should not have trailing spaces but they
+	// appear in the wild, violating specs, so we remove them if present.
+	i = bytes.IndexByte(kv, ':')
+	if i < 0 {
+		// Some malformed messages use a semicolon instead of a colon as
+		// the field separator; accept it as a fallback.
+		i = bytes.IndexByte(kv, ';')
+		if i < 0 {
+			return headNoSeparator, "", -1
+		}
+	}
+
+	keyBytes := trim(kv[:i])
+
+	// Verify that there are no invalid characters in the header key.
+	// See RFC 5322 Section 2.2
+	for _, c := range keyBytes {
+		if !validHeaderKeyByte(c) {
+			return headInvalidName, "", i
+		}
+	}
+	if len(keyBytes) == 0 {
+		return headEmptyName, "", i
+	}
+	return headField, textproto.CanonicalMIMEHeaderKey(string(keyBytes)), i
+}
+
+// damageError returns the error a damaged candidate kv that nothing
+// continues has always been refused with, i being where classifyCandidate
+// found its separator; nil for an empty name, which has always been skipped.
+func damageError(head candidateHead, kv []byte, i int) error {
+	switch head {
+	case headNoSeparator:
+		return fmt.Errorf("message: malformed MIME header line: %v", string(kv))
+	case headInvalidName:
+		return fmt.Errorf("message: malformed MIME header key: %v", string(trim(kv[:i])))
+	}
+	return nil
+}
+
+// A pendKind is what a pendingField will be built into.
+type pendKind uint8
+
+const (
+	// pendField: a field.
+	pendField pendKind = iota
+	// pendPrefix: the block's malformed prefix, built from the exact bytes
+	// the scanner captured. See prefix.go.
+	pendPrefix
+	// pendRecord: an orphan record — a damaged line and the continuation
+	// lines after it. See orphan.go.
+	pendRecord
+	// pendDamaged: a damaged line with no continuation line yet, whose last
+	// line ended with a '\r' the next line settles. It becomes a pendRecord
+	// if that line joins it and brings a continuation line, and is otherwise
+	// decided as a damaged line always was; see headErr.
+	pendDamaged
+)
 
 // A pendingField is a field read whole but not yet built, because the next
 // candidate may still continue it.
@@ -2059,18 +2357,36 @@ type pendingField struct {
 	valueStart int
 	lastLine   int
 
-	// prefix reports that this is the block's malformed prefix rather than a
-	// field: it has no key and no value, and is built into a malformedPrefix
-	// from the exact bytes the scanner captured. See prefix.go.
-	prefix bool
+	// kind is what it will be built into. A prefix, a record and a damaged
+	// line have no key and no value.
+	kind pendKind
+
+	// For a record and a damaged line: raw is its exact bytes so far, every
+	// line ending as it was read, and rawLast where its last physical line
+	// begins in raw; start is where it began, relative to the block.
+	raw     []byte
+	rawLast int
+	start   int64
+
+	// headErr is, for a damaged line, the error it is decided with if
+	// nothing continues it, or nil for an empty name, which is skipped.
+	headErr error
+}
+
+// rawKind reports whether p keeps exact bytes of its own: an orphan record,
+// or a damaged line that may become one.
+func (p *pendingField) rawKind() bool {
+	return p.kind == pendRecord || p.kind == pendDamaged
 }
 
 // join appends cand, a candidate that a '\r' made the continuation of this
 // field's last physical line, to the field: the "\r\n" that line was given is
 // replaced by the '\r' that was content, followed by cand as it was read. cand
 // is copied once; nothing the field already holds is copied again but by the
-// growth of its buffer.
-func (p *pendingField) join(cand []byte, candLast int) {
+// growth of its buffer. For a record or a damaged line, raw is cand's exact
+// bytes and rawLast where its last physical line begins in them: the '\r' is
+// already the last byte of p.raw, as read, so they are appended as they are.
+func (p *pendingField) join(cand []byte, candLast int, raw []byte, rawLast int) {
 	if p.kv == nil {
 		return
 	}
@@ -2080,21 +2396,34 @@ func (p *pendingField) join(cand []byte, candLast int) {
 	if candLast > 0 {
 		p.lastLine = base + 1 + candLast
 	}
+	if p.rawKind() {
+		if candLast > 0 {
+			p.rawLast = len(p.raw) + rawLast
+		}
+		p.raw = append(p.raw, raw...)
+	}
 }
 
 // dropLastLine removes the field's last physical line, which a failure cut;
-// a field left with no line is no field.
+// a field left with no line is no field. A record or a damaged line loses the
+// line's exact bytes with it.
 func (p *pendingField) dropLastLine() {
 	if p.lastLine == 0 {
 		*p = pendingField{}
 		return
 	}
 	p.kv = p.kv[:p.lastLine]
+	if p.rawKind() {
+		p.raw = p.raw[:p.rawLast]
+	}
 }
 
-// field builds the field, once.
-func (p *pendingField) field() *headerField {
-	return newHeaderField(p.key, trimAroundNewlines(p.kv[p.valueStart:]), p.kv)
+// field builds the field, once; seq is its place among the fields of its
+// block, counting from 1.
+func (p *pendingField) field(seq int) *headerField {
+	f := newHeaderField(p.key, trimAroundNewlines(p.kv[p.valueStart:]), p.kv)
+	f.seq = seq
+	return f
 }
 
 func foldLine(v string, maxlen int) (line, next string, ok bool) {
@@ -2213,6 +2542,17 @@ func formatHeaderField(k, v string) string {
 // no line ending is followed by "\r\n", and one ended by a bare '\r' by "\n",
 // so that what follows can never be read as a continuation of that line. See
 // MalformedPrefix.
+//
+// A header whose block held orphan records writes each in its place among the
+// fields read with it: right before the first of the fields that followed it
+// in the block that the header still has, or after every field when none is
+// left. Fields added since (Add, AddRaw, Set) are at the top, as always, and
+// so are written before every record; deleting a field never moves a record
+// among the fields read with it, nor drops one. Each record is written as its
+// prefix is, every byte in order and only a last line without a "\r\n" or
+// "\n" given one. A record begins with its damaged line, never with white
+// space, so it cannot become a continuation of the field written before it.
+// See OrphanContinuation.
 func WriteHeader(w io.Writer, h Header) error {
 	if h.bom.wide() {
 		return errWideHeader(h.bom)
@@ -2225,14 +2565,30 @@ func WriteHeader(w io.Writer, h Header) error {
 	if err := h.prefix.writeTo(w); err != nil {
 		return err
 	}
+	// next is the first record not yet written. Records are in the order
+	// they were read, so their after counts never decrease.
+	next := 0
 	for i := len(h.l) - 1; i >= 0; i-- {
 		f := h.l[i]
+		if f.seq > 0 {
+			for next < len(h.orphans) && h.orphans[next].after < f.seq {
+				if err := writeRawLines(w, h.orphans[next].b); err != nil {
+					return err
+				}
+				next++
+			}
+		}
 		if rawField, err := f.raw(); err == nil {
 			if _, err := w.Write(rawField); err != nil {
 				return err
 			}
 		} else {
 			return fmt.Errorf("failed to write header field #%v (%q): %w", len(h.l)-i, f.k, err)
+		}
+	}
+	for ; next < len(h.orphans); next++ {
+		if err := writeRawLines(w, h.orphans[next].b); err != nil {
+			return err
 		}
 	}
 

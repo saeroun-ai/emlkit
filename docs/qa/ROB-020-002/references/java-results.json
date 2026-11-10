@@ -1,0 +1,870 @@
+[
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "valid-fold",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw WC1Hb29kOiBvbmUNCiB0d28=\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic WC1Hb29k b25lDQogdHdv\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "valid-fold",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1Hb29k body=b25lIHR3bw== raw=WC1Hb29kOiBvbmUNCiB0d28=\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "valid-fold",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1Hb29k body=b25lIHR3bw== raw=WC1Hb29kOiBvbmUNCiB0d28=\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "valid-fold",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1Hb29k body=b25lIHR3bw== raw=WC1Hb29kOiBvbmUNCiB0d28=\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "colonless-cont",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw YnJva2VuIGxpbmUNCiBvcnBoYW4NCgltb3Jl\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic YnJva2VuIGxpbmUNCiBvcnBoYW4NCgltb3Jl YnJva2VuIGxpbmUNCiBvcnBoYW4NCgltb3Jl\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "colonless-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "colonless-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "colonless-cont",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "colonless-alone",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw YnJva2VuIGxpbmU=\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic YnJva2VuIGxpbmU= YnJva2VuIGxpbmU=\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "colonless-alone",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "colonless-alone",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "colonless-alone",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "semicolon-cont",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw WC1CYWQ7IHZhbHVlDQogb3JwaGFu\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic WC1CYWQ7IHZhbHVlDQogb3JwaGFu WC1CYWQ7IHZhbHVlDQogb3JwaGFu\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "semicolon-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "semicolon-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "semicolon-cont",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "space-key-cont",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw QmFkIE5hbWU6IHZhbHVlDQogb3JwaGFu\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic QmFkIE5hbWU= dmFsdWUNCiBvcnBoYW4=\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "space-key-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "space-key-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "space-key-cont",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "space-key-alone",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw QmFkIE5hbWU6IHZhbHVl\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic QmFkIE5hbWU= dmFsdWU=\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "space-key-alone",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "space-key-alone",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "space-key-alone",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "nul-key-cont",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw WAA6IHZhbHVlDQogb3JwaGFu\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic WA== dmFsdWUNCiBvcnBoYW4=\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "nul-key-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WA== body=dmFsdWUgb3JwaGFu raw=WAA6IHZhbHVlDQogb3JwaGFu\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "nul-key-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WA== body=dmFsdWUgb3JwaGFu raw=WAA6IHZhbHVlDQogb3JwaGFu\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "nul-key-cont",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "eightbit-key-cont",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw WMO/OiB2YWx1ZQ0KIG9ycGhhbg==\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic WMO/ dmFsdWUNCiBvcnBoYW4=\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "eightbit-key-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "eightbit-key-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "eightbit-key-cont",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "empty-key-cont",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw OiB2YWx1ZQ0KIG9ycGhhbg==\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic  dmFsdWUNCiBvcnBoYW4=\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "empty-key-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWUgb3JwaGFu raw=OiB2YWx1ZQ0KIG9ycGhhbg==\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "empty-key-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWUgb3JwaGFu raw=OiB2YWx1ZQ0KIG9ycGhhbg==\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "empty-key-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWUgb3JwaGFu raw=OiB2YWx1ZQ0KIG9ycGhhbg==\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "empty-key-alone",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw OiB2YWx1ZQ==\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic  dmFsdWU=\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "empty-key-alone",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWU= raw=OiB2YWx1ZQ==\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "empty-key-alone",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWU= raw=OiB2YWx1ZQ==\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "empty-key-alone",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWU= raw=OiB2YWx1ZQ==\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "empty-semicolon-cont",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw OyB2YWx1ZQ0KIG9ycGhhbg==\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic OyB2YWx1ZQ0KIG9ycGhhbg== OyB2YWx1ZQ0KIG9ycGhhbg==\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "empty-semicolon-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "empty-semicolon-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "empty-semicolon-cont",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "empty-key-first",
+    "error": "",
+    "result": "part root type text/plain\nraw OiB2YWx1ZQ0KIG9ycGhhbg==\nraw U3ViamVjdDoga2VwdA==\nsemantic  dmFsdWUNCiBvcnBoYW4=\nsemantic U3ViamVjdA== a2VwdA==\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "empty-key-first",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name= body=dmFsdWUgb3JwaGFu raw=OiB2YWx1ZQ0KIG9ycGhhbg==\nT_FIELD name=U3ViamVjdA== body=a2VwdA== raw=U3ViamVjdDoga2VwdA==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "empty-key-first",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name= body=dmFsdWUgb3JwaGFu raw=OiB2YWx1ZQ0KIG9ycGhhbg==\nT_FIELD name=U3ViamVjdA== body=a2VwdA== raw=U3ViamVjdDoga2VwdA==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "empty-key-first",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name= body=dmFsdWUgb3JwaGFu raw=OiB2YWx1ZQ0KIG9ycGhhbg==\nT_FIELD name=U3ViamVjdA== body=a2VwdA== raw=U3ViamVjdDoga2VwdA==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "blank-then-indented-body",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nsemantic U3ViamVjdA== YmVmb3Jl\nbody IG9ycGhhbg0KWC1LZWVwOiBib2R5\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "blank-then-indented-body",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_END_HEADER \nT_BODY IG9ycGhhbg0KWC1LZWVwOiBib2R5\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "blank-then-indented-body",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_END_HEADER \nT_BODY IG9ycGhhbg0KWC1LZWVwOiBib2R5\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "blank-then-indented-body",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_END_HEADER \nT_BODY IG9ycGhhbg0KWC1LZWVwOiBib2R5\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "first-prefix-control",
+    "error": "",
+    "result": "part root type text/plain\nraw b3JwaGFu\nraw U3ViamVjdDogYmVmb3Jl\nsemantic b3JwaGFu b3JwaGFu\nsemantic U3ViamVjdA== YmVmb3Jl\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "first-prefix-control",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "first-prefix-control",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "first-prefix-control",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "prefix-then-orphan",
+    "error": "",
+    "result": "part root type text/plain\nraw bGVhZGluZw==\nraw U3ViamVjdDogYmVmb3Jl\nraw OiBicm9rZW4NCiBvcnBoYW4=\nraw WC1LZWVwOiBhZnRlcg==\nsemantic bGVhZGluZw== bGVhZGluZw==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic  YnJva2VuDQogb3JwaGFu\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "prefix-then-orphan",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=YnJva2VuIG9ycGhhbg== raw=OiBicm9rZW4NCiBvcnBoYW4=\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "prefix-then-orphan",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=YnJva2VuIG9ycGhhbg== raw=OiBicm9rZW4NCiBvcnBoYW4=\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "prefix-then-orphan",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "multiple-damaged-runs",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw OiBvbmUNCiBvcnBoYW4x\nraw WC1NaWRkbGU6IGludGFjdA==\nraw YnJva2VuDQogb3JwaGFuMg==\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic  b25lDQogb3JwaGFuMQ==\nsemantic WC1NaWRkbGU= aW50YWN0\nsemantic YnJva2VuDQogb3JwaGFuMg== YnJva2VuDQogb3JwaGFuMg==\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "multiple-damaged-runs",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=b25lIG9ycGhhbjE= raw=OiBvbmUNCiBvcnBoYW4x\nT_FIELD name=WC1NaWRkbGU= body=aW50YWN0 raw=WC1NaWRkbGU6IGludGFjdA==\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "multiple-damaged-runs",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=b25lIG9ycGhhbjE= raw=OiBvbmUNCiBvcnBoYW4x\nT_FIELD name=WC1NaWRkbGU= body=aW50YWN0 raw=WC1NaWRkbGU6IGludGFjdA==\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "multiple-damaged-runs",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=b25lIG9ycGhhbjE= raw=OiBvbmUNCiBvcnBoYW4x\nT_FIELD name=WC1NaWRkbGU= body=aW50YWN0 raw=WC1NaWRkbGU6IGludGFjdA==\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "indented-cte",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw YnJva2VuDQogQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZzogYmFzZTY0\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic YnJva2VuDQogQ29udGVudC1UcmFuc2Zlci1FbmNvZGluZw== YmFzZTY0\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "indented-cte",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "indented-cte",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "indented-cte",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "white-cont",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw YnJva2VuDQogCQ==\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic YnJva2Vu YnJva2VuDQogCQ==\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "white-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "white-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "white-cont",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "orphan-eof",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw YnJva2VuDQogb3JwaGFu\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic YnJva2VuDQogb3JwaGFu YnJva2VuDQogb3JwaGFu\nbody \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "orphan-eof",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_END_HEADER \nT_BODY \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "orphan-eof",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_END_HEADER \nT_BODY \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "orphan-eof",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Unexpected end of headers detected. Higher level boundary detected or EOF reached.",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "empty-orphan-eof",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw OiB2YWx1ZQ0KIG9ycGhhbg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic  dmFsdWUNCiBvcnBoYW4=\nbody \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "empty-orphan-eof",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWUgb3JwaGFu raw=OiB2YWx1ZQ0KIG9ycGhhbg==\nT_END_HEADER \nT_BODY \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "empty-orphan-eof",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWUgb3JwaGFu raw=OiB2YWx1ZQ0KIG9ycGhhbg==\nT_END_HEADER \nT_BODY \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "empty-orphan-eof",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Unexpected end of headers detected. Higher level boundary detected or EOF reached.",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "lf",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw YnJva2VuDQogb3JwaGFu\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic YnJva2VuDQogb3JwaGFu YnJva2VuDQogb3JwaGFu\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "lf",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "lf",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "lf",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "cr",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw OiB2YWx1ZQ0KIG9ycGhhbg==\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic  dmFsdWUNCiBvcnBoYW4=\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "cr",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3JlOiB2YWx1ZSBvcnBoYW5YLUtlZXA6IGFmdGVyQk9EWQ== raw=U3ViamVjdDogYmVmb3JlDTogdmFsdWUNIG9ycGhhbg1YLUtlZXA6IGFmdGVyDQ1CT0RZ\nT_END_HEADER \nT_BODY \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "cr",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3JlOiB2YWx1ZSBvcnBoYW5YLUtlZXA6IGFmdGVyQk9EWQ== raw=U3ViamVjdDogYmVmb3JlDTogdmFsdWUNIG9ycGhhbg1YLUtlZXA6IGFmdGVyDQ1CT0RZ\nT_END_HEADER \nT_BODY \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "cr",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Unexpected end of headers detected. Higher level boundary detected or EOF reached.",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "internal-cr",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw WC1Hb29kOiB2YWx1ZQ==\nraw YnJva2VuDQogb3JwaGFu\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic WC1Hb29k dmFsdWU=\nsemantic YnJva2VuDQogb3JwaGFu YnJva2VuDQogb3JwaGFu\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "internal-cr",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1Hb29k body=dmFsdWVicm9rZW4gb3JwaGFu raw=WC1Hb29kOiB2YWx1ZQ1icm9rZW4NCiBvcnBoYW4=\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "internal-cr",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1Hb29k body=dmFsdWVicm9rZW4gb3JwaGFu raw=WC1Hb29kOiB2YWx1ZQ1icm9rZW4NCiBvcnBoYW4=\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "internal-cr",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1Hb29k body=dmFsdWVicm9rZW4gb3JwaGFu raw=WC1Hb29kOiB2YWx1ZQ1icm9rZW4NCiBvcnBoYW4=\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "utf8-bom",
+    "error": "",
+    "result": "part root type text/plain\nraw w6/Cu8K/U3ViamVjdDogYmVmb3Jl\nraw YnJva2VuDQogb3JwaGFu\nraw WC1LZWVwOiBhZnRlcg==\nsemantic w6/Cu8K/U3ViamVjdA== YmVmb3Jl\nsemantic YnJva2VuDQogb3JwaGFu YnJva2VuDQogb3JwaGFu\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "utf8-bom",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "utf8-bom",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "utf8-bom",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "part-colonless",
+    "error": "",
+    "result": "part root type multipart/mixed; boundary=B\nraw Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PUI=\nsemantic Q29udGVudC1UeXBl bXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT1C\npart root.0 type text/plain\nbody T05F\npart root.1 type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw YnJva2VuDQogb3JwaGFu\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic YnJva2VuDQogb3JwaGFu YnJva2VuDQogb3JwaGFu\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\npart root.2 type text/plain\nraw U3ViamVjdDogbGFzdA==\nsemantic U3ViamVjdA== bGFzdA==\nbody VEhSRUU=\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "part-colonless",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=Q29udGVudC1UeXBl body=bXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT1C raw=Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PUI=\nT_END_HEADER \nT_START_MULTIPART \nT_START_BODYPART \nT_START_HEADER \nT_END_HEADER \nT_BODY T05F\nT_END_BODYPART \nT_START_BODYPART \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_BODYPART \nT_START_BODYPART \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=bGFzdA== raw=U3ViamVjdDogbGFzdA==\nT_END_HEADER \nT_BODY VEhSRUU=\nT_END_BODYPART \nT_END_MULTIPART \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "part-colonless",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=Q29udGVudC1UeXBl body=bXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT1C raw=Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PUI=\nT_END_HEADER \nT_START_MULTIPART \nT_START_BODYPART \nT_START_HEADER \nT_END_HEADER \nT_BODY T05F\nT_END_BODYPART \nT_START_BODYPART \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_BODYPART \nT_START_BODYPART \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=bGFzdA== raw=U3ViamVjdDogbGFzdA==\nT_END_HEADER \nT_BODY VEhSRUU=\nT_END_BODYPART \nT_END_MULTIPART \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "part-colonless",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=Q29udGVudC1UeXBl body=bXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT1C raw=Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PUI=\nT_END_HEADER \nT_START_MULTIPART \nT_START_BODYPART \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "part-empty",
+    "error": "",
+    "result": "part root type multipart/mixed; boundary=B\nraw Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PUI=\nsemantic Q29udGVudC1UeXBl bXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT1C\npart root.0 type text/plain\nbody T05F\npart root.1 type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw OiB2YWx1ZQ0KIG9ycGhhbg==\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic  dmFsdWUNCiBvcnBoYW4=\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\npart root.2 type text/plain\nraw U3ViamVjdDogbGFzdA==\nsemantic U3ViamVjdA== bGFzdA==\nbody VEhSRUU=\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "part-empty",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=Q29udGVudC1UeXBl body=bXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT1C raw=Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PUI=\nT_END_HEADER \nT_START_MULTIPART \nT_START_BODYPART \nT_START_HEADER \nT_END_HEADER \nT_BODY T05F\nT_END_BODYPART \nT_START_BODYPART \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWUgb3JwaGFu raw=OiB2YWx1ZQ0KIG9ycGhhbg==\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_BODYPART \nT_START_BODYPART \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=bGFzdA== raw=U3ViamVjdDogbGFzdA==\nT_END_HEADER \nT_BODY VEhSRUU=\nT_END_BODYPART \nT_END_MULTIPART \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "part-empty",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=Q29udGVudC1UeXBl body=bXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT1C raw=Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PUI=\nT_END_HEADER \nT_START_MULTIPART \nT_START_BODYPART \nT_START_HEADER \nT_END_HEADER \nT_BODY T05F\nT_END_BODYPART \nT_START_BODYPART \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWUgb3JwaGFu raw=OiB2YWx1ZQ0KIG9ycGhhbg==\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_BODYPART \nT_START_BODYPART \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=bGFzdA== raw=U3ViamVjdDogbGFzdA==\nT_END_HEADER \nT_BODY VEhSRUU=\nT_END_BODYPART \nT_END_MULTIPART \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "part-empty",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=Q29udGVudC1UeXBl body=bXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT1C raw=Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PUI=\nT_END_HEADER \nT_START_MULTIPART \nT_START_BODYPART \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "part-missing-separator",
+    "error": "",
+    "result": "part root type multipart/mixed; boundary=B\nraw Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PUI=\nsemantic Q29udGVudC1UeXBl bXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT1C\npart root.0 type text/plain\nbody T05F\npart root.1 type text/plain\nraw U3ViamVjdDogbWlkZGxl\nraw YnJva2VuDQogb3JwaGFu\nraw LS1C\nraw U3ViamVjdDogbGFzdA==\nsemantic U3ViamVjdA== bWlkZGxl\nsemantic YnJva2VuDQogb3JwaGFu YnJva2VuDQogb3JwaGFu\nsemantic LS1C LS1C\nsemantic U3ViamVjdA== bGFzdA==\nbody VEhSRUU=\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "part-missing-separator",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=Q29udGVudC1UeXBl body=bXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT1C raw=Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PUI=\nT_END_HEADER \nT_START_MULTIPART \nT_START_BODYPART \nT_START_HEADER \nT_END_HEADER \nT_BODY T05F\nT_END_BODYPART \nT_START_BODYPART \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=bWlkZGxl raw=U3ViamVjdDogbWlkZGxl\nT_END_HEADER \nT_BODY \nT_END_BODYPART \nT_START_BODYPART \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=bGFzdA== raw=U3ViamVjdDogbGFzdA==\nT_END_HEADER \nT_BODY VEhSRUU=\nT_END_BODYPART \nT_END_MULTIPART \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "part-missing-separator",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=Q29udGVudC1UeXBl body=bXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT1C raw=Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PUI=\nT_END_HEADER \nT_START_MULTIPART \nT_START_BODYPART \nT_START_HEADER \nT_END_HEADER \nT_BODY T05F\nT_END_BODYPART \nT_START_BODYPART \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=bWlkZGxl raw=U3ViamVjdDogbWlkZGxl\nT_END_HEADER \nT_BODY \nT_END_BODYPART \nT_START_BODYPART \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=bGFzdA== raw=U3ViamVjdDogbGFzdA==\nT_END_HEADER \nT_BODY VEhSRUU=\nT_END_BODYPART \nT_END_MULTIPART \nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "part-missing-separator",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=Q29udGVudC1UeXBl body=bXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT1C raw=Q29udGVudC1UeXBlOiBtdWx0aXBhcnQvbWl4ZWQ7IGJvdW5kYXJ5PUI=\nT_END_HEADER \nT_START_MULTIPART \nT_START_BODYPART \nT_START_HEADER \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "colonless-cont-colon",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw YnJva2VuDQogb3JwaGFuOiB2YWx1ZQ==\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic YnJva2VuDQogb3JwaGFu dmFsdWU=\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "colonless-cont-colon",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "colonless-cont-colon",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "colonless-cont-colon",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "semicolon-cont-colon",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw WC1UZXN0OyB2YWx1ZQ0KIGZvbGRlZDogdmFsdWU=\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic WC1UZXN0OyB2YWx1ZQ0KIGZvbGRlZA== dmFsdWU=\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "semicolon-cont-colon",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "semicolon-cont-colon",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "semicolon-cont-colon",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "empty-cont-colon",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw OiB2YWx1ZQ0KIGZvbGRlZDogdmFsdWU=\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic  dmFsdWUNCiBmb2xkZWQ6IHZhbHVl\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "empty-cont-colon",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWUgZm9sZGVkOiB2YWx1ZQ== raw=OiB2YWx1ZQ0KIGZvbGRlZDogdmFsdWU=\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "empty-cont-colon",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWUgZm9sZGVkOiB2YWx1ZQ== raw=OiB2YWx1ZQ0KIGZvbGRlZDogdmFsdWU=\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "empty-cont-colon",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name= body=dmFsdWUgZm9sZGVkOiB2YWx1ZQ== raw=OiB2YWx1ZQ0KIGZvbGRlZDogdmFsdWU=\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "angus-jakarta",
+    "mode": "default",
+    "fixture": "bad-semicolon-cont",
+    "error": "",
+    "result": "part root type text/plain\nraw U3ViamVjdDogYmVmb3Jl\nraw QmFkIGtleTsgdmFsdWUNCiBmb2xkZWQ=\nraw WC1LZWVwOiBhZnRlcg==\nsemantic U3ViamVjdA== YmVmb3Jl\nsemantic QmFkIGtleTsgdmFsdWUNCiBmb2xkZWQ= QmFkIGtleTsgdmFsdWUNCiBmb2xkZWQ=\nsemantic WC1LZWVw YWZ0ZXI=\nbody Qk9EWQ==\n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "default",
+    "fixture": "bad-semicolon-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "permissive",
+    "fixture": "bad-semicolon-cont",
+    "error": "",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\nT_FIELD name=WC1LZWVw body=YWZ0ZXI= raw=WC1LZWVwOiBhZnRlcg==\nT_END_HEADER \nT_BODY Qk9EWQ==\nT_END_MESSAGE \n"
+  },
+  {
+    "engine": "mime4j",
+    "mode": "strict",
+    "fixture": "bad-semicolon-cont",
+    "error": "org.apache.james.mime4j.stream.MimeParseEventException: Invalid header encountered",
+    "result": "T_START_MESSAGE \nT_START_HEADER \nT_FIELD name=U3ViamVjdA== body=YmVmb3Jl raw=U3ViamVjdDogYmVmb3Jl\n"
+  }
+]

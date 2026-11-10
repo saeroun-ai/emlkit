@@ -76,13 +76,20 @@ const (
 	// as the header's malformed prefix (ROB-020-001); recorded once per block,
 	// over the whole prefix. See firstline.go.
 	CodeHeaderFirstLineContinuation Code = "header.first_line_continuation"
-	CodeHeaderOrphanContinuation    Code = "header.orphan_continuation"
+
+	// CodeHeaderOrphanContinuation reports a header block holding orphan
+	// records: damaged lines — no colon or semicolon, an invalid name or an
+	// empty name — that continuation lines followed, kept with them apart
+	// from the fields (ROB-020-002); recorded once per block, over its first
+	// record. See orphan.go.
+	CodeHeaderOrphanContinuation Code = "header.orphan_continuation"
 
 	// CodeHeaderMissingBodySeparator reports a header block that ended with no
 	// empty line. It is recorded only for a part's header that began with a
-	// malformed prefix and was ended by its multipart's next delimiter line
-	// (ROB-020-001); a missing separator anywhere else is not yet looked for
-	// (ROB-020-005). See firstline.go.
+	// malformed prefix (ROB-020-001), or held an orphan record (ROB-020-002),
+	// and was ended by its multipart's next delimiter line after it; a missing
+	// separator anywhere else is not yet looked for (ROB-020-005). See
+	// firstline.go and orphan.go.
 	CodeHeaderMissingBodySeparator    Code = "header.missing_body_separator"
 	CodeHeaderWhitespaceBodySeparator Code = "header.whitespace_body_separator"
 	CodeHeaderMissingColon            Code = "header.missing_colon"

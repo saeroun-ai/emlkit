@@ -47,8 +47,8 @@ type Part struct {
 	bodyOffset   int64 // offset of the part's body in mr's input
 
 	// separatorMissing reports that the part's header block, which began with
-	// a malformed prefix, was ended by a delimiter line rather than by an empty
-	// line; see HeaderSeparatorMissing.
+	// a malformed prefix or held an orphan record, was ended by a delimiter
+	// line rather than by an empty line; see HeaderSeparatorMissing.
 	separatorMissing bool
 }
 
@@ -58,8 +58,10 @@ type Part struct {
 // delimiter line, unread by the header, is what ended the part.
 //
 // It is only ever reported for a header block that began with a malformed
-// prefix (see Header.MalformedPrefix), whose later lines are each looked at as
-// a delimiter line before they are read, and only for a line proved one — its
+// prefix (see Header.MalformedPrefix), or in which an orphan record was
+// recovered (see Header.OrphanContinuations), whose later lines — after the
+// prefix, or after the record — are each looked at as a delimiter line before
+// they are read, and only for a line proved one — its
 // line ending, or the end of the input, seen after the boundary and any white
 // space — so such a delimiter is never read as one of its fields and the part
 // after it is not lost. White space past the reader's buffer is decided within
@@ -67,8 +69,9 @@ type Part struct {
 // budget; with no line budget, a line still undecided past one buffer is this
 // reader's framing refusal wrapping bufio.ErrBufferFull, which ends the
 // iteration. A line that only begins like one is read as the line it is. A
-// header block without a malformed prefix is read as it always was, and a
-// missing separator there is not looked for (ROB-020-005).
+// header block with neither a malformed prefix nor an orphan record is read as
+// it always was, and a missing separator there is not looked for
+// (ROB-020-005).
 func (p *Part) HeaderSeparatorMissing() bool {
 	return p.separatorMissing
 }
@@ -158,23 +161,48 @@ func (r *stickyErrorReader) Read(p []byte) (n int, _ error) {
 // Bytes the reader has taken out of its buffer but not yet handed to a caller
 // or consumed as framing — a delimiter candidate held while it is decided, or
 // one that turned out to be body and is still being delivered — are not past
-// the cursor either, so they are subtracted too.
+// the cursor either, so they are subtracted too, and so are bytes a part's
+// header gave back to the reader that it has not read again yet (see
+// restore).
 func (r *MultipartReader) offset() int64 {
-	return r.src.n - int64(r.bufReader.Buffered()) - int64(len(r.out)) - int64(len(r.cand.held))
+	return r.src.n - int64(r.bufReader.Buffered()) - int64(len(r.pre.b)) - int64(len(r.out)) - int64(len(r.cand.held))
 }
 
 // windowAt returns the input offset of the byte at index x of what the
 // buffered reader holds.
 func (r *MultipartReader) windowAt(x int) int64 {
-	return r.src.n - int64(r.bufReader.Buffered()) + int64(x)
+	return r.src.n - int64(len(r.pre.b)) - int64(r.bufReader.Buffered()) + int64(x)
+}
+
+// restore gives held, bytes a part's header took out of the buffered reader
+// to decide a damaged line and then did not keep (ROB-020-002; see
+// headerScan.settleCR), back to this reader: it then reads held, the bytes it
+// still buffered, any bytes given back before and not read yet, and then its
+// source, exactly as if nothing had been taken out. The buffered bytes are
+// copied out before the buffered reader is reset to read r.pre, which reads
+// the sticky source itself, never the buffered reader, so no buffer is shared
+// and nothing reads itself, and the bytes given back never stack: there is one
+// pre, over r.src, whatever is given back how often. A failure the source
+// returned stays the source's, which keeps returning it. Nothing is read, and
+// offsets are unchanged: the bytes in r.pre are not past the cursor.
+func (r *MultipartReader) restore(held []byte) {
+	br := r.bufReader
+	n := br.Buffered()
+	b, _ := br.Peek(n)
+	pre := make([]byte, 0, len(held)+n+len(r.pre.b))
+	pre = append(append(append(pre, held...), b...), r.pre.b...)
+	br.Discard(n)
+	r.pre = prefixReader{b: pre, src: r.src}
+	br.Reset(&r.pre)
 }
 
 func newPart(mr *MultipartReader) (*Part, error) {
 	// The delimiter line that introduced this part has already been consumed,
 	// so the reader is standing on the first byte of the part's header block.
 	bp := &Part{mr: mr, headerOffset: mr.offset()}
-	// The block is a part's header, so after a malformed prefix it ends before
-	// a delimiter line of this reader rather than reading one; see prefix.go.
+	// The block is a part's header, so after a malformed prefix or an orphan
+	// record it ends before a delimiter line of this reader rather than reading
+	// one; see prefix.go and orphan.go.
 	scan := &headerScan{lim: mr.limits, base: bp.headerOffset, parent: mr}
 	if err := bp.populateHeaders(scan); err != nil {
 		// Only this reader's own budgets make a HeaderLimitError. The test is
@@ -757,6 +785,11 @@ type MultipartReader struct {
 	// Neither is ever more than one framing line: see Part.Read.
 	cand heldCandidate
 	out  []byte
+
+	// pre is what bufReader reads once a part's header has given bytes back
+	// to it (see restore): those bytes, then src. Until then bufReader reads
+	// src directly and pre is empty.
+	pre prefixReader
 
 	// delim is the delimiter the part being read ended at, proven and not yet
 	// consumed; NextPart consumes it. pending is this reader's own refusal of

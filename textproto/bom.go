@@ -141,8 +141,10 @@ func (m ByteOrderMark) wide() bool {
 // or CR are written with CRLF, a block that io.EOF ended — a mark alone, or a
 // last line with no line ending or no empty line after it — gains the CRLF
 // endings and the empty line WriteHeader always writes, and a line the reader
-// skipped rather than kept as a field, such as one with an empty name, is not
-// written. Keeping the mark is not a replay of the input.
+// skipped rather than kept as a field, such as one with an empty name and no
+// continuation line, is not written (one with continuation lines is an orphan
+// record, written in its place; see OrphanContinuation). Keeping the mark is
+// not a replay of the input.
 //
 // A UTF-16 or UTF-32 mark means that the block was not read: nothing of it was
 // consumed, the mark and what follows it are still in the reader, and the

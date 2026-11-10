@@ -58,7 +58,78 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   is accepted as the key/value separator. ([`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
 - **Whitespace before the colon.** `Subject : value` — spaces/tabs between the
   key and colon are trimmed. ([`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
-- **Empty keys are skipped**, not treated as an error. ([`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
+- **Empty keys are skipped**, not treated as an error — when no continuation
+  line follows them; one that continuation lines follow is an orphan record
+  (below). ([`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
+- **Continuation lines after a damaged line** (`ROB-020-002`). A continuation
+  line (one beginning with a space or a tab) belongs to the logical candidate
+  before it. When that candidate is damaged — no colon or semicolon anywhere in
+  it, a name holding a byte a name cannot hold (white space, NUL, control,
+  8-bit, or the line ending of its first line when the only colon is on a
+  continuation line; `X-Test; value` then ` folded: value` included, since the
+  colon wins over the semicolon as it always did), or an empty name — and at
+  least one continuation line was read whole, the damaged line and its
+  continuation lines are kept together as an **orphan record**: an immutable
+  `textproto.OrphanContinuation` (`Bytes` — a fresh copy each call, the input's
+  exact bytes, line endings, NUL and 8-bit bytes as they were — `Location` in
+  the block, a UTF-8 mark counted, and `Lines`, at least two) returned by
+  `textproto.Header.OrphanContinuations` in reading order. Such a block used to
+  fail with "malformed MIME header line/key" (no entity at the root; the part
+  an error, the next part reached by asking again), or, for an empty name, to
+  lose the lines silently. A record is **not a field**: `Get`, `Has`, `Values`,
+  `Fields`, `Len`, `Raw` and `Map` never see it, nothing of it is joined to a
+  field around it (a `Subject` or `Content-Type` before it keeps its value), and
+  an indented `Content-Type` or `Content-Transfer-Encoding` in it declares
+  nothing, under every `Profile` and `Compatibility`; the block is read on after
+  it as usual. Valid folding, a field the semicolon fallback accepts (`X-Bad;
+  value` then ` more`), and a `\r` that is content of a valid field joining an
+  indented line to it (`Subject: before\r: value\r orphan` stays one Subject)
+  are read exactly as before. A damaged line **with no continuation line** is
+  read as before — an empty name skipped, any other the error it always was
+  (`ROB-020-003`, `ROB-020-006`) — except that a read failure other than
+  `io.EOF` that kept its continuation from being looked at is returned as
+  itself instead of that error. A damaged line whose last line ended with a
+  bare `\r` before a name byte is a record only if the bytes after the `\r`
+  prove that the next line is its content and brings a continuation line,
+  within what the block's budgets would admit of them (the joined line's
+  content to `MaxLineBytes`, its bytes to what `MaxHeaderFieldBytes`,
+  `MaxHeaderBytes` and the shared total have left; 64 KiB when no byte budget
+  is in force — not the reader's buffer size). Otherwise it is decided as
+  before, and everything after the `\r` — a following field included — is in
+  the reader afterwards exactly as before, even when the proof had to take it
+  out (it is given back; a caller's `bufio.Reader` whose buffer that proof
+  outgrew has its buffer grown, at least doubled, to hold it). A proof that
+  does not fit the budgets is the old error, not a budget refusal; a spent
+  shared field count refuses first. In a part's header a real delimiter line
+  among those bytes is no record and is left for the next part. A record is one
+  field candidate for the budgets (the shared count asked before its first
+  byte, charged once, every byte once); a refused block keeps no record; a read
+  failure keeps only records of whole lines. Its exact bytes are rebuilt from
+  the kept lines and the line ending each had, which the scanner notes one byte
+  a line in fixed storage (no allocation for a candidate of up to 16 lines);
+  only a damaged candidate allocates, once, its exact size. `Copy` and every
+  field edit keep the records; the writers write each in its place among the
+  fields read with it — before the first of the fields that followed it that
+  the header still has, after fields added since (`Add`, `Set`, `MIME-Version`)
+  — a last line with no ending or a bare-CR ending followed by `\r\n` or `\n`;
+  a record begins with its damaged line, never with white space, so it never
+  continues the field before it, and an unmodified complete CRLF header whose
+  only damaged lines are records round-trips byte for byte (damaged lines with
+  no continuation are still not written; this is not raw replay, `ROB-020-007`).
+  In a part's header in which a record was recovered, later lines are first
+  looked at as delimiter lines of the multipart, exactly as after a malformed
+  prefix (`ROB-020-001`, below): a proved delimiter ends the header, the part's
+  body is empty, `textproto.Part.HeaderSeparatorMissing` reports it and the
+  next part follows; a damaged line whose `\r` such a line would settle is
+  decided as before with nothing consumed past it. Under `Parse` each block
+  with records records one `header.orphan_continuation` (Recovered) over its
+  first record, counting records and lines and holding none of their bytes, and
+  such a part `header.missing_body_separator` (Recovered); `ProfileStrict`
+  refuses that entity locally, keeping records, fields and the raw body, and
+  siblings are read as usual. `Read`, `ReadWithOptions`, `textproto` and `mail`
+  heal the same way and record nothing. Other engines keep such a damaged line
+  as a raw header, drop it with defects, or fail; no parity is claimed.
+  ([`textproto/orphan.go`](../textproto/orphan.go), [`orphan.go`](../orphan.go))
 - **Bare LF, bare CR and mixed header line endings** (`ROB-010-002`). A header line ends at `\r\n` (one ending even when split
   across reads), at a bare `\n`, or at a bare `\r`; a stray `\r` inside a value
   stays content unless the next line begins a field (`name:`), so
@@ -82,7 +153,8 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   `WriteHeader` and `WriteTo` write it once, before every field — on their
   usual terms, so only a well-formed complete CRLF block with its empty line,
   every field kept and unchanged, is written byte for byte — a line skipped
-  rather than kept as a field, such as one with an empty name, is not written;
+  rather than kept as a field, such as one with an empty name and no
+  continuation line, is not written;
   this is not raw replay. A UTF-16 or
   UTF-32 mark leaves the block unread: no field, no header budget spent, and an
   opaque entity on every entry point whose body is every byte from the mark on —
@@ -186,7 +258,8 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   wrapping `io.EOF`, then `io.EOF`; the empty-container policy is
   `ROB-060-009`'s). Other line endings are described above (`ROB-010-002`); a
   first line beginning with white space is the malformed prefix above
-  (`ROB-020-001`), and other malformed lines are `ROB-020`'s.
+  (`ROB-020-001`), a damaged line with continuation lines an orphan record
+  (`ROB-020-002`), and other malformed lines are `ROB-020`'s.
   ([`parse.go`](../parse.go) · `Parse`, [`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
 - **Over-long header keys** do not crash the line-folder (a naive fold width would
   go negative; it falls back to the hard limit). ([`textproto/header.go`](../textproto/header.go) · `formatHeaderField`)

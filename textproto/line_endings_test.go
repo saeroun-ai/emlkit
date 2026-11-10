@@ -517,12 +517,13 @@ func TestHeader_lineEndingsSnapshot(t *testing.T) {
 // observe: the fields with their raw bytes, the line-ending report, the byte
 // order mark, what is left in the reader, and the error, by its text.
 type lineEndingOutcome struct {
-	fields []wantField
-	ends   LineEndings
-	bom    ByteOrderMark
-	prefix prefixOutcome
-	rest   string
-	err    string
+	fields  []wantField
+	ends    LineEndings
+	bom     ByteOrderMark
+	prefix  prefixOutcome
+	records string // the orphan records (ROB-020-002), with their locations
+	rest    string
+	err     string
 }
 
 // prefixOutcome is what a Header reports of its malformed prefix (ROB-020-001).
@@ -542,7 +543,8 @@ func prefixOutcomeOf(h *Header) prefixOutcome {
 func readLineEndingOutcome(t *testing.T, br *bufio.Reader) lineEndingOutcome {
 	t.Helper()
 	h, err := ReadHeader(br)
-	o := lineEndingOutcome{fields: fieldsOf(t, h), ends: h.LineEndings(), bom: h.ByteOrderMark(), prefix: prefixOutcomeOf(&h)}
+	o := lineEndingOutcome{fields: fieldsOf(t, h), ends: h.LineEndings(), bom: h.ByteOrderMark(), prefix: prefixOutcomeOf(&h),
+		records: fmt.Sprintf("%+v", recordsOf(&h))}
 	if err != nil {
 		o.err = err.Error()
 	}
@@ -576,6 +578,10 @@ func FuzzReadHeader_lineEndings(f *testing.F) {
 	for _, tc := range prefixCases() {
 		f.Add([]byte(tc.in))
 	}
+	// Orphan continuation lines (ROB-020-002).
+	for _, tc := range orphanCases() {
+		f.Add([]byte(tc.in))
+	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 8192 {
 			return
@@ -594,12 +600,50 @@ func FuzzReadHeader_lineEndings(f *testing.F) {
 			},
 		} {
 			got := readLineEndingOutcome(t, newReader())
-			if !sameFields(got.fields, want.fields) || got.ends != want.ends || got.bom != want.bom || got.prefix != want.prefix || got.rest != want.rest || got.err != want.err {
+			if !sameFields(got.fields, want.fields) || got.ends != want.ends || got.bom != want.bom || got.prefix != want.prefix ||
+				got.records != want.records || got.rest != want.rest || got.err != want.err {
 				t.Errorf("%s:\n got %+v\nwant %+v", name, got, want)
 			}
 		}
 		checkPrefixOutcome(t, s, want)
+		checkOrphanOutcome(t, s)
 	})
+}
+
+// checkOrphanOutcome holds the orphan records of one read of a finite string s
+// to what the text alone says: each is the input's own bytes at its location,
+// has at least two lines, begins with a byte that is neither white space nor
+// a line ending, and is followed by a byte that does not begin a continuation
+// line; records do not overlap the prefix or each other. Written back and read
+// again, the records are what was written of them, and the fields are the
+// same.
+func checkOrphanOutcome(t *testing.T, s string) {
+	t.Helper()
+	h, _ := ReadHeader(bufio.NewReader(strings.NewReader(s)))
+	_, prev := h.MalformedPrefix().Location()
+	for _, r := range recordsOf(&h) {
+		if r.start < prev || r.end > int64(len(s)) || s[r.start:r.end] != r.bytes || r.lines < 2 {
+			t.Fatalf("record %+v is not the input's bytes at its location after %d", r, prev)
+		}
+		if c := r.bytes[0]; c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			t.Fatalf("record %q begins with %q", r.bytes, c)
+		}
+		if r.end < int64(len(s)) && (s[r.end] == ' ' || s[r.end] == '\t') {
+			t.Fatalf("record %q is followed by a continuation line", r.bytes)
+		}
+		prev = r.end
+	}
+	var b bytes.Buffer
+	if err := WriteHeader(&b, h); err != nil {
+		return
+	}
+	again, _ := ReadHeader(bufio.NewReader(&b))
+	if got, want := recordBytes(recordsOf(&again)), writtenRecords(recordsOf(&h)); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("read back, the records are %q, want what was written of them, %q", got, want)
+	}
+	if !sameFields(fieldsOf(t, again), fieldsOf(t, h)) {
+		t.Errorf("read back, the fields are %q, want %q", fieldsOf(t, again), fieldsOf(t, h))
+	}
 }
 
 // checkPrefixOutcome holds the malformed prefix of one read of a finite string

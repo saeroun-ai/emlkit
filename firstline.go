@@ -37,7 +37,9 @@ import (
 //	a malformed prefix                header.first_line_continuation  Recovered    InvalidMetadata,
 //	                                                                               entity refused
 //	a part's header after a prefix    header.missing_body_separator   Recovered    InvalidMetadata,
-//	ended by a delimiter line                                                      entity refused
+//	(or an orphan record, see                                                      entity refused
+//	orphan.go) ended by a
+//	delimiter line
 //
 // header.first_line_continuation covers the whole prefix, its line endings
 // included, at the entity's path; its message counts the prefix's lines and

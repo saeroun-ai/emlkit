@@ -2301,7 +2301,7 @@ whole input.
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
 | ROB-020-001 | Done | Recover a first-line continuation as a raw malformed field/body candidate with policy-based interpretation. Implemented as a header's malformed prefix, kept byte for byte and interpreted as nothing under every profile and compatibility; Strict refuses locally; a part's prefix never consumes its multipart's delimiter. See "ROB-020-001 — malformed prefixes" below. | Angus/Python/Mime4j compatibility fixtures. |
-| ROB-020-002 | Planned | Recover orphan continuation lines after malformed fields. | Raw preservation and diagnostic tests. |
+| ROB-020-002 | Done | Recover orphan continuation lines after malformed fields. Implemented as orphan records: a damaged candidate (no colon or semicolon, invalid name, empty name) with at least one whole continuation line is kept with them byte for byte, interpreted as nothing, written in place; Strict refuses locally; the prefix delimiter guard extended to parts with a record. A read failure met while a bare-CR candidate is being proved is returned as itself, ahead of a delimiter guess cut short by it; a delimiter line already ended by its own line ending keeps the old malformed-line error and the failure is met by the next read. The legacy 64 KiB proof cap counts joined content, so the exact edge is one byte later than the independent probe assumed (not a defect). See "ROB-020-002 — orphan continuation lines" below. | Raw preservation and diagnostic tests. |
 | ROB-020-003 | Planned | Support policy choices for a colonless line: raw malformed header, semicolon separator, or start of body. | Ambiguity and deterministic-precedence tests. |
 | ROB-020-004 | Planned | Recognize whitespace-only header/body separators when enabled. | Spaces/tabs/mixed fixtures. |
 | ROB-020-005 | Planned | Recover missing header/body separator without losing the first body line. | Plain and multipart part fixtures. |
@@ -2529,6 +2529,211 @@ separators (`ROB-020-005`), invalid names (`ROB-020-006`), raw replay
 delimiter (`--B` + long white space + `: value`) can still be taken for a
 headerless part by the existing empty-header check; that is unchanged here and
 tracked with #29 (`ROB-060-007` to `ROB-060-009`).
+
+#### ROB-020-002 — orphan continuation lines (Review)
+
+Status: implemented by Claude for
+[issue #20](https://github.com/saeroun-ai/emlkit/issues/20) within the scope
+Codex reviewed; awaiting Codex's independent review and QA. Claude ran no Go
+build, test, fuzz, vet or benchmark and claims no result; nothing here is Done
+until that verification. Only this item changed status.
+
+**Scope.** A continuation line belongs to the logical candidate before it, so
+it is an orphan exactly when that candidate is damaged — when the rules a block
+has always been read with make no field of it, judged on the whole candidate as
+they always were: no colon or semicolon anywhere in it; a name (before the first
+colon, or the first semicolon when there is no colon) holding white space, NUL,
+a control or 8-bit byte, or its first line's ending because the only colon is on
+a continuation line (so `X-Test; value` + ` folded: value` qualifies: the colon
+wins, as before, and no new semicolon interpretation is made); or an empty name.
+Such a candidate with **at least one continuation line read whole** is kept,
+damaged line included, as an orphan record, and the block is read on. The
+damaged line is kept because it is what makes the lines orphans and what keeps
+them from continuing the field before them when written back. Before, every
+such block failed ("malformed MIME header line/key": no root entity; the part
+an error, the sibling reached by retrying), or an empty name lost the lines
+silently. Unchanged: valid folding; a field the semicolon fallback accepts
+(`X-Bad; value` + ` orphan` stays `X-Bad: value orphan`); a `\r` that is content
+of a valid field (`ROB-010-002`: `Subject: before\r: value\r orphan` stays one
+Subject); a damaged line with no continuation (empty name skipped, others the
+same error) — `ROB-020-003` and `ROB-020-006` still own those, and nothing here
+gives a damaged line a name, key or value. A blank line followed by an indented
+line is still the body.
+
+**Settling a `\r`.** A damaged line whose last line ends with a bare `\r` before
+a name byte: if the next line is its content (`ROB-010-002`) and brings a whole
+continuation line, the whole is a record. An empty name is held and read on
+past as it always was (baseline already read and skipped its joined lines and
+read a following field as a field). A colonless or invalid line was refused at
+its `\r` with the next line unread, and still is unless `settleCR` proves a
+record: the next line does not begin `1*name-byte *WSP ":"`, and it (or a line
+a further content `\r` joins to it) ends and is followed by SP/HTAB. Only then
+are those bytes read, as the record's, and charged once. Otherwise the same
+error as before is returned and every byte after the `\r` — a field like
+`Next: value` included — is in the reader exactly as at 5b7086c. (QA of the
+first implementation found it read and dropped such a field, 72 of 144
+bare-CR observations; a later 16-byte peek window fixed that but left
+records longer than 16 bytes unrecovered, which review rejected.)
+
+*Proof window.* Bounded by the budgets, not by any buffer: the joined physical
+line's content (each content `\r` included, line endings excluded) by
+`MaxLineBytes − damaged line content − 1`; all joined bytes with their line
+endings by what `MaxFieldBytes`, `MaxBytes` and the shared byte budget have
+left; the one byte proving the continuation by none. With none of the four in
+force (`ReadHeader`, `Read`'s own header reader), 64 KiB (`crLegacyCap`, the
+parse defaults for a field and a line). A proof that does not fit is no proof:
+the old error, not a budget refusal; a record the proof admits is then read as
+any field and a budget its continuation lines overflow refuses the block
+(`TestReadHeader_orphanCRBudgets` pins both sides). The shared field count is
+asked first; a spent count refuses before anything is looked at — new
+precedence over the old malformed error, as for any line after an unsettled
+`\r` (`ROB-010-002`). In a part's header, a whole delimiter line of the parent
+(dash-boundary, optional `--`, white space, a line ending or the end of the
+input) beginning after the `\r` or after any `\r`/`\n` among the looked-at bytes
+is no record: the old error, the delimiter left for retry. A line that only
+begins like one (`--Bx…`, `--B` + spaces + other bytes) joins as any line.
+
+*Looking and giving back.* Bytes are peeked, one more than held at a time,
+while they fit in the reader's buffer; past it they are taken out, exactly as
+many as are looked at, so a failure or `io.EOF` is met at the same byte for
+every buffer and chunking. A record's taken-out bytes become the scanner's
+replay (read first by `nextChunk`, which now handles line endings in it, with
+`hasContinuationLine` and `atBlockEnd` looking at it first through `vpeek`; a
+`\r` it ends with is decided by the reader's next byte). Otherwise they are
+given back before the error: a part's to its `MultipartReader`
+(`restore`: one flat `pre` over the sticky source, subtracted in `offset` and
+`windowAt`; the buffered reader keeps its pointer and size); any other reader
+by `restoreReader`: its buffered bytes are moved after them, a copy of the
+reader (its buffer then empty, its source and any undelivered failure kept)
+becomes the source of a new reader of those bytes and that copy, installed in
+place, so no buffer is shared and nothing reads itself. **The reader's buffer
+grows**: at least doubled and at least to hold what was given back. A restore
+happens only for a proof that looked past the whole buffer, so each one doubles
+it, a proof that fits needs none, and the copies a reader accumulates are as
+many as its doublings — logarithmic in the longest proof, independent of how
+many headers are read (300 restores pinned) — and their buffers sum to less
+than the final one. `Size()` is observable and increases only so. `Read` and
+`Parse`'s own root reader is discarded on that error. A read failure other than
+`io.EOF` met before the proof decides is returned as itself after what was
+taken out is given back; a failure the source had not delivered stays in the
+copy. Source calls may come sooner than before; remainders and results do not
+change.
+
+**Failures.** A failure other than `io.EOF` that kept a damaged line's
+continuation from being looked at (the look past it, or a cut continuation or
+settling line) is returned as itself, identical, instead of the damaged line's
+error; only whole lines are kept, so a record left without a whole continuation
+is dropped. `io.EOF` keeps an unterminated last line. Nothing is read after an
+observed failure. A source failing with `bufio.ErrBufferFull` is that source's
+failure (subprocess-deadline probe).
+
+**Representation and cost.** `textproto.OrphanContinuation` (`Bytes` — fresh
+copy, `Location` in the block on `LineEndings`' terms, `Lines` ≥ 2; zero value
+reports nothing) and `Header.OrphanContinuations` (fresh slice, reading
+order). Internally an immutable `orphanRecord` (exact bytes, block offset,
+lines, `after` = fields read before it; no damage class or other speculative
+state for `ROB-020-003`/`006` is kept). The 001 capture is not used: a candidate is
+known to be damaged only once read whole, and capturing every candidate would
+copy every healthy field. Instead the scanner notes each kept physical line's
+ending (CRLF, LF, CR or none) in a 16-entry array in the per-block scan, reused
+per candidate (a longer candidate grows one overflow slice, reused by the
+block), and a damaged candidate's exact bytes are rebuilt from its kept lines —
+whose content is the input's and in which every `"\r\n"` is a line ending —
+after the candidate was read and charged. Healthy path: one stored byte per
+line, no allocation for candidates of up to 16 lines, and `headerField` gains a
+read-order `seq` (56 → 64 bytes, same size class). Retained: at most the bytes
+the budgets admitted per record. Transient: one exact-size allocation per
+damaged candidate (and one per CR-held damaged line, whether or not it becomes
+a record).
+
+**Budgets.** A record is one candidate: shared count preflight at its first
+byte, field counts charged once, every byte charged once to line, field, block
+and shared budgets; a refused block keeps no record, prefix or field.
+
+**Serialization and mutation.** `Copy` and every mutation keep the records;
+`HeaderFromMap` does not. `WriteHeader` (hence `CreateWriter`, `CreatePart`,
+`Entity.WriteTo`, `NewMultipart`) writes each record before the first field
+read after it that the header still has (by `seq`), after fields added since,
+or at the end; deleting a neighbour never moves a record among the fields read
+with it nor drops it. Bytes as read; a last line without an ending gets `\r\n`,
+one ended by a bare `\r` gets `\n` (evidence unchanged). A record begins with
+its damaged line (never white space), so it can never continue the field
+written before it, and reparsing gives the written records and the same fields.
+
+**Parts — reviewed dependency on `ROB-020-005`.** Reading on past the damage
+must not read the parent's delimiter as a header line, or the old retry path's
+sibling would be lost (baseline fixture `part-missing-separator`). So the 001
+delimiter guard (`parentDelimiter`/`holdDelimiter`) also runs in a part's
+header after a recovered record, unchanged: only a proved delimiter ends the
+header (framing `MaxLineBytes`, no header budget charged for it), false or long
+candidates are replayed a buffer at a time and charged once, no line budget
+keeps the one-buffer framing refusal. `Part.HeaderSeparatorMissing` and
+`header.missing_body_separator` now have this second narrow producer. General
+missing-separator recovery stays `ROB-020-005`'s (Planned), and the no-prefix
+padded-first-field behavior stays #29's.
+
+**Parse policy** (`orphan.go`): one `header.orphan_continuation` per block, over
+its first record, ordered by offset with `input.bom`, the prefix and the
+line-ending notes; Recovered under Tolerant/Forensic; Strict records
+InvalidMetadata and refuses the entity locally on 001's terms (first refusing
+note by offset, FatalError copy kept past `MaxDiagnosticCount`, Content-Type
+not interpreted, raw body, no session stop, `NextPart` continues, `Walk` ends
+at the refused entity). Sink stops, budgets, cancellation and no-progress keep
+their precedence. Every Compatibility value is the same; no engine parity is
+claimed (#17).
+
+**Tests added (not run by Claude).** `textproto/orphan_test.go`: case table
+over every delivery and buffer for every damaged head, colon-only-in-continuation,
+whitespace-only continuation, indented metadata, NUL/8-bit/control bytes, EOF,
+LF/CR/mixed endings, CR content in damaged lines and records, BOM, prefix, several
+records, and the unchanged cases (folding, semicolon, the CR baseline, damaged
+lines alone, blank-then-indented); lookup isolation; view, ownership and every
+mutation; writer order through every mutation, byte-exact round trip, terminators,
+reparse stability and write failures at every byte; budget edges and shared
+charges; every-cut ordinary failures and EOF (sticky/one-shot, with/without data,
+bytes and error); unsettled-CR failures; multipart first/middle/last parts,
+missing separators with every line ending, false/padded candidates, CR-held
+damaged lines before a delimiter; long padding with exactly spent header budgets
+and no-line-budget refusal; every-cut multipart failures; a deadline subprocess
+for `bufio.ErrBufferFull`; a within-build folded-versus-flat healthy allocation
+comparison with every measured parse checked (not a comparison with the previous
+commit); record checks in
+`FuzzReadHeader_lineEndings`. `framing_orphan_test.go`: root fixtures under every
+profile, compatibility and delivery with exact diagnostics; legacy entry points;
+unchanged inputs; indented metadata; middle child (NextPart/Walk/Strict); delimiter
+recovery; nested; mbox offsets; Strict diagnostic cap; sinks; budgets and input
+cap sweep; shared count; every-cut input errors; cancellation; no-progress;
+writers; `FuzzParse_orphanContinuation`. `mail/reader_orphan_test.go`.
+`refusing` in `framing_firstline_test.go` now includes the new code.
+Bare-CR tests (added after QA, not run by Claude):
+`TestReadHeader_orphanCRLeavesNextUnread` (a following field, invalid name,
+joined line then field, LF/CR/EOF, >buffer field, name, joined line and
+content-CR chain followed by a field, a long joined line at the end of the
+input, a delimiter-shaped line: the old error and every byte after the `\r` in
+the reader, every delivery and buffer), `TestReadHeader_orphanCRLongRecord`
+(4096- and 5000-byte joined lines, an invalid-name head, a 6000-byte content-CR
+chain, a bare-CR continuation, 8-bit/NUL content, under `ReadHeader` and finite
+budgets, every delivery and buffer), `TestReadHeader_orphanCRBudgets` (line,
+field, block and shared rooms at the edge and one less, the proof that does
+not fit versus a record a budget then refuses, `MaxInt64`, spent shared count
+before any look, nothing charged for the look, the 64 KiB legacy cap and one
+past), `TestReadHeader_orphanCRRestoreReader` (300 restores on one caller
+reader with the buffer size fixed after the first, a pending one-shot or sticky
+failure kept after the given-back bytes, failures inside the look returned as
+themselves with what was looked at given back), `TestMultipartReader_orphanCRLong`
+(long record, false delimiter-like prefix, padding then non-padding, real
+opening/closing delimiters right after the `\r` and padded past the buffer, a
+long field: retry reaches the sibling; a hundred given-back parts at their
+offsets with the reader's own buffer), `TestReadHeader_orphanCRLookFailure`.
+`genTotalFixture` (`limit_header_total_test.go`, `FuzzParse_totalHeaders`) no
+longer folds its empty-name lines: a folded empty name is now an orphan record
+that records a diagnostic, outside the valid trees that fixture's exact oracle
+models (its zero-byte seed tail produced one); records under the totals are
+pinned in `framing_orphan_test.go` instead.
+
+**Not done here.** Damaged lines without continuation (`ROB-020-003`,
+`ROB-020-006`), whitespace separators (`ROB-020-004`), general missing
+separators (`ROB-020-005`), whole raw replay (`ROB-020-007`, #41), #17, #29.
 
 ### ROB-030 — RFC 2047 and unstructured text
 

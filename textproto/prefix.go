@@ -92,9 +92,10 @@ import (
 // refused as the multipart reader refuses any such framing line, with its own
 // error wrapping bufio.ErrBufferFull, which ends the iteration: such a line is
 // decided only within that buffer. A boundary that holds a '\r' or '\n' is
-// never held. Header blocks without a malformed prefix, and the message's own
-// header, are not looked at this way; recovering a missing separator in
-// general is ROB-020-005's.
+// never held. A part's header in which an orphan record was recovered is
+// looked at the same way after it (ROB-020-002; see orphan.go). Other header
+// blocks, and the message's own header, are not looked at this way;
+// recovering a missing separator in general is ROB-020-005's.
 
 // A MalformedPrefix is the malformed prefix a header block began with: the
 // lines at its start that began with white space, which no field began before,
@@ -181,24 +182,7 @@ func (p *malformedPrefix) writeTo(w io.Writer) error {
 	if p == nil {
 		return nil
 	}
-	if _, err := w.Write(p.b); err != nil {
-		return err
-	}
-	b := p.b
-	var term string
-	switch {
-	case len(b) == 0:
-	case b[len(b)-1] == '\n':
-	case b[len(b)-1] == '\r':
-		term = "\n"
-	default:
-		term = "\r\n"
-	}
-	if term == "" {
-		return nil
-	}
-	_, err := io.WriteString(w, term)
-	return err
+	return writeRawLines(w, p.b)
 }
 
 // keep captures b, bytes just read and charged, when a malformed prefix may

@@ -42,7 +42,9 @@ const (
 	// (ROB-010-002). A header block that begins with a byte order mark is
 	// refused for that entity too (ROB-010-003), and so is one that begins
 	// with a malformed prefix — lines beginning with white space before any
-	// field — whose prefix and fields are still kept (ROB-020-001).
+	// field — whose prefix and fields are still kept (ROB-020-001), and so is
+	// one holding an orphan record — a damaged line and the continuation
+	// lines after it — whose records and fields are still kept (ROB-020-002).
 	ProfileStrict
 
 	// ProfileForensic includes every tolerant result and diagnostic, and

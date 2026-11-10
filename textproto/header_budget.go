@@ -90,6 +90,24 @@ func (b *HeaderBudget) Refusal() *HeaderLimitError {
 	return b.refusal
 }
 
+// roomBytes reports how many wire bytes the budget still admits, and whether
+// it bounds bytes at all: false for a nil budget and one whose byte budget is
+// off. A budget that has refused admits none. Nothing is charged.
+func (b *HeaderBudget) roomBytes() (int64, bool) {
+	if b == nil {
+		return 0, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.refusal != nil {
+		return 0, true
+	}
+	if b.maxBytes <= 0 {
+		return 0, false
+	}
+	return b.maxBytes - b.usedBytes, true
+}
+
 // The charges below are made by a header scanner for a block that begins at
 // base in its reader's input. Each returns nil when the charge is admitted, and
 // otherwise the budget's one refusal: the existing one, or a new one built from

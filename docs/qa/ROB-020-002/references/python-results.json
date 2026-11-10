@@ -1,0 +1,1896 @@
+[
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "valid-fold",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Good",
+            "one\r\n two"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "valid-fold",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Good",
+            "one\r\n two"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "valid-fold",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Good",
+            "one\r\n two"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "colonless-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken line\r\n orphan\r\n\tmore\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "colonless-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken line\r\n orphan\r\n\tmore\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "colonless-cont",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "colonless-alone",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken line\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "colonless-alone",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken line\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "colonless-alone",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "semicolon-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "X-Bad; value\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "semicolon-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "X-Bad; value\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "semicolon-cont",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "space-key-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "Bad Name: value\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "space-key-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "Bad Name: value\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "space-key-cont",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "space-key-alone",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "Bad Name: value\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "space-key-alone",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "Bad Name: value\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "space-key-alone",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "nul-key-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "X\u0000: value\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "nul-key-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "X\u0000: value\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "nul-key-cont",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "eightbit-key-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "X\ufffd: value\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "eightbit-key-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "X\ufffd: value\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "eightbit-key-cont",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "empty-key-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "empty-key-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "empty-key-cont",
+    "parts": [],
+    "error": "InvalidHeaderDefect: Missing header name."
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "empty-key-alone",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name."
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "empty-key-alone",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name."
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "empty-key-alone",
+    "parts": [],
+    "error": "InvalidHeaderDefect: Missing header name."
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "empty-semicolon-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "; value\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "empty-semicolon-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "; value\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "empty-semicolon-cont",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "empty-key-first",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "empty-key-first",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "kept"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "empty-key-first",
+    "parts": [],
+    "error": "InvalidHeaderDefect: Missing header name."
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "blank-then-indented-body",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [],
+        "body": " orphan\r\nX-Keep: body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "blank-then-indented-body",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [],
+        "body": " orphan\r\nX-Keep: body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "blank-then-indented-body",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [],
+        "body": " orphan\r\nX-Keep: body"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "first-prefix-control",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "first-prefix-control",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "first-prefix-control",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "prefix-then-orphan",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  leading\r\n",
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "prefix-then-orphan",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [
+          "FirstHeaderLineIsContinuationDefect:  leading\r\n",
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "prefix-then-orphan",
+    "parts": [],
+    "error": "FirstHeaderLineIsContinuationDefect:  leading\r\n"
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "multiple-damaged-runs",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Middle",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: ",
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan1\r\n"
+        ],
+        "body": "broken\r\n orphan2\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "multiple-damaged-runs",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Middle",
+            "intact"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: ",
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan1\r\n"
+        ],
+        "body": "broken\r\n orphan2\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "multiple-damaged-runs",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "indented-cte",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n Content-Transfer-Encoding: base64\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "indented-cte",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n Content-Transfer-Encoding: base64\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "indented-cte",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "white-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n \t\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "white-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n \t\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "white-cont",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "orphan-eof",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n orphan"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "orphan-eof",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n orphan"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "orphan-eof",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "empty-orphan-eof",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan"
+        ],
+        "body": ""
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "empty-orphan-eof",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan"
+        ],
+        "body": ""
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "empty-orphan-eof",
+    "parts": [],
+    "error": "InvalidHeaderDefect: Missing header name."
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "lf",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\n orphan\nX-Keep: after\n\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "lf",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\n orphan\nX-Keep: after\n\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "lf",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "cr",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r"
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "cr",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r"
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "cr",
+    "parts": [],
+    "error": "InvalidHeaderDefect: Missing header name."
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "internal-cr",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Good",
+            "value"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "internal-cr",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Good",
+            "value"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "internal-cr",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "utf8-bom",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "\ufffd\ufffd\ufffdSubject: before\r\nbroken\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "utf8-bom",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "\ufffd\ufffd\ufffdSubject: before\r\nbroken\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "utf8-bom",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "part-colonless",
+    "parts": [
+      {
+        "content_type": "multipart/mixed",
+        "headers": [
+          [
+            "Content-Type",
+            "multipart/mixed; boundary=B"
+          ]
+        ],
+        "defects": [],
+        "body": null
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [],
+        "body": "ONE"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "last"
+          ]
+        ],
+        "defects": [],
+        "body": "THREE"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "part-colonless",
+    "parts": [
+      {
+        "content_type": "multipart/mixed",
+        "headers": [
+          [
+            "Content-Type",
+            "multipart/mixed; boundary=B"
+          ]
+        ],
+        "defects": [],
+        "body": null
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [],
+        "body": "ONE"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n orphan\r\nX-Keep: after\r\n\r\nBODY"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "last"
+          ]
+        ],
+        "defects": [],
+        "body": "THREE"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "part-colonless",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "part-empty",
+    "parts": [
+      {
+        "content_type": "multipart/mixed",
+        "headers": [
+          [
+            "Content-Type",
+            "multipart/mixed; boundary=B"
+          ]
+        ],
+        "defects": [],
+        "body": null
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [],
+        "body": "ONE"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "BODY"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "last"
+          ]
+        ],
+        "defects": [],
+        "body": "THREE"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "part-empty",
+    "parts": [
+      {
+        "content_type": "multipart/mixed",
+        "headers": [
+          [
+            "Content-Type",
+            "multipart/mixed; boundary=B"
+          ]
+        ],
+        "defects": [],
+        "body": null
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [],
+        "body": "ONE"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  orphan\r\n"
+        ],
+        "body": "BODY"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "last"
+          ]
+        ],
+        "defects": [],
+        "body": "THREE"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "part-empty",
+    "parts": [],
+    "error": "InvalidHeaderDefect: Missing header name."
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "part-missing-separator",
+    "parts": [
+      {
+        "content_type": "multipart/mixed",
+        "headers": [
+          [
+            "Content-Type",
+            "multipart/mixed; boundary=B"
+          ]
+        ],
+        "defects": [],
+        "body": null
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [],
+        "body": "ONE"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "middle"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n orphan"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "last"
+          ]
+        ],
+        "defects": [],
+        "body": "THREE"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "part-missing-separator",
+    "parts": [
+      {
+        "content_type": "multipart/mixed",
+        "headers": [
+          [
+            "Content-Type",
+            "multipart/mixed; boundary=B"
+          ]
+        ],
+        "defects": [],
+        "body": null
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [],
+        "defects": [],
+        "body": "ONE"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "middle"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n orphan"
+      },
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "last"
+          ]
+        ],
+        "defects": [],
+        "body": "THREE"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "part-missing-separator",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "colonless-cont-colon",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n orphan: value\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "colonless-cont-colon",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "broken\r\n orphan: value\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "colonless-cont-colon",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "semicolon-cont-colon",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "X-Test; value\r\n folded: value\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "semicolon-cont-colon",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "X-Test; value\r\n folded: value\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "semicolon-cont-colon",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "empty-cont-colon",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  folded: value\r\n"
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "empty-cont-colon",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ],
+          [
+            "X-Keep",
+            "after"
+          ]
+        ],
+        "defects": [
+          "InvalidHeaderDefect: Missing header name.",
+          "FirstHeaderLineIsContinuationDefect:  folded: value\r\n"
+        ],
+        "body": "BODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "empty-cont-colon",
+    "parts": [],
+    "error": "InvalidHeaderDefect: Missing header name."
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "default",
+    "fixture": "bad-semicolon-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "Bad key; value\r\n folded\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "compat32",
+    "fixture": "bad-semicolon-cont",
+    "parts": [
+      {
+        "content_type": "text/plain",
+        "headers": [
+          [
+            "Subject",
+            "before"
+          ]
+        ],
+        "defects": [
+          "MissingHeaderBodySeparatorDefect: "
+        ],
+        "body": "Bad key; value\r\n folded\r\nX-Keep: after\r\n\r\nBODY"
+      }
+    ],
+    "error": null
+  },
+  {
+    "engine": "python",
+    "version": "3.14.10 (main, Oct 26 2026, 00:00:00) [GCC 16.2.1 20260819 (Red Hat 16.2.1-2)]",
+    "mode": "strict",
+    "fixture": "bad-semicolon-cont",
+    "parts": [],
+    "error": "MissingHeaderBodySeparatorDefect: "
+  }
+]

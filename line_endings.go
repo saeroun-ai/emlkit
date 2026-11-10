@@ -118,7 +118,8 @@ const (
 // offset 0 of the block, comes before every line-ending note, and under
 // ProfileStrict its refusal is the one the entity is returned with; see
 // byteOrderMarkNote. A malformed prefix and a part's missing separator after
-// one (firstline.go) are noted with them, in the same order of offsets.
+// one (firstline.go), and orphan records (orphan.go), are noted with them, in
+// the same order of offsets.
 func (c parseContext) headerLineEndings(h *textproto.Header) error {
 	s := c.session
 	if s == nil {
@@ -138,6 +139,10 @@ func (c parseContext) headerLineEndings(h *textproto.Header) error {
 	// a delimiter line ended after one ends after every line of the block; see
 	// firstline.go.
 	notes = c.malformedPrefixNotes(h, strict, notes)
+
+	// Orphan records lie among the fields, at the offset of the first; see
+	// orphan.go.
+	notes = c.orphanContinuationNotes(h, strict, notes)
 
 	// An unknown LineEndings — a block that began with a UTF-16 or UTF-32
 	// mark was not read — reports nothing below.

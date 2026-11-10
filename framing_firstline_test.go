@@ -99,7 +99,7 @@ func (c firstLineCase) tolerant() []lineEndingFacts {
 // refusing reports whether ProfileStrict refuses an entity for code.
 func refusing(code Code) bool {
 	switch code {
-	case CodeHeaderFirstLineContinuation, CodeHeaderMissingBodySeparator, CodeHeaderBareCR, CodeHeaderTruncatedLine, CodeInputBOM:
+	case CodeHeaderFirstLineContinuation, CodeHeaderOrphanContinuation, CodeHeaderMissingBodySeparator, CodeHeaderBareCR, CodeHeaderTruncatedLine, CodeInputBOM:
 		return true
 	}
 	return false

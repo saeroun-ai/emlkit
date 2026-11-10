@@ -129,7 +129,10 @@ func createWriter(w io.Writer, header *Header) (*Writer, error) {
 // see textproto.Header.MalformedPrefix) keeps it in the copy written: it is
 // written right after any UTF-8 mark and before every field, the added
 // MIME-Version included, on the terms of textproto.WriteHeader. It declares
-// nothing, so it decides nothing about what is written.
+// nothing, so it decides nothing about what is written. Orphan records
+// (ROB-020-002; see textproto.Header.OrphanContinuations) are kept the same
+// way and written in their place among the fields read with them, after the
+// added MIME-Version; they declare nothing either.
 func CreateWriter(w io.Writer, header Header) (*Writer, error) {
 	// Ensure that modifications are invisible to the caller
 	header = header.Copy()

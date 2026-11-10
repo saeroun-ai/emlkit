@@ -348,12 +348,18 @@ func genTotalFixture(seed []byte, eol string) totalFixture {
 				var h strings.Builder
 				for range 1 + int(next()%3) {
 					flag := next()
-					if flag%5 == 0 {
+					empty := flag%5 == 0
+					if empty {
 						h.WriteString(": empty name")
 					} else {
 						fmt.Fprintf(&h, "X-F%d: v", flag%7)
 					}
-					if flag%3 == 0 {
+					// An empty name with a continuation line is an orphan record
+					// (ROB-020-002), which records header.orphan_continuation:
+					// not part of the valid trees this fixture's exact oracle
+					// models. Only fields are folded; records under the totals
+					// are pinned in framing_orphan_test.go.
+					if flag%3 == 0 && !empty {
 						h.WriteString(eol + " folded")
 					}
 					h.WriteString(eol)
