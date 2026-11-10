@@ -799,6 +799,15 @@ func (d *tolerantUU) endLine() {
 	}
 	n := int(line[0]-' ') & 63
 	data := line[1:]
+	// A line may be shorter than its length character says, because trailing
+	// spaces were stripped in transit; it is then decoded as if padded with
+	// them. A line that holds less than half of what its length needs is not
+	// that: only the bytes its characters hold are decoded, so that a length
+	// character alone cannot be made to stand for 45 bytes.
+	if need := (n + 2) / 3 * 4; len(data)*2 < need {
+		d.notes.note(noteUUInvalid, d.lineStart)
+		n = min(n, len(data)*3/4)
+	}
 	at := func(i int) byte {
 		if i < len(data) {
 			if c := data[i]; c < ' ' || c > '`' {

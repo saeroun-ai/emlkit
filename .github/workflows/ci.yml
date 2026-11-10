@@ -1,0 +1,72 @@
+# Required checks for emlkit (issue #14, ROB-130-008).
+#
+# Every Go step runs under a memory limit, two CPUs and a deadline: parser
+# tests once took a host down. Locally the same is done by
+# scripts/qa-bounded.py; a hosted runner has no systemd user manager for it,
+# so the limits are set through the Go runtime and the step timeouts here.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GOMAXPROCS: "2"
+  GOMEMLIMIT: 1GiB
+  GOFLAGS: -p=2
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: build
+        run: go build ./...
+      - name: vet
+        # composites and stdmethods flag long-standing API shapes
+        # (net/mail literals, Entity.WriteTo) that are not defects.
+        run: go vet -composites=false -stdmethods=false ./...
+      - name: test
+        timeout-minutes: 10
+        run: go test -count=1 -timeout 480s ./...
+
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: race
+        timeout-minutes: 35
+        run: go test -race -count=1 -timeout 1800s ./...
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pkg: ".", target: FuzzParse_heal }
+          - { pkg: ".", target: FuzzTolerantDecoders }
+          - { pkg: "./textproto", target: FuzzReadHeader_lineEndings }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: fuzz ${{ matrix.target }}
+        timeout-minutes: 5
+        run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 30s -parallel 2 ${{ matrix.pkg }}

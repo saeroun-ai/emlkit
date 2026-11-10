@@ -3492,14 +3492,14 @@ spinning; cycles that never end run only in the subprocess probes.
 
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
-| ROB-130-001 | Planned | Add native Go fuzz targets for raw headers, MIME parameters, multipart, Base64, QP, charset, and full message walk. | Seed corpus runs without panic/hang. |
-| ROB-130-002 | Planned | Define fuzz invariants: progress, chunk invariance, bounded resources, stable diagnostics, raw preservation. | Automated property assertions. |
+| ROB-130-001 | Review | Add native Go fuzz targets for raw headers, MIME parameters, multipart, Base64, QP, charset, and full message walk. Partial: FuzzParse_heal (whole message walk under every profile) and FuzzTolerantDecoders (Base64, quoted-printable, uuencode) added beside the existing header and line-ending targets; MIME parameter and charset targets are open. | Seed corpus runs without panic/hang. |
+| ROB-130-002 | Review | Define fuzz invariants: progress, chunk invariance, bounded resources, stable diagnostics, raw preservation. Partial: the new targets assert no panic, termination, chunk invariance of the tree, diagnostics and completion, bounded decoder output and consistent completion counters. | Automated property assertions. |
 | ROB-130-003 | Planned | Maintain sanitized conformant, malformed, truncated, adversarial, and provider-generated corpora. | Fixture manifest with provenance and expected diagnostics. |
 | ROB-130-004 | Planned | Build differential harnesses for Angus, Python `email`, MimeKit, and optionally Mime4j. | Machine-readable result comparison. |
 | ROB-130-005 | Planned | Record intentional parser differences with rationale instead of forcing equality. | Reviewed compatibility exceptions file. |
 | ROB-130-006 | Planned | Add parser/decoder benchmarks for small mail, huge attachments, deep/wide MIME, and near-boundary attacks. | Baselines and regression thresholds. |
 | ROB-130-007 | Planned | Add long-running randomized soak tests with leak and memory ceilings. | Repeatable seeded job. |
-| ROB-130-008 | Planned | Run `go test`, race tests, fuzz smoke tests, formatting, vet/static analysis, and benchmarks in CI. | Required green checks. |
+| ROB-130-008 | Review | Run `go test`, race tests, fuzz smoke tests, formatting, vet/static analysis, and benchmarks in CI. A workflow is written (.github/workflows/ci.yml: gofmt, build, vet, test, race, fuzz smoke) and its commands pass locally; it has not run on GitHub yet. | Required green checks. |
 | ROB-130-009 | Done | Stabilize comment-parser cumulative-allocation regression checks without weakening their ability to detect allocation growth ([issue #59](https://github.com/saeroun-ai/emlkit/issues/59)). | Bounded repeated checks, finite deliberate-allocation positive controls, original accessor results and scanner no-allocation assertions, full/race/386 verification; no threshold-only relaxation or retry-until-pass. |
 | ROB-130-010 | Done | Stabilize the shared-header accepted-path allocation regression check under race without hiding per-header allocation growth; see issue #61 and the section below. | Finite baseline/current reproduction, checked parse results, bounded positive allocation controls, repeatability and full unit/race/386/build review. |
 

@@ -21,7 +21,7 @@ gofmt -l .                                                 # list unformatted fi
 gofmt -w .                                                 # format in place
 ```
 
-This project has no CI configured — verification is manual. Before committing, run `go build ./...`, `go test ./...`, and `gofmt -l .` (its output must be empty: `test -z $(gofmt -l .)`).
+A CI workflow exists in `.github/workflows/ci.yml` (gofmt, build, vet, test, race, fuzz smoke) but has never run on GitHub as of 2026-11-11, so verification is still manual. Before committing, run `go build ./...`, `go test ./...`, and `gofmt -l .` (its output must be empty: `test -z $(gofmt -l .)`). `go vet` is clean only with `-composites=false -stdmethods=false`.
 
 ## Host-safe verification
 
@@ -77,6 +77,9 @@ Models a message as **one-or-more text parts + zero-or-more attachments**, hidin
 
 ### `charset/` — optional charset plugin
 Importing `_ "github.com/saeroun-ai/emlkit/charset"` (side-effect only) sets `message.CharsetReader` to decode ~all common charsets via `golang.org/x/text`. Adds ~1 MiB to binaries, so it's opt-in. Without it, non-UTF-8 charsets produce `IsUnknownCharset` errors. The package also carries a quirks table for charsets `ianaindex` doesn't handle.
+
+### Healing under `Parse`
+`Parse` (every profile but `ProfileStrict`) heals damaged mail and reports each repair as a `Diagnostic`; `Read`, `ReadWithOptions`, `New` and `ProfileStrict` keep the earlier strict behavior, so both paths must be kept working. What is healed, and the policy for each case, is written per area in `docs/robustness-notes/` — read the relevant note before changing header recovery (`textproto/recover.go`, `header_recover.go`), multipart recovery (`multipart_heal.go`), transfer decoding (`cte_tolerant.go`), RFC 2047 (`rfc2047.go`), MIME parameters (`mediatype_tolerant.go`, `rfc2231.go`), embedded messages (`embedded.go`), completion (`completion.go`) or the mail views (`mail/tree.go`, `mail/spool.go`, `mail/*_tolerant.go`). `docs/robustness-roadmap.md` is the ledger of items and their status; `docs/spam-adapter-contract.md` says what a consumer may rely on.
 
 ## Conventions specific to this codebase
 
