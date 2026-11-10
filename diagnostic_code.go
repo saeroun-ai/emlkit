@@ -279,6 +279,11 @@ const (
 	CodeMessageIDPartialList Code = "message_id.partial_list"
 	CodeReceivedInvalid      Code = "received.invalid"
 	CodeListHeaderInvalid    Code = "list_header.invalid"
+
+	// CodeAuthResultsInvalid reports an Authentication-Results field, or one
+	// method result of it, that does not read as RFC 8601 writes it; what
+	// could be read is kept, with the raw value. See mail/authres.go.
+	CodeAuthResultsInvalid Code = "authentication_results.invalid"
 )
 
 // Nested and special entity codes.
