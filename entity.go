@@ -423,7 +423,10 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 						Cause:    warning,
 					})
 				} else {
-					body = converted
+					// A body that says it is UTF-8 is delivered as it is and
+					// watched for bytes that say otherwise; see
+					// charset_monitor.go.
+					body = ctx.watchUTF8(charset, converted)
 				}
 			}
 		}
