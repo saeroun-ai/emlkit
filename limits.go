@@ -3,6 +3,7 @@ package message
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // LimitDisabled turns a single budget off.
@@ -680,6 +681,9 @@ type resolvedConfig struct {
 
 	// walkEmbedded is ParseOptions.WalkEmbeddedMessages; see embedded.go.
 	walkEmbedded bool
+
+	// fallbackCharset is ParseOptions.FallbackCharset; see charset_monitor.go.
+	fallbackCharset string
 }
 
 // resolveConfig turns caller options into the configuration one parse runs
@@ -711,7 +715,7 @@ func resolveConfig(o ParseOptions) (resolvedConfig, ReadOptions, error) {
 	read := o.ReadOptions
 	read.MaxHeaderBytes = header
 
-	return resolvedConfig{profile: o.Profile, compat: o.Compatibility, limits: limits, mbox: o.RecognizeMboxEnvelope, walkEmbedded: o.WalkEmbeddedMessages}, read, nil
+	return resolvedConfig{profile: o.Profile, compat: o.Compatibility, limits: limits, mbox: o.RecognizeMboxEnvelope, walkEmbedded: o.WalkEmbeddedMessages, fallbackCharset: strings.TrimSpace(o.FallbackCharset)}, read, nil
 }
 
 // bridgeMaxHeaderBytes reconciles the two spellings of the header byte budget

@@ -1,6 +1,7 @@
 package message
 
 import (
+	"bytes"
 	"io"
 	"strings"
 	"unicode/utf8"
@@ -137,4 +138,121 @@ func (c parseContext) watchUTF8(charset string, r io.Reader) io.Reader {
 		return &utf8Monitor{r: r, ctx: c}
 	}
 	return r
+}
+
+// Fallback charset (ROB-080-007).
+//
+// Mail that declares no charset, or declares UTF-8 or US-ASCII and is neither,
+// is common wherever a legacy charset was the local default: EUC-KR,
+// Shift_JIS, windows-1252. The parser cannot know which, and does not guess.
+// A caller that knows where its mail comes from can say:
+// ParseOptions.FallbackCharset names the charset such a text body is decoded
+// with. It is used only on evidence — the beginning of the body holds bytes
+// that are not UTF-8 — and it is reported (charset.declaration_suspect, or
+// charset.missing for a body that declared none), so the choice is never
+// silent. A body that is valid UTF-8 as far as it was looked at is delivered
+// as it is.
+
+// charsetSniff is how many bytes of a body are looked at to decide.
+const charsetSniff = 4096
+
+const (
+	fallbackDeclaredAction = "decoded the body with ParseOptions.FallbackCharset instead of the declared charset"
+	fallbackMissingAction  = "decoded the body with ParseOptions.FallbackCharset"
+)
+
+// sniffFallback returns the reader of a text body that declares the charset
+// declared — empty, UTF-8 or US-ASCII — for a parse that named a fallback
+// charset: r itself, watched as usual, when the body's first bytes are valid
+// UTF-8, and r decoded with the fallback when they are not. The decision
+// reads at most charsetSniff bytes ahead, on the first read of the body, and
+// nothing before it.
+func (c parseContext) sniffFallback(declared string, r io.Reader) io.Reader {
+	fb := c.session.fallbackCharset()
+	if fb == "" || strings.EqualFold(fb, "utf-8") || strings.EqualFold(fb, "us-ascii") {
+		return c.watchUTF8(declared, r)
+	}
+	return &fallbackReader{ctx: c, declared: declared, fallback: fb, src: r}
+}
+
+// A fallbackReader decides, at its first read, whether its body is read as it
+// is or through the fallback charset's decoder.
+type fallbackReader struct {
+	ctx      parseContext
+	declared string
+	fallback string
+	src      io.Reader
+	r        io.Reader // set once decided
+}
+
+func (f *fallbackReader) Read(p []byte) (int, error) {
+	if f.r == nil {
+		f.decide()
+	}
+	return f.r.Read(p)
+}
+
+func (f *fallbackReader) decide() {
+	head := make([]byte, charsetSniff)
+	n, err := io.ReadFull(f.src, head)
+	head = head[:n]
+	var rest io.Reader = f.src
+	if err != nil {
+		// The body ended, or failed, within the look: what was read, then
+		// that end.
+		if err == io.ErrUnexpectedEOF {
+			err = io.EOF
+		}
+		rest = &endReader{err: err}
+	}
+	raw := io.MultiReader(bytes.NewReader(head), rest)
+
+	// A sequence the look cut at its end is not evidence either way.
+	probe := head
+	if err == nil {
+		for i := 0; i < utf8.UTFMax-1 && len(probe) > 0 && !utf8.Valid(probe); i++ {
+			probe = probe[:len(probe)-1]
+		}
+	}
+	if utf8.Valid(probe) {
+		f.r = f.ctx.watchUTF8(f.declared, raw)
+		return
+	}
+	decoded, derr := charsetReader(f.fallback, raw)
+	if derr != nil {
+		// No decoder for the fallback: the body stays as it is.
+		f.r = f.ctx.watchUTF8(f.declared, raw)
+		return
+	}
+	d := Diagnostic{
+		Code:     CodeCharsetDeclarationSuspect,
+		Severity: SeverityRecovered,
+		Message:  "a text body declared " + strconvQuote(f.declared) + " holds bytes that are not UTF-8",
+		Field:    "Content-Type",
+		Action:   fallbackDeclaredAction,
+	}
+	if f.declared == "" {
+		d.Code, d.Action = CodeCharsetMissing, fallbackMissingAction
+		d.Message = "a text body declares no charset and holds bytes that are not UTF-8"
+	}
+	f.ctx.recordBody(d)
+	f.r = decoded
+}
+
+// An endReader returns its error.
+type endReader struct{ err error }
+
+func (e *endReader) Read([]byte) (int, error) { return 0, e.err }
+
+func strconvQuote(s string) string {
+	return "\"" + strings.ReplaceAll(s, "\"", "'") + "\""
+}
+
+// fallbackCharset returns ParseOptions.FallbackCharset, empty for none and
+// for no session.
+func (s *ParseSession) fallbackCharset() string {
+	if s == nil {
+		return ""
+	}
+	return s.cfg.fallbackCharset
 }

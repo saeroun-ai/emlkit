@@ -89,6 +89,17 @@ type ParseOptions struct {
 	// off by default: an embedded message is then a leaf, as it always was,
 	// and Entity.EmbeddedMessage reads one on request. See embedded.go.
 	WalkEmbeddedMessages bool
+
+	// FallbackCharset names the charset a text body is decoded with when it
+	// declares none, or declares UTF-8 or US-ASCII, and its first bytes are
+	// not UTF-8: "euc-kr" for mail from where that was the default, say. It
+	// needs a CharsetReader that knows the charset, such as the charset
+	// package's. It is empty by default, and the parser then guesses nothing:
+	// such a body is delivered as it was read. Every use is recorded
+	// (charset.missing or charset.declaration_suspect, SeverityRecovered). A
+	// body whose first 4096 bytes are valid UTF-8 is never decoded with it.
+	// See charset_monitor.go.
+	FallbackCharset string
 }
 
 // Parse reads a message from r and returns the session collecting what the

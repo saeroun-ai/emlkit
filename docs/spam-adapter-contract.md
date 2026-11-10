@@ -10,6 +10,7 @@ do itself.
 session, root, err := message.Parse(r, &message.ParseOptions{
     // ProfileTolerant is the default: heal and report.
     WalkEmbeddedMessages: true, // only if forwarded mail should be looked into
+    FallbackCharset: "euc-kr",  // only if undeclared legacy text is expected
 })
 if root == nil {
     // No entity: the input failed or a parse-wide budget refused the header.

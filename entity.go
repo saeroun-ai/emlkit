@@ -427,8 +427,18 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 					// watched for bytes that say otherwise; see
 					// charset_monitor.go.
 					body = ctx.watchUTF8(charset, converted)
+					// A parse that named a fallback charset decodes a body
+					// declared UTF-8 or US-ASCII with it when its first bytes
+					// are neither (ROB-080-007).
+					if lc := strings.ToLower(charset); (lc == "utf-8" || lc == "us-ascii") && ctx.session.fallbackCharset() != "" {
+						body = ctx.sniffFallback(lc, converted)
+					}
 				}
 			}
+		} else if fatal == nil && local == nil && !wide && ctx.session.fallbackCharset() != "" &&
+			!(skipTextAttachmentDecoding && disposition.isAttachment()) {
+			// No charset declared: the same, on the same evidence.
+			body = ctx.sniffFallback("", leaf.countCharsetInput(body))
 		}
 	}
 
