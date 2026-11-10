@@ -1,0 +1,8 @@
+Content-Type: multipart/mixed; boundary=B
+
+--B
+Content-Type: message/rfc822
+Content-Transfer-Encoding: base64
+
+U3ViamVjdDogaW5uZXINCkNvbnRlbnQtVHlwZTogdGV4dC9wbGFpbg0KDQppbm5lciBib2R5
+--B--

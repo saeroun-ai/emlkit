@@ -1,0 +1,7 @@
+Content-Type: multipart/mixed; boundary="declared"
+
+--actual
+Content-Type: text/plain
+
+one
+--actual--

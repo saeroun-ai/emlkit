@@ -1,0 +1,13 @@
+Content-Type: multipart/digest; boundary=D
+
+--D
+
+Subject: first
+
+one
+--D
+
+Subject: second
+
+two
+--D--

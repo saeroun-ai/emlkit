@@ -1,0 +1,24 @@
+Subject: s
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mix"
+
+This is a multi-part message.
+--mix
+Content-Type: multipart/alternative; boundary="alt"
+
+--alt
+Content-Type: text/plain
+
+plain
+--alt
+Content-Type: text/html
+
+<p>html</p>
+--alt--
+--mix
+Content-Type: application/pdf; name="a.pdf"
+Content-Disposition: attachment; filename="a.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQ=
+--mix--

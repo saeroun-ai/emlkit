@@ -1,0 +1,332 @@
+{
+  "provenance": "Every fixture is synthetic, written for emlkit from the defect it names; none is derived from real mail.",
+  "fixtures": [
+    {
+      "name": "clean-single",
+      "description": "A conformant single-part message.",
+      "state": "complete",
+      "leaves": [
+        "[] text/plain 13"
+      ]
+    },
+    {
+      "name": "clean-multipart",
+      "description": "A conformant multipart/alternative inside multipart/mixed with an attachment.",
+      "state": "complete",
+      "leaves": [
+        "[0 0] text/plain 5",
+        "[0 1] text/html 11",
+        "[1] application/pdf 8"
+      ]
+    },
+    {
+      "name": "header-missing-separator",
+      "description": "The empty line between header and body is missing.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered header.missing_body_separator []"
+      ],
+      "leaves": [
+        "[] text/plain 61"
+      ]
+    },
+    {
+      "name": "header-colonless-line",
+      "description": "A line with no colon in the middle of the header.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered header.missing_colon []"
+      ],
+      "leaves": [
+        "[] text/plain 6"
+      ]
+    },
+    {
+      "name": "header-unindented-boundary",
+      "description": "The boundary parameter is on a continuation line that lost its indentation.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered header.unindented_continuation []"
+      ],
+      "leaves": [
+        "[0] text/plain 3"
+      ]
+    },
+    {
+      "name": "header-whitespace-separator",
+      "description": "Header and body are separated by a line of white space only.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered header.whitespace_body_separator []"
+      ],
+      "leaves": [
+        "[] text/plain 11"
+      ]
+    },
+    {
+      "name": "header-duplicate-content-type",
+      "description": "Two conflicting Content-Type fields.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered header.duplicate_singleton []"
+      ],
+      "leaves": [
+        "[] text/html 10"
+      ]
+    },
+    {
+      "name": "header-bare-lf",
+      "description": "Line endings are bare LF throughout.",
+      "state": "complete",
+      "diagnostics": [
+        "info header.bare_lf []",
+        "info multipart.bare_lf []"
+      ],
+      "leaves": [
+        "[0] text/plain 3"
+      ]
+    },
+    {
+      "name": "multipart-missing-close",
+      "description": "The closing delimiter is missing.",
+      "state": "incomplete",
+      "diagnostics": [
+        "incomplete multipart.close_not_found []"
+      ],
+      "leaves": [
+        "[0] text/plain 3",
+        "[1] text/html 5"
+      ]
+    },
+    {
+      "name": "multipart-truncated-close",
+      "description": "The closing delimiter is cut one byte short.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered multipart.close_truncated []"
+      ],
+      "leaves": [
+        "[0] text/plain 3"
+      ]
+    },
+    {
+      "name": "multipart-no-boundary-param",
+      "description": "multipart with no boundary parameter; the body uses one.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered multipart.boundary_inferred []"
+      ],
+      "leaves": [
+        "[0] text/plain 3",
+        "[1] text/html 3"
+      ]
+    },
+    {
+      "name": "multipart-boundary-mismatch",
+      "description": "The declared boundary appears nowhere; the body uses another.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered multipart.boundary_mismatch []"
+      ],
+      "leaves": [
+        "[0] text/plain 3"
+      ]
+    },
+    {
+      "name": "multipart-no-delimiter",
+      "description": "A multipart body with no delimiter line at all.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered multipart.start_not_found []"
+      ],
+      "leaves": [
+        "[0] text/plain 23"
+      ]
+    },
+    {
+      "name": "multipart-empty",
+      "description": "A multipart with an empty body.",
+      "state": "complete",
+      "diagnostics": [
+        "info multipart.empty []"
+      ]
+    },
+    {
+      "name": "multipart-part-without-separator",
+      "description": "A part whose header runs into its body.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered header.missing_body_separator [0]"
+      ],
+      "leaves": [
+        "[0] text/plain 23",
+        "[1] text/plain 6"
+      ]
+    },
+    {
+      "name": "multipart-inner-unclosed",
+      "description": "An inner multipart never closes; the outer one continues.",
+      "state": "incomplete",
+      "diagnostics": [
+        "incomplete multipart.close_not_found [0]"
+      ],
+      "leaves": [
+        "[0 0] text/plain 5",
+        "[1] text/plain 5"
+      ]
+    },
+    {
+      "name": "multipart-reused-boundary",
+      "description": "An inner multipart reuses the outer boundary.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered multipart.nested_boundary_reused [0]",
+        "info multipart.empty [0]"
+      ],
+      "leaves": [
+        "[1] text/plain 5"
+      ]
+    },
+    {
+      "name": "multipart-illegal-cte",
+      "description": "A multipart that declares base64.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered multipart.illegal_transfer_encoding []"
+      ],
+      "leaves": [
+        "[0] text/plain 3"
+      ]
+    },
+    {
+      "name": "base64-junk-and-missing-padding",
+      "description": "Base64 with stray bytes and no padding.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered cte.base64_junk []",
+        "recovered cte.base64_padding_missing []"
+      ],
+      "leaves": [
+        "[] application/octet-stream 11"
+      ]
+    },
+    {
+      "name": "base64-data-after-padding",
+      "description": "Two padded Base64 segments in one body.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered cte.base64_data_after_padding []"
+      ],
+      "leaves": [
+        "[] text/plain 4"
+      ]
+    },
+    {
+      "name": "qp-damaged",
+      "description": "Quoted-printable with a bad escape, a CR-only soft break and a trailing equals.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered cte.qp_invalid_hex []",
+        "recovered cte.qp_invalid_soft_break []",
+        "recovered cte.qp_trailing_equals []"
+      ],
+      "leaves": [
+        "[] text/plain 22"
+      ]
+    },
+    {
+      "name": "cte-token-with-junk",
+      "description": "A transfer encoding value with quotes and a trailing parameter.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered cte.invalid_token []"
+      ],
+      "leaves": [
+        "[] text/plain 2"
+      ]
+    },
+    {
+      "name": "cte-unknown",
+      "description": "An unknown transfer encoding.",
+      "state": "complete",
+      "diagnostics": [
+        "unsupported cte.unknown []"
+      ],
+      "leaves": [
+        "[] text/plain 7"
+      ]
+    },
+    {
+      "name": "uuencode-missing-end",
+      "description": "A uuencoded body with no end line.",
+      "state": "incomplete",
+      "diagnostics": [
+        "incomplete cte.uuencode_missing_end []"
+      ],
+      "leaves": [
+        "[] text/plain 3"
+      ]
+    },
+    {
+      "name": "embedded-message-base64",
+      "description": "A message/rfc822 part that is Base64 encoded.",
+      "state": "complete",
+      "diagnostics": [
+        "info message.illegal_transfer_encoding [0]"
+      ],
+      "leaves": [
+        "[0 0] text/plain 10"
+      ]
+    },
+    {
+      "name": "digest",
+      "description": "A multipart/digest whose parts declare no type.",
+      "state": "complete",
+      "leaves": [
+        "[0 0] text/plain 3",
+        "[1 0] text/plain 3"
+      ]
+    },
+    {
+      "name": "utf8-declared-not-utf8",
+      "description": "A body declared UTF-8 that holds Latin-1 bytes.",
+      "state": "complete",
+      "diagnostics": [
+        "info charset.invalid_sequence []"
+      ],
+      "leaves": [
+        "[] text/plain 14"
+      ]
+    },
+    {
+      "name": "content-type-missing-subtype",
+      "description": "Content-Type: text, with a charset.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered mime.content_type_missing_slash []"
+      ],
+      "leaves": [
+        "[] text/plain 6"
+      ]
+    },
+    {
+      "name": "filename-conflict",
+      "description": "Different names in Content-Disposition and Content-Type.",
+      "state": "complete",
+      "leaves": [
+        "[] application/pdf 3"
+      ]
+    },
+    {
+      "name": "seven-bit-violation",
+      "description": "A body declared 7bit that holds 8-bit bytes.",
+      "state": "complete",
+      "diagnostics": [
+        "info cte.seven_bit_violation []"
+      ],
+      "leaves": [
+        "[] text/plain 7"
+      ]
+    }
+  ]
+}

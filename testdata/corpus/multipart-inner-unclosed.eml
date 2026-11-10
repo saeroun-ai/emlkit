@@ -1,0 +1,12 @@
+Content-Type: multipart/mixed; boundary=O
+
+--O
+Content-Type: multipart/alternative; boundary=I
+
+--I
+
+inner
+--O
+
+outer
+--O--

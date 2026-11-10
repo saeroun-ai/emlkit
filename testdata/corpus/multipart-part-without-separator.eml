@@ -1,0 +1,10 @@
+Content-Type: multipart/mixed; boundary=B
+
+--B
+Content-Type: text/plain
+the body, no blank line
+--B
+Content-Type: text/plain
+
+second
+--B--
