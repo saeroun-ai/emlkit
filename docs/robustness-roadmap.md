@@ -2815,15 +2815,15 @@ trade a recoverable value for no saving.
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
 | ROB-050-001 | Done | Parse and retain the base media type even when parameters are malformed. | Invalid-tail matrix; no silent multipart misclassification. |
-| ROB-050-002 | Planned | Recover missing type/subtype/slash using conservative defaults and diagnostics. | Strict/tolerant behavior tests. |
-| ROB-050-003 | Planned | Parse loose unquoted parameter values up to the next semicolon. | Angus/MimeKit-compatible fixtures. |
-| ROB-050-004 | Planned | Recover unclosed quotes, bad escapes, and Windows filename backslashes. | Apple/Windows fixtures. |
-| ROB-050-005 | Planned | Define deterministic duplicate-parameter precedence while preserving all raw occurrences. | First/last/conflicting values. |
-| ROB-050-006 | Planned | Fully support RFC 2231 extended and continuation parameters in any segment order. | Encoded/unencoded/mixed tables. |
-| ROB-050-007 | Planned | Preserve partial RFC 2231 values when segments, percent escapes, or charsets are invalid. | Partial decode diagnostics. |
-| ROB-050-008 | Planned | Support nonstandard RFC 2047 and raw UTF-8 filenames in tolerant mode. | Common client fixtures. |
-| ROB-050-009 | Planned | Resolve filename/name/filename* conflicts without discarding candidates. | Candidate API and precedence tests. |
-| ROB-050-010 | Planned | Separate original filename from an optional filesystem-safe display/storage name. | Traversal, NUL, separators, reserved names. |
+| ROB-050-002 | Done | Recover missing type/subtype/slash using conservative defaults and diagnostics. Implemented: a media type missing its type, subtype or slash is read by conservative defaults with a diagnostic; Strict refuses. See docs/robustness-notes/mime-parameters.md. | Strict/tolerant behavior tests. |
+| ROB-050-003 | Done | Parse loose unquoted parameter values up to the next semicolon. Implemented: loose unquoted values run to the next semicolon. See docs/robustness-notes/mime-parameters.md. | Angus/MimeKit-compatible fixtures. |
+| ROB-050-004 | Done | Recover unclosed quotes, bad escapes, and Windows filename backslashes. Implemented: unclosed quotes run to the end of the field, Windows backslashes are kept, bad escapes recovered. See docs/robustness-notes/mime-parameters.md. | Apple/Windows fixtures. |
+| ROB-050-005 | Done | Define deterministic duplicate-parameter precedence while preserving all raw occurrences. Implemented: every occurrence is a candidate (Entity.ParameterCandidates); boundary takes no value on disagreement, other parameters the RFC 2231 form and then the first occurrence. See docs/robustness-notes/mime-parameters.md. | First/last/conflicting values. |
+| ROB-050-006 | Done | Fully support RFC 2231 extended and continuation parameters in any segment order. Implemented: RFC 2231 segments are assembled in any order, encoded and unencoded mixed, through CharsetReader. See docs/robustness-notes/mime-parameters.md. | Encoded/unencoded/mixed tables. |
+| ROB-050-007 | Done | Preserve partial RFC 2231 values when segments, percent escapes, or charsets are invalid. Implemented: gaps keep the present segments in order, a bad percent escape is literal, an unknown charset keeps the bytes. See docs/robustness-notes/mime-parameters.md. | Partial decode diagnostics. |
+| ROB-050-008 | Done | Support nonstandard RFC 2047 and raw UTF-8 filenames in tolerant mode. Implemented: RFC 2047 words and raw UTF-8 in parameter values are read and reported; raw 8-bit bytes use the entity's own charset when it has a decoder. See docs/robustness-notes/mime-parameters.md. | Common client fixtures. |
+| ROB-050-009 | Done | Resolve filename/name/filename* conflicts without discarding candidates. Implemented: Entity.FilenameCandidates and Header.FilenameCandidates return every candidate, the chosen first (mime.filename_conflict). See docs/robustness-notes/mime-parameters.md. | Candidate API and precedence tests. |
+| ROB-050-010 | Done | Separate original filename from an optional filesystem-safe display/storage name. Implemented: message.SafeFilename is a pure function, never applied implicitly. See docs/robustness-notes/mime-parameters.md. | Traversal, NUL, separators, reserved names. |
 
 `ROB-050-001` ([issue #22](https://github.com/saeroun-ai/emlkit/issues/22))
 keeps a valid base type or disposition when its parameters are malformed.

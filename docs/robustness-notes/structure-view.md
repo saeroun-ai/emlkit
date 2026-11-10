@@ -84,7 +84,7 @@ when the part count or declared protocol/report-type does not fit, and
 
 - Bodies are read whole to learn size and digest, so `ReadTree` costs a full
   read of the message even with `MaxBodyBytes: -1`.
-- `Filename` is the first of the disposition's `filename` and the type's
-  `name`; the candidate list of ROB-050-009 is not consulted here yet.
+- `Filename` is the chosen candidate of ROB-050-009; `Filenames` holds all of
+  them. Neither is a safe path: use `message.SafeFilename`.
 - No signature is verified and nothing is decrypted (ROB-140).
 - Content-Base is not consulted for relative references.

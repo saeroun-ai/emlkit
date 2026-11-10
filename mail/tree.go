@@ -93,10 +93,14 @@ type Node struct {
 	// Disposition and DispositionParams are the Content-Disposition, or empty.
 	Disposition       string
 	DispositionParams map[string]string
-	// Filename is the name the entity gives its content: the disposition's
-	// filename, else the content type's name. It is what the message says,
-	// not a safe path.
-	Filename string
+	// Filename is the name the entity gives its content: the first of its
+	// candidates. It is what the message says, not a safe path; see
+	// message.SafeFilename. Filenames are all the candidates — the
+	// disposition's filename and the content type's name, in their RFC 2231
+	// and plain forms — the chosen one first; they differ when the message
+	// names the content in more than one way.
+	Filename  string
+	Filenames []message.FilenameCandidate
 	// ContentID is the Content-ID without angle brackets, and ContentLocation
 	// the Content-Location, each empty when absent.
 	ContentID       string
@@ -217,7 +221,15 @@ func (b *treeBuilder) read(e *message.Entity, path []int, parent *Node, warn err
 	}
 	n.Disposition, n.DispositionParams, _ = e.EffectiveContentDisposition()
 	n.Disposition = strings.ToLower(n.Disposition)
-	n.Filename = n.DispositionParams["filename"]
+	// Every name the entity gives its content, the chosen one first
+	// (ROB-050-009); the plain parameters when there is no candidate list.
+	n.Filenames = e.FilenameCandidates()
+	if len(n.Filenames) > 0 {
+		n.Filename = n.Filenames[0].Filename
+	}
+	if n.Filename == "" {
+		n.Filename = n.DispositionParams["filename"]
+	}
 	if n.Filename == "" {
 		n.Filename = n.Params["name"]
 	}
