@@ -421,21 +421,54 @@ func TestParse_delimiterEndingsStrictResume(t *testing.T) {
 				t.Fatalf("%s: Parse() = %v", label, err)
 			}
 			got, errs := strictResumeSeq(t, e.MultipartReader(), len(tc.heal)+1)
-			if !malformed(errs[tc.bad]) {
+			// Every profile but Strict heals the part's header: the line with
+			// no separator begins its body (ROB-060-010).
+			healed := profile != ProfileStrict
+			if healed {
+				if errs[tc.bad] != nil {
+					t.Errorf("%s: call %d = %v, want the healed part", label, tc.bad, errs[tc.bad])
+				}
+			} else if !malformed(errs[tc.bad]) {
 				t.Errorf("%s: call %d = %v, want the malformed header, as itself", label, tc.bad, errs[tc.bad])
 			}
 			wantDiag := tc.tolDiag
 			if profile == ProfileStrict {
 				wantDiag = tc.strict
 			}
-			if gotDiag := mpFactsOf(session.Diagnostics()); !reflect.DeepEqual(gotDiag, wantDiag) {
+			gotDiag := mpFactsOf(session.Diagnostics())
+			if healed {
+				var kept []mpFacts
+				for _, d := range gotDiag {
+					if d.code != CodeHeaderMissingBodySeparator {
+						kept = append(kept, d)
+					}
+				}
+				if len(kept) != len(gotDiag)-1 {
+					t.Errorf("%s: diagnostics %+v, want one header.missing_body_separator", label, gotDiag)
+				}
+				gotDiag = kept
+				// The healed part's body now ends at the line ending the
+				// malformed line had, so that is where a mix of endings is
+				// first seen; only the position of that note moves.
+				wantDiag = append([]mpFacts(nil), wantDiag...)
+				for i := range wantDiag {
+					if wantDiag[i].code == CodeMultipartMixedLineEndings && i < len(gotDiag) && gotDiag[i].code == CodeMultipartMixedLineEndings {
+						wantDiag[i].at = gotDiag[i].at
+					}
+				}
+			}
+			if !reflect.DeepEqual(gotDiag, wantDiag) {
 				t.Errorf("%s: diagnostics %+v, want %+v", label, gotDiag, wantDiag)
 			}
 			if e.ParseStop() != nil {
 				t.Errorf("%s: ParseStop() = %v, want none", label, e.ParseStop())
 			}
 			if profile != ProfileStrict || tc.crAt < 0 {
-				if want := append(append([]string(nil), tc.heal...), "error"); !reflect.DeepEqual(got, want) {
+				want := append(append([]string(nil), tc.heal...), "error")
+				if healed {
+					want[tc.bad] = "malformed"
+				}
+				if !reflect.DeepEqual(got, want) {
 					t.Errorf("%s: calls %q, want %q", label, got, want)
 				}
 				if errs[len(errs)-2] != io.EOF || errs[len(errs)-1] != io.EOF {

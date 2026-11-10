@@ -65,6 +65,14 @@ type HeaderLimits struct {
 	// of the per-block budgets above. It is the one field here that is
 	// cumulative; see HeaderBudget. nil is no shared budget.
 	Total *HeaderBudget
+
+	// Recover asks the reader to heal a damaged line of the block that no
+	// continuation line follows, rather than fail the block with it: to join
+	// it to the field before it, keep it apart, or end the block before it as
+	// the first line of the body. It is no budget and is off by default. See
+	// recover.go, and ReadHeaderRecover for the bytes a block ended that way
+	// hands back.
+	Recover bool
 }
 
 // A HeaderLimitKind names which budget of a header block was exceeded.

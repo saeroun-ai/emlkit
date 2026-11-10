@@ -319,6 +319,15 @@ func TestParse_byteOrderMark_malformedUnchanged(t *testing.T) {
 	} {
 		for _, profile := range []Profile{ProfileTolerant, ProfileStrict, ProfileForensic} {
 			session, e, err := Parse(strings.NewReader(text), &ParseOptions{Profile: profile})
+			if profile != ProfileStrict {
+				// Header recovery heals the damaged line (ROB-020-003): the
+				// mark's bytes are never read as a mark, and the message is
+				// returned.
+				if e == nil || err != nil {
+					t.Errorf("%q/%v: Parse() = (entity %v, %v), want the healed entity", text, profile, e != nil, err)
+				}
+				continue
+			}
 			if e != nil || err == nil || !strings.Contains(err.Error(), "malformed MIME header") || session.Len() != 0 {
 				t.Errorf("%q/%v: Parse() = (entity %v, %v, %v), want no entity, the malformed header and nothing recorded",
 					text, profile, e != nil, err, codesOfDiags(session.Diagnostics()))

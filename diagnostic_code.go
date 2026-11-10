@@ -139,6 +139,11 @@ const (
 	// field's other values were decoded, and the field records one such
 	// diagnostic however many of its values stalled.
 	CodeHeaderDecoderNoProgress Code = "header.decoder_no_progress"
+
+	// CodeHeaderUnindentedContinuation reports header lines read as
+	// continuation lines of the field before them though they had lost their
+	// leading white space; recorded once per block. See header_recover.go.
+	CodeHeaderUnindentedContinuation Code = "header.unindented_continuation"
 )
 
 // Body decoding codes.

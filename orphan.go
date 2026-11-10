@@ -73,7 +73,15 @@ const (
 // orphanContinuationNotes appends to notes the diagnostic the orphan records
 // of h, the header block of the entity this context describes, call for.
 func (c parseContext) orphanContinuationNotes(h *textproto.Header, strict bool, notes []headerNote) []headerNote {
-	records := h.OrphanContinuations()
+	// A damaged line recovery kept with no continuation line is reported by
+	// recoveryNotes, not here.
+	all := h.OrphanContinuations()
+	records := all[:0]
+	for _, o := range all {
+		if o.Lines() > 1 {
+			records = append(records, o)
+		}
+	}
 	if len(records) == 0 {
 		return notes
 	}

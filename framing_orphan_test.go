@@ -200,6 +200,13 @@ func TestParse_orphanContinuationUnchanged(t *testing.T) {
 	} {
 		for _, profile := range []Profile{ProfileTolerant, ProfileStrict} {
 			session, e, err := Parse(strings.NewReader(tc.text), &ParseOptions{Profile: profile})
+			if tc.err != "" && profile != ProfileStrict {
+				// Header recovery keeps such a line apart (ROB-020-003).
+				if e == nil || err != nil || session.Len() != 1 {
+					t.Errorf("%q/%v: (entity %v, %v, %v), want the healed entity and one diagnostic", tc.text, profile, e != nil, err, codesOfDiags(session.Diagnostics()))
+				}
+				continue
+			}
 			if tc.err != "" {
 				if e != nil || err == nil || !strings.Contains(err.Error(), tc.err) || IsFatal(err) || session.Len() != 0 {
 					t.Errorf("%q/%v: (entity %v, %v, %v), want no entity and the malformed line", tc.text, profile, e != nil, err, codesOfDiags(session.Diagnostics()))

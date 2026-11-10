@@ -76,7 +76,9 @@ func TestReader_strictDelimiterRefusalIsSticky(t *testing.T) {
 		refusal   int // the first call Strict refuses
 	}{
 		{name: "flat, after a malformed header", text: flat,
-			tolerant:  []string{"one", "error", "two", "error"},
+			// Tolerant heals the part's header: the line begins its body
+			// (ROB-060-010).
+			tolerant:  []string{"one", "malformed", "two", "error"},
 			strict:    []string{"one", "error", "error", "error"},
 			malformed: 1, refusal: 2},
 		{name: "nested", text: nested,
@@ -100,7 +102,7 @@ func TestReader_strictDelimiterRefusalIsSticky(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("%s: calls %q, want %q", label, got, want)
 			}
-			if tc.malformed >= 0 {
+			if tc.malformed >= 0 && profile == message.ProfileStrict {
 				if err := errs[tc.malformed]; err == nil || message.IsFatal(err) || !strings.Contains(err.Error(), "malformed MIME header line") {
 					t.Errorf("%s: call %d = %v, want the malformed header, as itself", label, tc.malformed, err)
 				}

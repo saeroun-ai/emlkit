@@ -374,6 +374,15 @@ func TestParse_mboxEnvelope_off(t *testing.T) {
 		"false": {RecognizeMboxEnvelope: false, Profile: ProfileStrict},
 	} {
 		session, e, err := Parse(strings.NewReader(mboxSimple), opts)
+		if opts == nil || opts.Profile != ProfileStrict {
+			// Header recovery keeps the line apart as a damaged header line
+			// (ROB-020-006); it is still no envelope.
+			if e == nil || err != nil || !reflect.DeepEqual(codesOfDiags(session.Diagnostics()), []Code{CodeHeaderInvalidName}) {
+				t.Errorf("%s: Parse() = (%v, %v, %v), want the healed entity and header.invalid_name", name, e != nil, err, codesOfDiags(session.Diagnostics()))
+			}
+			checkMboxEnvelope(t, name, session, "")
+			continue
+		}
 		if e != nil || err == nil || err.Error() != want {
 			t.Errorf("%s: Parse() = (%v, %v), want (nil, %q)", name, e != nil, err, want)
 		}
@@ -448,7 +457,9 @@ func TestParse_mboxEnvelope_onlyOne(t *testing.T) {
 		"second envelope": mboxEnv + second + "Subject: s\r\n\r\nbody",
 		"mid-header":      mboxEnv + "Subject: s\r\n" + second + "\r\nbody",
 	} {
-		session, e, err := Parse(strings.NewReader(text), mboxOpts(true, ProfileTolerant, Limits{}))
+		// ProfileStrict, which heals no header line; the other profiles keep
+		// such a line apart or begin the body with it (ROB-020-003).
+		session, e, err := Parse(strings.NewReader(text), mboxOpts(true, ProfileStrict, Limits{}))
 		if e != nil || err == nil || err.Error() != key {
 			t.Errorf("%s: Parse() = (%v, %v), want (nil, %q)", name, e != nil, err, key)
 		}
@@ -456,7 +467,7 @@ func TestParse_mboxEnvelope_onlyOne(t *testing.T) {
 		if got, want := factsOf(session.Diagnostics()), []lineEndingFacts{mboxNote(45)}; !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: diagnostics %+v, want %+v", name, got, want)
 		}
-		checkMboxSuffix(t, name, text, 45, ProfileTolerant, Limits{}, mboxWhole)
+		checkMboxSuffix(t, name, text, 45, ProfileStrict, Limits{}, mboxWhole)
 	}
 }
 

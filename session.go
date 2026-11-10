@@ -300,6 +300,9 @@ func (s *ParseSession) headerLimits() textproto.HeaderLimits {
 		MaxCount:      l.MaxHeaderCount,
 		MaxLineBytes:  l.MaxLineBytes,
 		Total:         s.headerBudget(l),
+		// Damaged header lines are healed under every profile but Strict; see
+		// header_recover.go.
+		Recover: s.Profile() != ProfileStrict,
 	}
 }
 

@@ -223,7 +223,7 @@ func (o OrphanContinuation) Lines() int {
 // nil when p is left with fewer than two lines.
 func (p *pendingField) record(after int) *orphanRecord {
 	lines := bytes.Count(p.kv, []byte{'\n'})
-	if lines < 2 || len(p.raw) == 0 {
+	if (lines < 2 && !p.single) || len(p.raw) == 0 {
 		return nil
 	}
 	return &orphanRecord{

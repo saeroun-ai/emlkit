@@ -98,7 +98,7 @@ func (c parseContext) malformedPrefixNotes(h *textproto.Header, strict bool, not
 		}
 		notes = append(notes, headerNote{at: start, d: d, refuse: strict})
 	}
-	if c.separatorMissing {
+	if healed, _, _ := h.BodySeparatorMissing(); c.separatorMissing && !healed {
 		d := Diagnostic{
 			Code:     CodeHeaderMissingBodySeparator,
 			Severity: SeverityRecovered,

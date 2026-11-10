@@ -221,7 +221,13 @@ func newPart(mr *MultipartReader) (*Part, error) {
 		}
 		return nil, err
 	}
-	bp.separatorMissing = scan.atDelim
+	bp.separatorMissing = scan.atDelim || scan.heal.sepMissing
+	if len(scan.unread) > 0 {
+		// Under recovery the block ended before a line that begins the body:
+		// its bytes go back to the reader, which reads them first (see
+		// recover.go and restore).
+		mr.restore(scan.unread)
+	}
 	bp.bodyOffset = mr.offset()
 	bp.r = partReader{bp}
 	return bp, nil

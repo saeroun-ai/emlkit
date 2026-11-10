@@ -1003,8 +1003,13 @@ func FuzzParse_firstLine(f *testing.F) {
 		}
 
 		strict := firstLineOutcomeOf(t, strings.NewReader(text), ProfileStrict)
-		if strict.entity != want.entity {
+		if strict.entity && !want.entity {
 			t.Fatalf("Strict entity %v, Tolerant %v", strict.entity, want.entity)
+		}
+		if !strict.entity {
+			// Strict heals no damaged header line, which Tolerant does
+			// (ROB-020-003): there is nothing of Strict's to compare.
+			return
 		}
 		if want.entity && (strict.prefix != want.prefix || !reflect.DeepEqual(strict.fields, want.fields) ||
 			!strings.Contains(strict.err, string(CodeHeaderFirstLineContinuation))) {

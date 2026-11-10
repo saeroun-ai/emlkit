@@ -2,6 +2,7 @@ package message
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"math"
@@ -693,7 +694,16 @@ func readWithOptions(r io.Reader, opts *ReadOptions, session *ParseSession) (*En
 		lr.N = opts.MaxHeaderBytes
 	}
 
-	h, err := textproto.ReadHeaderLimits(br, headerLimits)
+	// Under recovery the block may end before a line that begins the body,
+	// which the header reader had to read to decide: those bytes are read
+	// first by the body. See header_recover.go.
+	var h textproto.Header
+	var unread []byte
+	if headerLimits.Recover {
+		h, unread, err = textproto.ReadHeaderRecover(br, headerLimits)
+	} else {
+		h, err = textproto.ReadHeaderLimits(br, headerLimits)
+	}
 	if err != nil {
 		// The input budget can end the parse while the header block is still
 		// being read, and its stop is the session's: it outranks whatever the
@@ -717,9 +727,13 @@ func readWithOptions(r io.Reader, opts *ReadOptions, session *ParseSession) (*En
 	// reader pulled in, less what it still holds beyond that point. It is read
 	// before the body is wrapped in decoders, so that a decoder reading ahead
 	// on construction could not move it.
-	bodyOffset := cr.n - int64(br.Buffered())
+	bodyOffset := cr.n - int64(br.Buffered()) - int64(len(unread))
 
-	e, err := newWithOptions(Header{h}, br, opts.SkipTextAttachmentDecoding, rootContextAt(session, headerOffset, bodyOffset))
+	var body io.Reader = br
+	if len(unread) > 0 {
+		body = io.MultiReader(bytes.NewReader(unread), br)
+	}
+	e, err := newWithOptions(Header{h}, body, opts.SkipTextAttachmentDecoding, rootContextAt(session, headerOffset, bodyOffset))
 	// A root that frames no parts has no input after it that belongs to no
 	// entity: its body runs to the end of the input. Under ProfileForensic that
 	// is noted for ParseSession.TrailingInput, from the header alone; nothing is

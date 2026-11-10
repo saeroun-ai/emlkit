@@ -869,7 +869,9 @@ func TestWalk_withoutSessionIsUnchanged(t *testing.T) {
 // The header byte budget is no longer such a failure: it is diagnosed, and its
 // boundary tests own it. This one keeps to what is still undiagnosed.
 func TestParse_headerFailureStillReturnsSession(t *testing.T) {
-	session, e, err := message.Parse(strings.NewReader("this line has no field separator\r\n\r\nbody\r\n"), nil)
+	// ProfileStrict, which heals no header line; the other profiles begin the
+	// body with such a line (ROB-020-005).
+	session, e, err := message.Parse(strings.NewReader("this line has no field separator\r\n\r\nbody\r\n"), &message.ParseOptions{Profile: message.ProfileStrict})
 
 	if session == nil {
 		t.Fatal("Parse returned a nil session for a header failure")

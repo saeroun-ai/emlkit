@@ -1138,7 +1138,9 @@ func TestParse_headerBytes_otherFailuresAreNotDiagnosed(t *testing.T) {
 		"body\r\n" +
 		"--B--\r\n"
 
-	session, e, err := Parse(strings.NewReader(text), nil)
+	// ProfileStrict, which heals no header line; the other profiles begin the
+	// part's body with such a line (ROB-060-010).
+	session, e, err := Parse(strings.NewReader(text), &ParseOptions{Profile: ProfileStrict})
 	if err != nil {
 		t.Fatalf("Parse() = %v", err)
 	}

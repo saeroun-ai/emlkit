@@ -144,6 +144,10 @@ func (c parseContext) headerLineEndings(h *textproto.Header) error {
 	// orphan.go.
 	notes = c.orphanContinuationNotes(h, strict, notes)
 
+	notes = c.recoveryNotes(h, notes)
+
+	notes = c.duplicateSingletonNotes(h, notes)
+
 	// An unknown LineEndings — a block that began with a UTF-16 or UTF-32
 	// mark was not read — reports nothing below.
 	le := h.LineEndings()

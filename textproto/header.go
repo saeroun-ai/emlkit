@@ -100,6 +100,10 @@ type Header struct {
 	// appends to it in place: Copy shares it and every mutation keeps it. See
 	// OrphanContinuation.
 	orphans []*orphanRecord
+
+	// heal is what recovery did to the block, or nil for a block that needed
+	// none or was not read with HeaderLimits.Recover. See recover.go.
+	heal *headerHeal
 }
 
 func makeHeaderMap(fs []*headerField) map[string][]*headerField {
@@ -267,7 +271,7 @@ func (h *Header) Copy() Header {
 	l := make([]*headerField, len(h.l))
 	copy(l, h.l)
 	m := makeHeaderMap(l)
-	return Header{l: l, m: m, ends: h.ends, bom: h.bom, prefix: h.prefix, orphans: h.orphans}
+	return Header{l: l, m: m, ends: h.ends, bom: h.bom, prefix: h.prefix, orphans: h.orphans, heal: h.heal}
 }
 
 // Len returns the number of fields in the header.
@@ -879,6 +883,13 @@ type headerScan struct {
 	termsN    int
 	termsFix  [16]lineTerm
 	termsMore []lineTerm
+
+	// unread is, under HeaderLimits.Recover, the bytes of a damaged line read
+	// out of the reader that began the body: the block ended before it, and
+	// the caller gives them back to what reads the body. heal is what recovery
+	// did to the block. See recover.go.
+	unread []byte
+	heal   headerHeal
 }
 
 // A crLine is what a line ended by a bare '\r' that may still prove to be
@@ -2011,6 +2022,10 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 		if !isBudgetExhausted(err) {
 			h.prefix = prefix
 			h.orphans = orphans[:len(orphans):len(orphans)]
+			if scan.heal != (headerHeal{}) {
+				heal := scan.heal
+				h.heal = &heal
+			}
 		}
 		return h, err
 	}
@@ -2096,6 +2111,7 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 		}
 
 		mark := len(scan.capture)
+		endsBefore := scan.ends
 		kv, last, err := readContinuedLineSlice(r, scan)
 		rejoined, dropPrev := scan.rejoined, scan.dropPrev
 		scan.rejoined, scan.dropPrev = false, false
@@ -2206,6 +2222,24 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 			continue
 		}
 
+		// Under recovery, a damaged line that reads as a continuation line of
+		// the field before it that lost its leading white space is that
+		// field's next line, exactly as read (see recover.go).
+		healing := scan.lim.Recover && head != headEmptyName && !scan.crKey.ok && len(scan.replay) == 0
+		if healing && pend.unindented(kv) {
+			if scan.heal.joined == 0 {
+				scan.heal.joinedAt = scan.fieldStart
+			}
+			scan.heal.joined++
+			base := len(pend.kv)
+			pend.kv = append(pend.kv, kv...)
+			pend.lastLine = base + last
+			continue
+		}
+		// Whether the line before it held only white space, for a block that
+		// recovery ends here.
+		wsBefore := healing && pend.kind == pendField && pend.lastLine > 0 && blankLine(pend.kv[pend.lastLine:])
+
 		// A damaged line: no colon or semicolon, an invalid name, or an empty
 		// one, which nothing here makes a field. The field before it is
 		// complete either way.
@@ -2249,15 +2283,38 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 		case head == headEmptyName:
 			// As per RFC 7230 field-name is a token, tokens consist of one or
 			// more chars. An empty name with nothing continuing it is skipped,
-			// as it always was (ROB-020-006 owns it).
+			// as it always was, under recovery too: the budget tests count on
+			// such a line costing a candidate and nothing else.
 		default:
-			// Nothing continues it: the error it always was (ROB-020-003 and
-			// ROB-020-006 own these) — unless a read failure kept its
-			// continuation lines from being looked at.
+			// Nothing continues it: the error it always was — unless a read
+			// failure kept its continuation lines from being looked at.
 			if ferr := unseen(); ferr != nil {
 				return result(ferr)
 			}
-			return result(damageError(head, kv, i))
+			if !healing {
+				return result(damageError(head, kv, i))
+			}
+			// Recovery: the block goes on after it, or ends before it
+			// (ROB-020-003 to ROB-020-006; see recover.go).
+			on, ferr := scan.goesOn(r)
+			if ferr != nil {
+				return result(ferr)
+			}
+			raw, rawLast := scan.exact(kv)
+			if on {
+				scan.heal.damaged++
+				pend = pendingField{kv: kv, lastLine: last, kind: pendRecord,
+					raw: raw, rawLast: rawLast, start: start, single: true}
+				recovered = true
+				continue
+			}
+			// The first line of the body: it is handed back, and the block
+			// ends before it, its line ending never one of the block's.
+			scan.unread = raw
+			scan.consumed -= int64(len(raw))
+			scan.ends = endsBefore
+			scan.heal.sepMissing, scan.heal.sepAt, scan.heal.wsLine = true, start, wsBefore
+			return ended()
 		}
 	}
 }
@@ -2371,6 +2428,10 @@ type pendingField struct {
 	// headErr is, for a damaged line, the error it is decided with if
 	// nothing continues it, or nil for an empty name, which is skipped.
 	headErr error
+
+	// single marks a record that recovery keeps though no continuation line
+	// followed its damaged line. See recover.go.
+	single bool
 }
 
 // rawKind reports whether p keeps exact bytes of its own: an orphan record,
