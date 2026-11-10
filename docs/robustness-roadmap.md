@@ -2750,15 +2750,15 @@ separators (`ROB-020-005`), whole raw replay (`ROB-020-007`, #41), #17, #29.
 
 | ID | Status | Requirement | Acceptance |
 |---|---|---|---|
-| ROB-040-001 | Planned | Return partial address lists with per-address diagnostics. | Valid-invalid-valid sequences. |
-| ROB-040-002 | Planned | Support configurable loose parsing for unquoted commas and local-only addresses. | MimeKit-compatible fixtures. |
+| ROB-040-001 | Done | Return partial address lists with per-address diagnostics. Implemented by mail.ParseAddressListTolerant and Header.AddressListTolerant: every entry with its raw text and diagnostics, valid ones typed. See docs/robustness-notes/mail-structured-headers.md. | Valid-invalid-valid sequences. |
+| ROB-040-002 | Done | Support configurable loose parsing for unquoted commas and local-only addresses. Unquoted commas in display names and local-only addresses are read by default and can be switched off (AddressOptions). See docs/robustness-notes/mail-structured-headers.md. | MimeKit-compatible fixtures. |
 | ROB-040-003 | Done | Bound nested comments and address groups. | Deep nesting tests. |
-| ROB-040-004 | Planned | Tolerate obsolete route syntax, empty groups, repeated separators, and broken angle brackets without panic. | Corpus table tests. |
-| ROB-040-005 | Planned | Parse internationalized addresses and preserve undecodable originals. | RFC 6532 and IDN cases. |
-| ROB-040-006 | Planned | Parse common obsolete dates, report invalid dates, and retain raw values. | Zone/year/comment/weekday table. |
-| ROB-040-007 | Planned | Return partial Message-ID/References lists. | CFWS, truncation, invalid ID tests. |
-| ROB-040-008 | Planned | Add tolerant Received parsing with clause-level preservation. | Real provider fixtures. |
-| ROB-040-009 | Planned | Harden List-* parsing and preserve multiple URLs/NO values. | RFC 2369/2919 fixtures and fuzz. |
+| ROB-040-004 | Done | Tolerate obsolete route syntax, empty groups, repeated separators, and broken angle brackets without panic. Routes, empty groups, repeated separators, broken angle brackets and unclosed quotes, comments and groups are read without a panic. See docs/robustness-notes/mail-structured-headers.md. | Corpus table tests. |
+| ROB-040-005 | Done | Parse internationalized addresses and preserve undecodable originals. Raw UTF-8 addresses are accepted and undecodable bytes kept verbatim; no IDNA conversion. See docs/robustness-notes/mail-structured-headers.md. | RFC 6532 and IDN cases. |
+| ROB-040-006 | Done | Parse common obsolete dates, report invalid dates, and retain raw values. Implemented by mail.ParseDateTolerant and Header.DateTolerant: obsolete zones, two-digit years, missing seconds or zone, comments, wrong weekday; the raw value is kept. See docs/robustness-notes/mail-structured-headers.md. | Zone/year/comment/weekday table. |
+| ROB-040-007 | Done | Return partial Message-ID/References lists. Implemented by mail.ParseMsgIDListTolerant, Header.MsgIDListTolerant and Header.MessageIDTolerant. See docs/robustness-notes/mail-structured-headers.md. | CFWS, truncation, invalid ID tests. |
+| ROB-040-008 | Done | Add tolerant Received parsing with clause-level preservation. Implemented by mail.ParseReceived and Header.Received: clauses in order with their raw text, the date after the semicolon. See docs/robustness-notes/mail-structured-headers.md. | Real provider fixtures. |
+| ROB-040-009 | Done | Harden List-* parsing and preserve multiple URLs/NO values. Implemented by mail.ParseListURLs, Header.ListURLs, ParseListID and Header.ListID: every URL, NO and damaged entries kept. See docs/robustness-notes/mail-structured-headers.md. | RFC 2369/2919 fixtures and fuzz. |
 
 `ROB-040-003` bounds the work of comments and groups; it does not cap their
 depth. The bound is a single in-place pass: skipping a comment costs time
