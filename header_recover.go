@@ -110,6 +110,7 @@ func (c parseContext) recoveryNotes(h *textproto.Header, notes []headerNote) []h
 			Action:   damagedLineAction,
 			Location: c.headerSpan(nameAt, nameLen),
 		}})
+		c.obMboxHint(h, nameAt, &notes[len(notes)-1].d)
 	}
 
 	if noName > 0 {

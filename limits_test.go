@@ -162,7 +162,8 @@ func TestDefaultLimits_headerBytesUnchanged(t *testing.T) {
 				t.Errorf("ReadWithOptions entity = %v but Parse entity = %v", legacy, parsed)
 			}
 			if !tc.wantErr {
-				if got := session.Diagnostics(); got != nil {
+				// A padding line past 998 bytes is an observation, no budget's.
+				if got := session.Diagnostics(); got != nil && (len(got) != 1 || got[0].Code != message.CodeHeaderOverlongLine) {
 					t.Errorf("Diagnostics() = %v, want none for a header within the budget", codesOf(got))
 				}
 				return

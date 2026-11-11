@@ -137,6 +137,9 @@ func ParseAuthenticationResults(value string) AuthResult {
 	if len(head) > 1 {
 		r.Version = head[1]
 	}
+	if r.AuthServID == "" {
+		d.invalid(message.CodeAuthResultsInvalid, "mail: Authentication-Results names an empty authserv-id", "read the method results; no server is named")
+	}
 	if len(head) > 2 || strings.ContainsAny(r.AuthServID, "=") {
 		d.recovered(message.CodeAuthResultsInvalid, "mail: Authentication-Results begins with more than an authserv-id and a version", "read the first word as the authserv-id")
 	}

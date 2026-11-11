@@ -192,3 +192,37 @@ header the input ended, with or without a final line ending.
 - `limit_header_fields_test.go`, `limit_header_total_test.go`: the fixtures'
   empty-name lines now add `header.empty_name` notes, which those tests set
   aside (`hpNoEmptyNameNotes`); every budget expectation is unchanged.
+
+## Observations
+
+ROB-130-003, corpus findings subject-5000 and mbox-from-line. Code:
+`ob_observe.go`, `textproto/ob_longline.go`, one line each in
+`line_endings.go` and `header_recover.go`. Tests: `TestObservations`,
+`TestObservations_text` in `ob_observe_test.go`.
+
+- `header.overlong_line` (Info): a header block — the message's or a part's —
+  has a line of more than the 998 bytes RFC 5322 section 2.1.1 allows before
+  its line ending. Recorded once per block, at the first such line, with its
+  field's key in `Field` (empty for a malformed prefix or an orphan record);
+  the Message gives the length, no byte of the line. The line is read whole
+  as before; `Limits.MaxLineBytes` (64 KiB) is what refuses one.
+  `textproto.Header.LongLine` finds it in the bytes the header kept, a line
+  ending at CRLF, a bare LF or a bare CR. A folded field whose physical lines
+  are all short records nothing. Not under `ProfileStrict`.
+- `header.invalid_name` for the input's first line, when that line is an mbox
+  `From_` line of exactly the grammar `ParseOptions.RecognizeMboxEnvelope`
+  recognizes (mbox.go) and the option is off: the code, severity and what is
+  parsed are unchanged; the Message adds that the first damaged line is an
+  mbox envelope line and the Action names the option. Only the root block at
+  offset 0 of the input is looked at — not one after a byte order mark, not a
+  part's, not an embedded message's.
+
+Changed expectations: tests whose fixtures hold header lines past 998 bytes
+to exercise a budget now drop `header.overlong_line` before comparing
+(`obDropOverlong`): `limit_header_total_test.go`
+(`TestParse_totalHeaders_realDefaultBytes`), `limit_parameters_test.go`
+(`TestParse_parameters_disabled`, `checkParameterDiagnostic`),
+`mediatype_tolerant_test.go` (`TestTolerantFields_budgets`),
+`progress_metadata_test.go` (`TestParse_metadataNoProgressBounds`) and
+`limits_test.go` (`TestDefaultLimits_headerBytesUnchanged`). No budget
+expectation moved.

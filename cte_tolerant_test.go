@@ -146,7 +146,9 @@ func TestTolerantQP(t *testing.T) {
 		{"bare LF kept", "a\nb\n", "a\nb\n", nil},
 		{"bare CR kept", "a\rb\r\n", "a\rb\r\n", nil},
 		{"soft break CR only", "foo=\rbar\r\n", "foobar\r\n", []Code{CodeCTEQPInvalidSoftBreak}},
-		{"soft break trailing space", "foo= \t\r\nbar", "foobar", []Code{CodeCTEQPInvalidSoftBreak}},
+		// Transport padding before the line ending (RFC 2045 section 6.7 rule 3).
+		{"soft break trailing space", "foo= \t\r\nbar", "foobar", nil},
+		{"soft break trailing space bare LF", "foo= \nbar", "foobar", nil},
 		{"invalid hex", "a=ZZb =4 =\x80\r\n", "a=ZZb =4 =\x80\r\n", []Code{CodeCTEQPInvalidHex}},
 		{"half escape", "a=4\r\n", "a=4\r\n", []Code{CodeCTEQPInvalidHex}},
 		{"double equals", "a==41\r\n", "a=A\r\n", []Code{CodeCTEQPInvalidHex}},
@@ -295,8 +297,8 @@ func TestParse_cteTokenRepair(t *testing.T) {
 
 func TestParse_sevenBitViolation(t *testing.T) {
 	got, codes, err := parseBodyCodes(t, nil, "7bit", "plain\r\ncaf\xe9\x00\r\n")
-	if got != "plain\r\ncaf\xe9\x00\r\n" || err != nil || !reflect.DeepEqual(codes, []Code{CodeCTESevenBitViolation}) {
-		t.Errorf("(%q, %v, %v), want every byte and one cte.seven_bit_violation", got, err, codes)
+	if got != "plain\r\ncaf\xe9\x00\r\n" || err != nil || !reflect.DeepEqual(codes, []Code{CodeCTESevenBitViolation, CodeBodyNUL}) {
+		t.Errorf("(%q, %v, %v), want every byte, one cte.seven_bit_violation and the NUL's body.nul", got, err, codes)
 	}
 	s, e, _ := Parse(strings.NewReader("Content-Transfer-Encoding: 7bit\r\n\r\nab\xff"), nil)
 	io.ReadAll(e.Body)

@@ -129,6 +129,20 @@ type Node struct {
 	Warning error
 	Err     error
 
+	// Preamble and Epilogue are a multipart's bytes before its first delimiter
+	// line and after its closing one, as read (message.MultipartPreamble and
+	// message.MultipartEpilogue), and the Truncated flags whether each was cut
+	// at its Limits budget, MaxPreambleBytes or MaxEpilogueBytes, which bound
+	// them; TreeOptions.MaxTotalBytes does not count them. Both are nil for a
+	// leaf and for a multipart that was not read by a healing parse, the
+	// preamble for one framed on a boundary inferred from its body, and the
+	// epilogue for one that was never closed. Reading the epilogue of the
+	// message's own multipart under ProfileForensic reads it through
+	// ParseSession.TrailingInputReader, which then delivers only what follows.
+	// See tree_epilogue.go.
+	Preamble, Epilogue                   []byte
+	PreambleTruncated, EpilogueTruncated bool
+
 	// HasSpan reports that SpanStart and SpanEnd are the half-open range of
 	// the input that holds this part as it was sent; see
 	// message.Entity.RawSpan.
@@ -194,9 +208,11 @@ type Tree struct {
 	// Root is the message itself.
 	Root *Node
 	// Diagnostics are what reading the structure found about the shape of
-	// signed, encrypted, report and unsupported entities, and the
-	// signed.unverifiable and dkim.view_repaired notes of tree_signed.go. They
-	// are apart from the parse's own diagnostics, which its ParseSession holds.
+	// signed, encrypted, report and unsupported entities, the
+	// multipart.trailing_junk note of an epilogue that holds more than white
+	// space (tree_epilogue.go), and the signed.unverifiable and
+	// dkim.view_repaired notes of tree_signed.go. They are apart from the
+	// parse's own diagnostics, which its ParseSession holds.
 	Diagnostics []message.Diagnostic
 
 	// HeaderRepaired reports that the message's own header block was not read
@@ -267,6 +283,7 @@ func ReadTree(e *message.Entity, opts *TreeOptions) (*Tree, error) {
 	if root != nil {
 		b.classify(root)
 		b.shape(root, t)
+		b.obTrailing(root, t)
 		b.sgIntegrity(t, err)
 	}
 	return t, err
@@ -362,6 +379,9 @@ func (b *treeBuilder) read(e *message.Entity, path []int, parent *Node, warn err
 				return n, cerr
 			}
 			ciPrev = p
+		}
+		if stop := b.obMultipartEnds(mr, n); stop != nil {
+			return n, stop
 		}
 		b.span(e, n)
 		return n, nil
@@ -724,10 +744,12 @@ func (n *Node) Walk(fn func(*Node) bool) {
 //
 // Nothing is discarded: every alternative stays in the tree.
 func (n *Node) Bodies(prefer ...string) []*Node {
+	// The caller's slice is left as it was.
+	norm := make([]string, len(prefer))
 	for i, p := range prefer {
-		prefer[i] = strings.ToLower(strings.TrimSpace(p))
+		norm[i] = strings.ToLower(strings.TrimSpace(p))
 	}
-	return n.bodies(prefer)
+	return n.bodies(norm)
 }
 
 func (n *Node) bodies(prefer []string) []*Node {

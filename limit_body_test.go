@@ -1058,13 +1058,9 @@ func TestParse_bodyInputStopNotMasked(t *testing.T) {
 					if stop := e.ParseStop(); stop == nil || err != stop {
 						t.Errorf("%s: end = %v, want the input stop %v", name, err, stop)
 					}
+					// The white space after the soft line break's '=' is
+					// transport padding, no defect (RFC 2045 section 6.7).
 					wantCodes := []Code{CodeLimitInputBytes}
-					if w == "foo= \r\nbar" && cut >= 7 {
-						// The white space after the soft line break's '=' is a
-						// defect of the body the line ending after it settled
-						// before the input stopped (ROB-070-008).
-						wantCodes = []Code{CodeCTEQPInvalidSoftBreak, CodeLimitInputBytes}
-					}
 					if codes := codesOfDiags(s.Diagnostics()); !reflect.DeepEqual(codes, wantCodes) {
 						t.Errorf("%s: diagnostics = %v, want %v", name, codes, wantCodes)
 					}

@@ -48,7 +48,9 @@ worth a diagnostic each.
 - A body ending inside a group yields the whole bytes of that group — one for
   two characters, two for three: `cte.base64_padding_missing`. A single
   left-over character holds no whole byte and is dropped:
-  `cte.base64_length_invalid` (Incomplete).
+  `cte.base64_length_invalid` (Incomplete). Where the input itself ended
+  there, inside a multipart part, either is `cte.base64_truncated`
+  (Incomplete) instead; see Observations.
 
 ## Quoted-printable (ROB-070-008)
 
@@ -56,8 +58,10 @@ Conformant input decodes exactly as before. In addition:
 
 - `=` not followed by two hexadecimal digits or a line ending is literal text:
   `cte.qp_invalid_hex`.
-- A soft line break may have white space after `=` and may end in a bare LF or
-  a bare CR: `cte.qp_invalid_soft_break`.
+- A soft line break may have white space after `=`, which is transport
+  padding (RFC 2045 section 6.7 rule 3) and records nothing, and may end in a
+  bare LF, which records nothing either, or a bare CR:
+  `cte.qp_invalid_soft_break`.
 - `=` at the end of the body is kept as a literal `=`:
   `cte.qp_trailing_equals`.
 - Control bytes are kept: `cte.qp_control_byte` (Info).
@@ -103,6 +107,42 @@ is recorded when its byte is read.
 - `message/rfc822` with Base64, quoted-printable or uuencode is decoded as
   declared: `message.illegal_transfer_encoding` (Info).
 
+## Observations
+
+ROB-130-003, corpus findings nul-in-text, bulk-sloppy-encodings and
+cut-in-base64-attachment. Code: `ob_observe.go`, a few lines in
+`cte_tolerant.go` and `entity.go`. Tests: `TestObservations` in
+`ob_observe_test.go`, each case read whole and one byte at a time.
+
+- `body.nul` (Info): a `text/*` leaf under `7bit`, `8bit` or no transfer
+  encoding holds a NUL byte, which RFC 2045 forbids in such data and which
+  hides the text after it from C-string readers. Recorded once per body, at
+  the first NUL, when the body ends with `io.EOF`; the monitor holds an end
+  its source returns with bytes for the next read, so every reader after it
+  has seen the whole body first and the order of diagnostics does not depend
+  on how the input arrives. Not for a body declared in UTF-16, UTF-32, UCS-2
+  or UCS-4, or one that begins with such a byte order mark
+  (`charset.bom_mismatch` says that), not for Base64, quoted-printable or
+  uuencode (the NUL is encoded, and `cte.qp_control_byte` covers a raw one),
+  and not under `ProfileStrict`. A 7bit body with a NUL records
+  `cte.seven_bit_violation` too.
+- `=` followed by spaces or tabs and then CRLF or LF is a soft line break with
+  transport padding and records nothing, where it recorded
+  `cte.qp_invalid_soft_break`. A soft line break ended by a bare CR, with or
+  without padding, still records it (Recovered).
+- `cte.base64_truncated` (Incomplete) replaces `cte.base64_padding_missing`
+  and `cte.base64_length_invalid` when the body is a part of a multipart, the
+  input ended with `io.EOF`, and the body's last byte is the input's last:
+  no closing delimiter of any enclosing multipart followed, so the input was
+  cut inside the group. The bytes are the same: the whole bytes of the group,
+  a single character dropped. A body before a delimiter, a cut delimiter
+  (`multipart.close_truncated`) included, keeps the earlier codes. The root
+  body of a message that frames no parts always ends where the input ends,
+  so the decoder cannot tell a cut from a sender that left the padding out;
+  it keeps `cte.base64_padding_missing`. Nor can it for a part whose offsets
+  are unknown (an inferred boundary's kept body, a message embedded in an
+  encoded part).
+
 ## Changed expectations
 
 - An input failure under a tolerant decoder is returned as itself, not joined
@@ -110,6 +150,10 @@ is recorded when its byte is read.
   (`io_error_test.go`, `limit_body_test.go`).
 - A corrupt Base64 body no longer ends at the corruption under the default
   profile.
+- Observations: `cte_tolerant_test.go`'s `soft break trailing space` records
+  nothing, and `TestParse_sevenBitViolation` also expects `body.nul`;
+  `limit_body_test.go` (`TestParse_bodyInputStopNotMasked`): `foo= \r\nbar`
+  records only the input stop.
 
 ## Known limitations
 

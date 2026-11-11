@@ -60,7 +60,7 @@ func parseContentType(t *testing.T, value string, limits Limits) (*ParseSession,
 func checkParameterDiagnostic(t *testing.T, session *ParseSession, code Code, field string, limit int64) {
 	t.Helper()
 
-	diags := session.Diagnostics()
+	diags := obDropOverlong(session.Diagnostics())
 	if len(diags) != 1 {
 		t.Fatalf("Diagnostics() = %v, want exactly one %s entry", codesOfDiags(diags), code)
 	}
@@ -443,7 +443,7 @@ func TestParse_parameters_disabled(t *testing.T) {
 	if len(params) != 400 {
 		t.Errorf("params has %d entries, want 400", len(params))
 	}
-	if d := session.Diagnostics(); d != nil {
+	if d := obDropOverlong(session.Diagnostics()); d != nil {
 		t.Errorf("Diagnostics() = %v, want none from disabled budgets", codesOfDiags(d))
 	}
 }

@@ -770,10 +770,10 @@ func TestTolerantFields_budgets(t *testing.T) {
 			t.Errorf("%d parameters, want the eight within the budget", len(params))
 		}
 		want := []Code{CodeLimitParameterCount, CodeMIMEParameterUnquotedValue}
-		if got := codesOfDiags(session.Diagnostics()); !reflect.DeepEqual(got, want) {
+		if got := codesOfDiags(obDropOverlong(session.Diagnostics())); !reflect.DeepEqual(got, want) {
 			t.Errorf("Diagnostics() = %v, want %v", got, want)
 		}
-		if d := session.Diagnostics()[1]; !strings.Contains(d.Action, "within the parameter budget") {
+		if d := obDropOverlong(session.Diagnostics())[1]; !strings.Contains(d.Action, "within the parameter budget") {
 			t.Errorf("Action %q does not say only the retained occurrences were read", d.Action)
 		}
 		if c := e.ParameterCandidates("Content-Type"); len(c) != 8 {
@@ -793,7 +793,7 @@ func TestTolerantFields_budgets(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(params, map[string]string{"size": "1"}) {
 			t.Errorf("params = %q, %v; want the series the budget cut dropped whole", params, err)
 		}
-		if got := codesOfDiags(session.Diagnostics()); !reflect.DeepEqual(got, []Code{CodeLimitParameterSegments}) {
+		if got := codesOfDiags(obDropOverlong(session.Diagnostics())); !reflect.DeepEqual(got, []Code{CodeLimitParameterSegments}) {
 			t.Errorf("Diagnostics() = %v, want only the budget's", got)
 		}
 		c := e.ParameterCandidates("Content-Disposition")
@@ -867,7 +867,7 @@ func TestTolerantFields_budgets(t *testing.T) {
 		text := "Content-Disposition: " + b.String() + "\r\n\r\nbody"
 		session, e, _ := parseWith(t, text, ParseOptions{Limits: allDisabled()})
 		_, params, _ := e.EffectiveContentDisposition()
-		if got := params["filename"]; len(got) != 2000 || !strings.HasPrefix(got, "0123456789") || session.Len() != 0 {
+		if got := params["filename"]; len(got) != 2000 || !strings.HasPrefix(got, "0123456789") || len(obDropOverlong(session.Diagnostics())) != 0 {
 			t.Errorf("filename of %d bytes starting %.12q, %v", len(got), got, codesOfDiags(session.Diagnostics()))
 		}
 	})

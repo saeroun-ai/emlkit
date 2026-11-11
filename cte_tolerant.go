@@ -42,6 +42,7 @@ const (
 	noteUUMissingBegin
 	noteUUMissingEnd
 	noteSevenBit
+	noteB64Truncated
 	cteNoteCount
 )
 
@@ -60,13 +61,14 @@ var cteNoteInfo = [cteNoteCount]struct {
 	noteB64URLAlphabet:      {CodeCTEBase64URLAlphabet, SeverityRecovered, "base64 body uses the URL-safe alphabet", "read '-' and '_' as '+' and '/'"},
 	noteQPInvalidHex:        {CodeCTEQPInvalidHex, SeverityRecovered, "quoted-printable body holds '=' not followed by two hexadecimal digits", "kept the '=' and what follows it as literal text"},
 	noteQPTrailingEquals:    {CodeCTEQPTrailingEquals, SeverityRecovered, "quoted-printable body ends with '='", "kept the '=' as literal text"},
-	noteQPInvalidSoftBreak:  {CodeCTEQPInvalidSoftBreak, SeverityRecovered, "quoted-printable soft line break is followed by white space or ended by a bare CR", "read it as a soft line break"},
+	noteQPInvalidSoftBreak:  {CodeCTEQPInvalidSoftBreak, SeverityRecovered, "quoted-printable soft line break is ended by a bare CR", "read it as a soft line break"},
 	noteQPControlByte:       {CodeCTEQPControlByte, SeverityInfo, "quoted-printable body holds an unencoded control byte", "kept the byte"},
 	noteQPOverlongLine:      {CodeCTEQPOverlongLine, SeverityInfo, "quoted-printable body holds an encoded line longer than 998 bytes", "decoded the line"},
 	noteUUInvalid:           {CodeCTEUUEncodeInvalid, SeverityRecovered, "uuencoded body holds a line that is not a whole uuencoded line", "decoded what the line holds and went on"},
 	noteUUMissingBegin:      {CodeCTEUUEncodeMissingBegin, SeverityRecovered, "uuencoded body has no begin line", "decoded from the first uuencoded line"},
 	noteUUMissingEnd:        {CodeCTEUUEncodeMissingEnd, SeverityIncomplete, "uuencoded body has no end line", "decoded up to the end of the body"},
 	noteSevenBit:            {CodeCTESevenBitViolation, SeverityInfo, "body declared 7bit holds a NUL or a byte above 127", "kept every byte"},
+	noteB64Truncated:        {CodeCTEBase64Truncated, SeverityIncomplete, "base64 body ends inside a group because the input ends there, with no closing delimiter after it", "decoded the whole bytes of the cut group and dropped the rest"},
 }
 
 // cteNotes reports the repairs of one body's transfer decoder, each kind once,
@@ -425,6 +427,9 @@ func (d *tolerantBase64) finish(eof bool) {
 		return
 	}
 	switch {
+	case d.nq > 0 && d.notes.obInputCut(d.consumed):
+		d.notes.note(noteB64Truncated, d.consumed)
+		d.flush()
 	case d.nq == 1:
 		d.notes.note(noteB64LengthInvalid, d.consumed)
 		d.nq = 0
@@ -567,10 +572,10 @@ func (d *tolerantQP) step(c byte, offset int64) {
 		case (c == ' ' || c == '\t') && len(d.eqWS) < qpRunMax:
 			d.eqWS = append(d.eqWS, c)
 		case c == '\r':
-			d.notes.note(noteQPInvalidSoftBreak, offset)
+			// White space between '=' and the line ending is transport
+			// padding (RFC 2045 section 6.7 rule 3): a soft line break.
 			d.state = qpEqCR
 		case c == '\n':
-			d.notes.note(noteQPInvalidSoftBreak, offset)
 			d.state = qpText
 		default:
 			// Not a soft line break after all: literal text.

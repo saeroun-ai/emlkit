@@ -305,7 +305,7 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 			if fatal == nil && usable {
 				watched := ctx.watchCTELines(name, body, leaf.shared())
 				if decoded, ok := ctx.transferDecoder(name, watched); ok {
-					body = decoded
+					body = ctx.obWatchNUL(name, mediaType, mediaParams["charset"], decoded)
 					if mediaType == "message/rfc822" && name != "" && name != "7bit" && name != "8bit" && name != "binary" {
 						// RFC 2046 section 5.2.1 forbids it; mail in the wild
 						// has it, and the declared encoding is what the bytes

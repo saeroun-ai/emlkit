@@ -101,7 +101,7 @@ func TestParse_metadataNoProgressBounds(t *testing.T) {
 			text := "Content-Type: text/plain; note=\"=?x-meta?Q?" + content + "?=\"\r\n\r\nbody"
 			got := consumeStall(strings.NewReader(text), &ParseOptions{Limits: allDisabled()})
 			_, params, _ := got.entity.EffectiveContentType()
-			if codes := codesOfDiags(got.session.Diagnostics()); params["note"] != content || !reflect.DeepEqual(codes, []Code{CodeMIMEParameterRFC2047}) {
+			if codes := codesOfDiags(obDropOverlong(got.session.Diagnostics())); params["note"] != content || !reflect.DeepEqual(codes, []Code{CodeMIMEParameterRFC2047}) {
 				t.Errorf("note of %d bytes, %v; want it decoded, and reported as a decoded word only", len(params["note"]), codes)
 			}
 		})

@@ -225,3 +225,11 @@ runs every accessor over a fixed set of hostile values, every string of up to
 three bytes from the characters the scanners branch on, and 4,000 fixed
 pseudo-random mixtures, checking the invariants (raw text preserved, entries
 are parts of the value, bounds, strict equivalence). No fuzz target was added.
+
+## Observations
+
+ROB-130-003. `mail.ParseAuthenticationResults` reports an authserv-id written
+as an empty quoted string (`""`) as `authentication_results.invalid`
+(InvalidMetadata) where it reported nothing; the method results are still
+read, and `AuthenticationResults` never trusts the field, as before. Test:
+`TestParseAuthenticationResults_emptyID` in `mail/ob_tree_test.go`.

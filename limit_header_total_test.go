@@ -1503,7 +1503,7 @@ func TestParse_totalHeaders_realDefaultBytes(t *testing.T) {
 		}
 		got := readTree(e)
 		if extra == 0 {
-			if got.err != nil || len(got.bodies) != parts || session.Diagnostics() != nil {
+			if got.err != nil || len(got.bodies) != parts || obDropOverlong(session.Diagnostics()) != nil {
 				t.Fatalf("exact default: (%v, %d of %d bodies)", got.err, len(got.bodies), parts)
 			}
 			continue
@@ -1514,6 +1514,6 @@ func TestParse_totalHeaders_realDefaultBytes(t *testing.T) {
 		// The last block's last byte is the first past the budget.
 		lastStart := int64(len(root) + (parts-1)*(len("--B\r\n")+1_000_000+len("b\r\n")) + len("--B\r\n"))
 		lastSize := int64(headers - (parts-1)*1_000_000)
-		checkTotalStop(t, session, got.err, "bytes", 32<<20, &totalBlock{path: []int{parts - 1}}, lastStart+lastSize-1)
+		checkTotalStopDiags(t, session, obDropOverlong(hpNoEmptyNameNotes(session.Diagnostics())), got.err, "bytes", 32<<20, &totalBlock{path: []int{parts - 1}}, lastStart+lastSize-1)
 	}
 }

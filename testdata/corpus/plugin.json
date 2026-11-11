@@ -214,7 +214,6 @@
       "name": "bulk-sloppy-encodings",
       "state": "complete",
       "diagnostics": [
-        "recovered cte.qp_invalid_soft_break [0]",
         "recovered cte.qp_invalid_hex [0]",
         "recovered charset.declaration_suspect [0]"
       ],

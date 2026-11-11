@@ -92,9 +92,9 @@ entry behind; delete both. `TestCorpus` fails while the counts differ.
 
 ## Findings
 
-Outcomes that look wrong or debatable, as recorded on 2026-11-11. Nothing
-here was changed in the parser, except findings 1 and 2, which are closed: no
-fixture records a `byteAtATime` difference any more, and
+Outcomes that look wrong or debatable, as recorded on 2026-11-11. An item
+marked **Closed** (or "closed") was changed afterwards, and says what is
+reported now. No fixture records a `byteAtATime` difference any more, and
 `TestChunkInvariance_fixtures` holds every fixture to one outcome for four
 ways of delivering it.
 
@@ -124,6 +124,12 @@ ways of delivering it.
    non-empty epilogue; `multipart.trailing_junk` is defined in
    `diagnostic_code.go` but no producer emits it. (ProfileForensic's
    `TrailingInputReader` can read it.)
+   **Closed:** `mail.ReadTree` keeps every multipart's `Preamble` and
+   `Epilogue` on its node and records `multipart.trailing_junk` (Info) in
+   `Tree.Diagnostics` for an epilogue that is not only white space, saying
+   its size and whether it reads as delimiter lines, a header block, text or
+   binary data (multipart-recovery.md, Observations). The session, and so
+   this manifest, is unchanged.
 5. **bulk-duplicate-content-type-multipart** — `Content-Type: text/plain`
    followed by `Content-Type: multipart/mixed; boundary=…`: the first wins
    (the documented policy), so the HTML part and the zip attachment are one
@@ -165,28 +171,47 @@ ways of delivering it.
     `header.nul` for headers and `cte.qp_control_byte` for quoted-printable).
     RFC 2045 forbids NUL in 8bit data, and text hidden behind NULs is a
     signal. Expected: an Info observation.
+    **Closed:** `body.nul` (Info), once per body (transfer-encodings.md,
+    Observations).
 12. **subject-5000** — a 5000-octet header line, five times RFC 5322's 998:
     no diagnostic (nothing is lost; the Subject decodes whole). Debatable:
     an Info observation for lines over 998 octets.
+    **Closed:** `header.overlong_line` (Info), once per header block, with
+    the field in `Field` (header-recovery.md, Observations).
 13. **bulk-sloppy-encodings** — `=` followed by spaces before CRLF is
     reported `cte.qp_invalid_soft_break` (Recovered). RFC 2045 section 6.7
     rule 3 makes trailing white space transport padding to be deleted, which
     leaves a valid soft break. Debatable: Info, or nothing. One diagnostic per
     code per body, so the genuinely invalid bare-LF soft break in the same
     body is reported by that same entry.
+    **Closed:** white space between `=` and the line ending is transport
+    padding and records nothing. The bare-LF soft break (`12=\n.50`) never
+    recorded anything — a bare LF ends a quoted-printable line like CRLF —
+    so the body now records no `cte.qp_invalid_soft_break`; a soft break
+    ended by a bare CR still does (transfer-encodings.md, Observations).
 14. **cut-in-base64-attachment** — the cut inside a base64 group is reported
     `cte.base64_padding_missing` (Recovered), not `cte.base64_truncated`;
     the message is still `incomplete` through `multipart.close_not_found`.
     Debatable: an unpadded final group in a part that the end of input cut
     off is more likely truncation than a sender omitting padding.
+    **Closed:** a group cut where the input ends inside a multipart part
+    records `cte.base64_truncated` (Incomplete). The root body of a message
+    that frames no parts always ends where the input ends, so there the cut
+    cannot be told from missing padding and stays
+    `cte.base64_padding_missing` (transfer-encodings.md, Observations).
 15. **mbox-from-line** — without `RecognizeMboxEnvelope` (the corpus default)
     Thunderbird's `From - <date>` first line is `header.invalid_name`, kept
     apart, and everything else is read. Debatable: a pointer to the option
     (the line fits its grammar) would say more than "invalid name".
+    **Closed:** the code and what is parsed are unchanged; the diagnostic's
+    Message says the line is an mbox From_ line and its Action names
+    `ParseOptions.RecognizeMboxEnvelope` (header-recovery.md, Observations).
 16. **provider-mobile-format-flowed** — not a defect: bodies are delivered as
     sent, so `format=flowed; delsp=yes` is not unwrapped and a word the client
     split ("만나 ⏎요") stays split. A tokenizing consumer needs RFC 3676
     unwrapping, which no API offers.
+    **Closed:** `mail.UnwrapFlowed` and `Node.FlowedText` unwrap it; bodies
+    are still delivered as sent (structure-view.md, Observations).
 
 Decoded correctly with the plugin, for the record: EUC-KR and ks_c_5601-1987
 bodies and B/Q words (including two folded Q words), CP949 extension

@@ -89,3 +89,36 @@ the rest is left unread. Later calls return the same bytes without reading.
 - Reused and colliding nested boundaries: see `nested-boundaries.md`.
 - A repaired multipart with conflicting boundary parameters stays one opaque
   part (ROB-050-001); inference is not tried for it.
+
+## Observations
+
+ROB-130-003, corpus finding list-footer-after-close. Code:
+`mail/tree_epilogue.go`, a few lines in `mail/tree.go`. Tests:
+`TestReadTree_epilogue`, `TestReadTree_epilogueForensic`,
+`TestReadTree_corpusObservations` in `mail/ob_tree_test.go`.
+
+`mail.ReadTree` keeps each multipart's preamble and epilogue on its node
+(`Node.Preamble`, `Node.Epilogue` and their `Truncated` flags), read through
+`MultipartPreamble` and `MultipartEpilogue` once its last part has been read,
+and records `multipart.trailing_junk` (Info) in `Tree.Diagnostics` — not in
+the session — for each epilogue that holds anything but spaces, tabs and line
+endings. Its Message gives the number of bytes kept ("more than" when cut at
+`MaxEpilogueBytes`) and what they read as, in this order: further delimiter
+lines of the multipart's own boundary (parts a closing delimiter cut off), a
+header block (a first line that is a field or `From `), text (UTF-8 with no
+control bytes but white space), or binary data. No byte of the epilogue is in
+it; the bytes are the node's. An unclosed multipart has no epilogue and no
+note.
+
+`ReadTree` now reads epilogues, which it did not: at most
+`MaxEpilogueBytes` plus one byte each, a nested one from its enclosing part,
+the message's own from the input after the closing delimiter. A longer one
+records `limit.epilogue_bytes` against the container, which makes it
+`Repaired`. Under `ProfileForensic` the message's own epilogue is read
+through `TrailingInputReader`, as `MultipartEpilogue` documents: its count,
+evidence and `input.trailing_messages` account for those bytes, and the
+reader does not deliver them again. A stop the read runs into is returned by
+`ReadTree`, as any stop is.
+
+The parse's own diagnostics, and so the corpus manifest, are unchanged; a
+caller that does not use `ReadTree` asks `MultipartEpilogue` itself.

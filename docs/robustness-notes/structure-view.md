@@ -161,3 +161,26 @@ container — in an enclosing multipart's framing — is not counted against it
 when the container's own framing and span are intact. `multipart/encrypted`
 payloads are not marked. A header repair that names no field cannot be tied
 to one: `HeaderRepairFields` does not map locations to fields.
+
+## Observations
+
+ROB-130-003, corpus findings list-footer-after-close and
+provider-mobile-format-flowed. Code: `mail/tree_epilogue.go`,
+`mail/flowed.go`, a few lines in `mail/tree.go`. Tests:
+`mail/ob_tree_test.go`, `mail/flowed_test.go`.
+
+- `Node.Preamble`, `Node.Epilogue`, `PreambleTruncated`, `EpilogueTruncated`:
+  a multipart's bytes before its first and after its closing delimiter line;
+  an epilogue that is not only white space adds `multipart.trailing_junk`
+  (Info) to `Tree.Diagnostics`. See multipart-recovery.md, Observations.
+- `Node.Bodies(prefer...)` no longer lower-cases and trims the caller's slice
+  in place; it works on a copy.
+- `mail.UnwrapFlowed(text, delSp)` unwraps an RFC 3676 format=flowed body:
+  quote depth per line, one space of space-stuffing removed, a line ending in
+  a space joined to the next line of the same depth (its space deleted with
+  `delSp`), a flowed line before another depth or the end treated as fixed,
+  and the `-- ` signature separator never flowed. Each paragraph is written
+  with its quote marks and one space, and the line ending of its last line.
+  `Node.FlowedText()` applies it, with the `delsp` parameter, to the `Data`
+  of a `text/plain` node whose Content-Type says `format=flowed`, and reports
+  false for any other node. Bodies are still delivered as sent.
