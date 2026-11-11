@@ -508,7 +508,10 @@ func (b *treeBuilder) relatedRoot(rel *Node) *Node {
 }
 
 func (b *treeBuilder) roleOf(n *Node, idx int) (Role, string) {
-	if strings.HasPrefix(n.MediaType, "multipart/") && (len(n.Children) > 0 || n.Data == nil) {
+	// A multipart that was framed has no digest; one left unframed was read
+	// as one opaque leaf, which has one even when Data was not kept (an empty
+	// body, MaxBodyBytes below zero, a Body hook).
+	if strings.HasPrefix(n.MediaType, "multipart/") && (len(n.Children) > 0 || n.SHA256 == [sha256.Size]byte{}) {
 		return RoleContainer, "multipart entity"
 	}
 	if p := n.Parent; p != nil {
