@@ -79,13 +79,19 @@ import (
 // A value holding raw UTF-8 is kept as it is (mime.parameter_raw_utf8,
 // informational). One holding raw bytes that are not UTF-8 is decoded with the
 // charset the entity's Content-Type declares, when there is one and it has a
-// decoder; otherwise the bytes are kept as the value and the candidate is
-// marked Undecoded (mime.parameter_unknown_charset). The boundary is exempt:
-// its bytes frame the body and are never rewritten.
+// decoder; failing that with the caller's fallback charset
+// (ParseOptions.FallbackCharset), when there is one and the bytes are valid in
+// it, and the candidate is marked Fallback (mime.parameter_fallback_charset);
+// otherwise the bytes are kept as the value and the candidate is marked
+// Undecoded (mime.parameter_unknown_charset). The boundary is exempt: its
+// bytes frame the body and are never rewritten.
 //
 // RFC 2047 encoded words in a value are decoded, as this package has always
 // decoded them, and the fact is reported (mime.parameter_rfc2047,
-// informational).
+// informational). A word whose charset has no decoder stays in the value as it
+// was written, and the candidate is marked Undecoded
+// (mime.parameter_unknown_charset): the caller is not handed "=?euc-kr?B?…?="
+// as if it were a name.
 
 // A ParameterForm says how a parameter value was written in its field.
 type ParameterForm uint8
@@ -138,7 +144,8 @@ type ParameterCandidate struct {
 
 	// Charset and Language are what an RFC 2231 value declares, as written.
 	// Charset is also set, in lower case, when raw 8-bit bytes were decoded
-	// with the charset of the entity's Content-Type.
+	// with the charset of the entity's Content-Type, or with the fallback
+	// charset (see Fallback).
 	Charset  string
 	Language string
 
@@ -146,8 +153,17 @@ type ParameterCandidate struct {
 	// decoder for the charset declared, none was declared for raw 8-bit bytes,
 	// or the bytes are not valid in it. Value is then the octets themselves and
 	// may not be UTF-8, so that a caller who knows the charset can still decode
-	// them.
+	// them. It is also set when Value holds an RFC 2047 encoded word whose
+	// charset has no decoder: the word is then in Value as it was written.
 	Undecoded bool
+
+	// Fallback reports that Value was decoded with the fallback charset — the
+	// parse's ParseOptions.FallbackCharset, or the HeaderTextOptions given to
+	// Header.FilenameCandidatesWithOptions — because the value holds raw 8-bit
+	// bytes that are not UTF-8 and nothing in the entity's header names their
+	// charset. Charset is then that charset. It is a guess the caller asked
+	// for, made only when the bytes decode in that charset without error.
+	Fallback bool
 
 	// Chosen reports that this candidate is the parameter's value in the
 	// parameter map. A parameter has at most one chosen candidate, and has none
@@ -232,6 +248,11 @@ type tolerantInput struct {
 	// guess, and a strict profile makes none.
 	hint   func() string
 	noHint bool
+
+	// fallback is the charset to try for such bytes when the hint names none,
+	// or none that decodes them: the caller's fallback charset, normalized, or
+	// "" for none. It is a guess too, and noHint turns it off as well.
+	fallback string
 
 	// noWords leaves RFC 2047 encoded words undecoded. It is set for a value
 	// that belongs to no parse and is longer than any header field a parse
@@ -516,6 +537,15 @@ func readTolerant(in tolerantInput) tolerantReading {
 						r.notes.note(CodeMIMEParameterUnknownCharset, c.Name, SeverityRecovered, false)
 					}
 				}
+				if !decoded && in.fallback != "" && in.fallback != hint && !in.noHint && c.Name != "charset" {
+					// The caller's fallback charset, as for raw 8-bit header
+					// text — but only when the bytes are valid in it: a name
+					// with U+FFFD in it is worth less than its bytes.
+					if s, ok := in.dec.convertCharset(in.fallback, []byte(text)); ok && utf8.ValidString(s) && !strings.ContainsRune(s, utf8.RuneError) {
+						text, c.Charset, c.Fallback, decoded = s, in.fallback, true, true
+						r.notes.note(CodeMIMEParameterFallbackCharset, c.Name, SeverityRecovered, false)
+					}
+				}
 				if !decoded {
 					c.Undecoded = true
 					r.notes.note(CodeMIMEParameterUnknownCharset, c.Name, SeverityUnsupported, false)
@@ -524,7 +554,14 @@ func readTolerant(in tolerantInput) tolerantReading {
 		}
 		c.Value = text
 		if !in.noWords {
-			c.Value = in.dec.decode(text)
+			var unknown bool
+			c.Value, unknown = in.dec.cdDecodeWords(text)
+			if unknown && c.Name != "boundary" {
+				// An encoded word in a charset with no decoder is still in the
+				// value as it was written: that is not the name.
+				c.Undecoded = true
+				r.notes.note(CodeMIMEParameterUnknownCharset, c.Name, SeverityUnsupported, false)
+			}
 		}
 		if c.Value != text {
 			r.notes.note(CodeMIMEParameterRFC2047, c.Name, SeverityInfo, false)

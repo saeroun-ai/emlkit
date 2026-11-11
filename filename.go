@@ -154,16 +154,22 @@ func filenameConflictDiagnostic(names []FilenameCandidate) Diagnostic {
 // Content-Type and Content-Disposition as they are now, tolerantly and under
 // the default parameter budgets.
 func (h *Header) parameterCandidates() (contentType, disposition []ParameterCandidate) {
+	return h.cdParameterCandidates("")
+}
+
+// cdParameterCandidates is parameterCandidates with a fallback charset for
+// raw 8-bit bytes nothing names a charset for, "" for none.
+func (h *Header) cdParameterCandidates(fallback string) (contentType, disposition []ParameterCandidate) {
 	var c parseContext
-	contentType = c.candidatesOf("Content-Type", h.Get("Content-Type"), nil)
-	disposition = c.candidatesOf("Content-Disposition", h.Get("Content-Disposition"), func() string {
+	contentType = c.cdCandidatesOf("Content-Type", h.Get("Content-Type"), nil, fallback)
+	disposition = c.cdCandidatesOf("Content-Disposition", h.Get("Content-Disposition"), func() string {
 		for _, c := range contentType {
 			if c.Name == "charset" && c.Chosen {
 				return c.Value
 			}
 		}
 		return ""
-	})
+	}, fallback)
 	return contentType, disposition
 }
 
@@ -195,6 +201,32 @@ func (h *Header) parameterCandidates() (contentType, disposition []ParameterCand
 // it as the name of a file.
 func (h *Header) FilenameCandidates() []FilenameCandidate {
 	contentType, disposition := h.parameterCandidates()
+	return filenameCandidates(disposition, contentType)
+}
+
+// FilenameCandidatesWithOptions is FilenameCandidates with a fallback charset
+// for a filename written as raw 8-bit bytes: opts.FallbackCharset, the option
+// Header.TextWithOptions takes for raw 8-bit header text, used the same way. A
+// nil opts, or an empty FallbackCharset, is FilenameCandidates.
+//
+// The fallback is the last thing tried. A value that is valid UTF-8 is kept; a
+// value that is not is decoded with the charset of the header's Content-Type
+// when that has a decoder; and only then with the fallback, through
+// CharsetReader, and only when the bytes are valid in it — bytes it would turn
+// into U+FFFD stay as they are, the candidate Undecoded. A candidate decoded
+// with it has Parameter.Fallback set and Parameter.Charset naming it.
+// RFC 2231 values and RFC 2047 encoded words declare their own charset and are
+// never read with the fallback.
+//
+// An entity of a parse — Entity.FilenameCandidates, ParameterCandidates and
+// the effective fields — does the same with ParseOptions.FallbackCharset, and
+// records mime.parameter_fallback_charset.
+func (h *Header) FilenameCandidatesWithOptions(opts *HeaderTextOptions) []FilenameCandidate {
+	fallback := ""
+	if opts != nil {
+		fallback = cdFallbackLabel(opts.FallbackCharset)
+	}
+	contentType, disposition := h.cdParameterCandidates(fallback)
 	return filenameCandidates(disposition, contentType)
 }
 

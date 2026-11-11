@@ -294,6 +294,61 @@ func (d *metadataDecoder) convertCharset(charset string, b []byte) (string, bool
 	return string(out), true
 }
 
+// cdDecodeWords is decode — v with its RFC 2047 encoded words decoded, a word
+// that cannot be decoded left as it was written, and v itself after a stall or
+// a cancellation — and also reports whether a word stayed as written because
+// its charset has no decoder. A nil decoder decodes without the no-progress
+// guard, as decode does.
+func (d *metadataDecoder) cdDecodeWords(v string) (s string, unknownCharset bool) {
+	if !strings.Contains(v, "=?") {
+		return v, false
+	}
+	if d == nil {
+		scan := wordScan{s: v, cr: charsetReader, maxWords: maxEncodedWords}
+		s = scan.decode()
+		return s, isCharsetWarning(scan.err)
+	}
+	if d.stalled[v] {
+		return v, false
+	}
+	w := &valueDecoder{poll: d.poll}
+	scan := wordScan{s: v, cr: w.charsetReader, maxWords: maxEncodedWords}
+	s = scan.decode()
+	if w.stalled {
+		if d.stalled == nil {
+			d.stalled = make(map[string]bool)
+		}
+		d.stalled[v] = true
+		return v, false
+	}
+	if w.cancelled {
+		return v, false
+	}
+	return s, isCharsetWarning(scan.err)
+}
+
+// cdFallbackLabel returns a caller's fallback charset as parameter values use
+// it: normalized like the label of an encoded word, and "" for none and for
+// UTF-8, US-ASCII and the placeholder labels, which convert nothing.
+func cdFallbackLabel(label string) string {
+	label = normalizeCharsetLabel(label)
+	if class := classifyCharset(label); class == charsetHook || class == charsetLatin1 {
+		return label
+	}
+	return ""
+}
+
+// cdParamFallback returns the charset this parse tries for raw 8-bit bytes in
+// a parameter value that nothing names a charset for:
+// ParseOptions.FallbackCharset, or "" when there is none, no parse, or the
+// profile is ProfileStrict, which makes no guess.
+func (c parseContext) cdParamFallback() string {
+	if c.session == nil || c.session.Profile() == ProfileStrict {
+		return ""
+	}
+	return cdFallbackLabel(c.session.fallbackCharset())
+}
+
 // A parameterSegment is one continuation segment of a parameter, as it
 // arrived.
 type parameterSegment struct {

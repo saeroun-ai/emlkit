@@ -48,8 +48,8 @@
       "name": "ko-raw-8bit-subject-filename",
       "state": "complete",
       "diagnostics": [
-        "unsupported mime.parameter_unknown_charset [1]",
-        "unsupported mime.parameter_unknown_charset [1]",
+        "recovered mime.parameter_fallback_charset [1]",
+        "recovered mime.parameter_fallback_charset [1]",
         "recovered mime.parameter_unknown_charset [2]",
         "recovered mime.parameter_unknown_charset [2]"
       ],
@@ -66,7 +66,7 @@
         "[0] \"견적서와 계약서 초안을 보내드립니다.\""
       ],
       "names": [
-        "[1] \"\\xb0\\xdf\\xc0\\xfb\\xbc\\xad_11\\xbf\\xf9.xls\" undecoded",
+        "[1] \"견적서_11월.xls\"",
         "[2] \"계약서_초안.hwp\""
       ]
     },
@@ -153,15 +153,18 @@
     {
       "name": "ko-utf8-labelled-euc-kr",
       "state": "complete",
+      "diagnostics": [
+        "recovered charset.declaration_suspect []"
+      ],
       "leaves": [
-        "[] text/html 260"
+        "[] text/html 215"
       ],
       "headers": [
         "Subject 22 \"[광고] 연말 특가\"",
         "From 23 \"shop@shop.example.co.kr\""
       ],
       "text": [
-        "[] \"<html><head><meta charset=\\\"utf-8\\\"></head><body><p>[愿묎퀬] �곕쭚 �\"…"
+        "[] \"<html><head><meta charset=\\\"utf-8\\\"></head><body><p>[광고] 연말 특가\"…"
       ]
     },
     {
@@ -215,10 +218,10 @@
       "state": "complete",
       "diagnostics": [
         "recovered cte.qp_invalid_hex [0]",
-        "recovered charset.declaration_suspect [0]"
+        "info charset.invalid_sequence [0]"
       ],
       "leaves": [
-        "[0] text/plain 231",
+        "[0] text/plain 223",
         "[1] text/html 208"
       ],
       "headers": [

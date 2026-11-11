@@ -263,8 +263,11 @@ func TestParse_metadataNoProgressIsOurs(t *testing.T) {
 	t.Run("a hook that fails", func(t *testing.T) {
 		withCharsetReader(t, func(string, io.Reader) (io.Reader, error) { return nil, errors.New("no such charset") })
 		got := consumeStall(strings.NewReader(text), nil)
-		if _, params, _ := got.entity.EffectiveContentType(); params["note"] != word || got.session.Len() != 0 {
-			t.Errorf("note %q, %v; want the raw word and no diagnostic", params["note"], codesOfDiags(got.session.Diagnostics()))
+		// Not a stall: the word's charset is unknown, which is said as such
+		// (mime.parameter_unknown_charset) and not as header.decoder_no_progress.
+		codes := codesOfDiags(got.session.Diagnostics())
+		if _, params, _ := got.entity.EffectiveContentType(); params["note"] != word || !reflect.DeepEqual(codes, []Code{CodeMIMEParameterUnknownCharset}) {
+			t.Errorf("note %q, %v; want the raw word and its unknown charset reported", params["note"], codes)
 		}
 	})
 

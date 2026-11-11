@@ -251,11 +251,20 @@ func decodeWord(s string) (decoded string, wasEncoded, unknownCharset bool) {
 			unknownCharset = true
 			return nil, errors.New("mail: unhandled charset " + strconv.Quote(charset))
 		}
-		r, err := message.CharsetReader(charset, input)
+		in := &cdCountedInput{r: input}
+		r, err := message.CharsetReader(charset, in)
 		if err != nil {
 			unknownCharset = true
+			return r, err
 		}
-		return r, err
+		if r == nil {
+			// Neither a reader nor an error: nothing can decode the word.
+			unknownCharset = true
+			return nil, errors.New("mail: charset reader returned no reader for " + strconv.Quote(charset))
+		}
+		// The decoder copies the hook's reader to its end; cdWordReader holds
+		// that copy to the bounds the root decoder has (word_bounds.go).
+		return &cdWordReader{r: r, in: in, left: cdWordOutputLimit(len(s))}, nil
 	}}
 	out, err := dec.Decode(s)
 	if err != nil {

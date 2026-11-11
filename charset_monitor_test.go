@@ -19,7 +19,9 @@ func TestParse_utf8BodyWatched(t *testing.T) {
 		{"truncated at the end", "utf-8", "caf\xc3", []Code{CodeCharsetInvalidSequence}},
 		{"overlong", "utf-8", "a\xc0\xafb", []Code{CodeCharsetInvalidSequence}},
 		{"utf-16 mark", "utf-8", "\xff\xfeh\x00i\x00", []Code{CodeCharsetBOMMismatch, CodeCharsetInvalidSequence}},
-		{"not declared utf-8", "us-ascii", "caf\xe9", nil},
+		// Delivered as read too, and reported by what was declared: see
+		// TestParse_undeclaredBodyWatched.
+		{"declared us-ascii", "us-ascii", "caf\xe9", []Code{CodeCharsetDeclarationSuspect}},
 	} {
 		for name, wrap := range map[string]func(io.Reader) io.Reader{
 			"whole":    func(r io.Reader) io.Reader { return r },

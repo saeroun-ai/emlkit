@@ -34,6 +34,7 @@ every profile.
 | Repair (Strict refuses) | `Recovered`; `InvalidMetadata` for an unframed multipart or a strict refusal | `mime.content_type_missing_type`, `_missing_subtype`, `_missing_slash`, `mime.content_type_invalid`, `mime.disposition_invalid`, `mime.parameter_unquoted_value`, `_unclosed_quote`, `_invalid_escape` (stray quote or trailing backslash), `_duplicate`, `_segment_missing`, `_segment_duplicate`, `_bad_percent_escape`, `_unknown_charset` (extended value with no charset prefix) |
 | Observation | `Info` | `mime.parameter_rfc2047`, `mime.parameter_raw_utf8`, `mime.parameter_invalid_escape` (backslash kept as a backslash), `mime.filename_conflict` |
 | Observation | `Unsupported`, or `Recovered` when a charset guess decoded the bytes | `mime.parameter_unknown_charset` |
+| Observation | `Recovered` | `mime.parameter_fallback_charset` (raw 8-bit bytes read in the caller's fallback charset) |
 
 A field records at most one diagnostic per code, in a fixed order, after any
 `limit.parameter_*` diagnostic. All of a field's diagnostics share one
@@ -156,6 +157,31 @@ Status: implemented.
   `Recovered`); otherwise kept as bytes, `Undecoded` (`Unsupported`). Strict
   makes no such guess. A `boundary` is never rewritten.
 
+### Fallback charset and undecodable words
+
+Added after the corpus review (corpus.md findings 8 and 9).
+
+- **Raw 8-bit bytes, last resort.** When the bytes are not UTF-8 and the
+  Content-Type's charset is absent, `utf-8`/`us-ascii`, or has no decoder, the
+  caller's fallback charset is tried: `ParseOptions.FallbackCharset` for an
+  entity of a parse (`Entity.FilenameCandidates`, `ParameterCandidates`,
+  `EffectiveContentType`/`Disposition`), `HeaderTextOptions.FallbackCharset`
+  for `Header.FilenameCandidatesWithOptions`. It is used only when the bytes
+  are **valid in it** — a decoding that holds U+FFFD is refused and the bytes
+  stay `Undecoded`. A candidate decoded this way has `Fallback` set and
+  `Charset` naming the fallback, and the field records
+  `mime.parameter_fallback_charset` (`Recovered`, an observation: it refuses
+  nothing). ProfileStrict makes no such guess. RFC 2231 values and encoded
+  words declare their own charset and never use it.
+- **An encoded word in a charset with no decoder** stays in the value as it
+  was written, as before, but the candidate is now `Undecoded` and the field
+  records `mime.parameter_unknown_charset` (`Unsupported`), as for an RFC 2231
+  value in an unknown charset. Before, `=?euc-kr?B?…?=` came back as the
+  filename with nothing to say it was not one. The other words of the value
+  are still decoded (`mime.parameter_rfc2047`). A `boundary` is exempt.
+- `mail.AttachmentHeader.Filename` reads a header with no parse and takes no
+  fallback; `FilenameCandidatesWithOptions` is the call for that.
+
 ## ROB-050-009 — filename candidates
 
 Status: implemented. API: `FilenameCandidate`, `FilenameSource`,
@@ -211,7 +237,8 @@ for nothing usable. It is idempotent.
   as it always has: that reading is the standard library's and is kept for
   conformant fields. The raw text is in the candidate.
 - Raw non-UTF-8 bytes are decoded only with the charset of the same entity's
-  `Content-Type`. No charset is guessed from siblings or by detection;
+  `Content-Type`, and failing that with the caller's fallback charset. No
+  charset is guessed from siblings or by detection;
   `ParameterCandidate.Undecoded` marks the bytes for a caller that knows better.
 - An encoded word that splits a multi-byte character across two words is
   decoded word by word (the existing decoder).

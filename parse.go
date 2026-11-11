@@ -97,8 +97,17 @@ type ParseOptions struct {
 	// package's. It is empty by default, and the parser then guesses nothing:
 	// such a body is delivered as it was read. Every use is recorded
 	// (charset.missing or charset.declaration_suspect, SeverityRecovered). A
-	// body whose first 4096 bytes are valid UTF-8 is never decoded with it.
-	// See charset_monitor.go.
+	// body whose first 4096 bytes are valid UTF-8 is never decoded with it,
+	// and neither is one that is mostly UTF-8 there — the bytes of its
+	// well-formed multi-byte sequences more than twice its ill-formed bytes:
+	// that is damaged UTF-8, not another charset. See charset_monitor.go.
+	//
+	// Under the healing profiles it is also tried for a Content-Type or
+	// Content-Disposition parameter value written as raw 8-bit bytes that
+	// are not UTF-8 and that the entity's own charset does not decode — a
+	// filename, typically — and used when the bytes are valid in it
+	// (mime.parameter_fallback_charset, ParameterCandidate.Fallback). Header
+	// text takes its fallback from HeaderTextOptions.
 	FallbackCharset string
 }
 

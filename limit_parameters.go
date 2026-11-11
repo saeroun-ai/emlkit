@@ -659,6 +659,13 @@ func oversizedField(raw string) bool {
 // reading the retained occurrences once more. It returns nil for an absent
 // field and for a parse that was cancelled.
 func (c parseContext) candidatesOf(field, raw string, hint func() string) []ParameterCandidate {
+	return c.cdCandidatesOf(field, raw, hint, c.cdParamFallback())
+}
+
+// cdCandidatesOf is candidatesOf with the fallback charset to try for raw
+// 8-bit bytes given by the caller: the parse's, or the one a caller of
+// Header.FilenameCandidatesWithOptions named.
+func (c parseContext) cdCandidatesOf(field, raw string, hint func() string, fallback string) []ParameterCandidate {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
@@ -672,7 +679,7 @@ func (c parseContext) candidatesOf(field, raw string, hint func() string) []Para
 		return nil
 	}
 	t := readTolerant(tolerantInput{
-		field: field, raw: raw, scan: scan, dec: &metadataDecoder{poll: poll}, poll: poll, hint: hint,
+		field: field, raw: raw, scan: scan, dec: &metadataDecoder{poll: poll}, poll: poll, hint: hint, fallback: fallback,
 		// A parse's own header budgets bound its fields; nothing bounds a
 		// header a caller built.
 		noWords: !ok && oversizedField(raw),

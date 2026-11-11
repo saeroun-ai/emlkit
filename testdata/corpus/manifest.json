@@ -660,6 +660,8 @@
       "state": "complete",
       "diagnostics": [
         "unsupported charset.unknown [0]",
+        "unsupported mime.parameter_unknown_charset [1]",
+        "unsupported mime.parameter_unknown_charset [1]",
         "info mime.parameter_rfc2047 [2]",
         "info mime.parameter_rfc2047 [2]"
       ],
@@ -676,7 +678,7 @@
         "[0] \"\\xb0\\xdf\\xc0\\xfb\\xbc\\xad\\xbf\\xcd \\xb8\\xc5\\xc3\\xe2 \\xc7\\xf6Ȳ \\xc6\\xc4\\xc0\\xcf\\xc0\\xbb ÷\\xba\\xce\\xc7մϴ\\xd9. Ȯ\\xc0\\xce \\xba\\xceŹ\\xb5帳\\xb4ϴ\\xd9.\""
       ],
       "names": [
-        "[1] \"=?euc-kr?B?sN/A+7ytXzIwMjaz4jExv/kucGRm?=\"",
+        "[1] \"=?euc-kr?B?sN/A+7ytXzIwMjaz4jExv/kucGRm?=\" undecoded",
         "[2] \"매출_현황_4분기.xlsx\""
       ]
     },
@@ -712,6 +714,9 @@
       "category": "malformed",
       "description": "A text/plain body in 8-bit EUC-KR whose Content-Type declares no charset.",
       "state": "complete",
+      "diagnostics": [
+        "info charset.missing []"
+      ],
       "leaves": [
         "[] text/plain 105"
       ],

@@ -156,6 +156,7 @@ var parameterNoteOrder = []Code{
 	CodeMIMEParameterSegmentDuplicate,
 	CodeMIMEParameterBadPercentEscape,
 	CodeMIMEParameterUnknownCharset,
+	CodeMIMEParameterFallbackCharset,
 	CodeMIMEParameterRFC2047,
 	CodeMIMEParameterRawUTF8,
 }
@@ -180,6 +181,7 @@ func (c parseContext) healParameterized(field, raw string, scan parameterScan, d
 	strict := c.session != nil && c.session.Profile() == ProfileStrict
 	t := readTolerant(tolerantInput{
 		field: field, raw: raw, scan: scan, dec: dec, poll: poll, hint: hint, noHint: strict, noWords: noWords,
+		fallback: c.cdParamFallback(),
 	})
 	if t.cancelled || (poll != nil && poll()) {
 		// A reading the cancellation reached is discarded whole.
@@ -301,6 +303,8 @@ func noteMessage(field string, code Code, f *finding) string {
 			return subject + ": bytes whose charset is undeclared, has no decoder, or does not match them were kept undecoded"
 		}
 		return subject + ": raw 8-bit bytes with no declared charset were read in the charset of the entity's Content-Type"
+	case CodeMIMEParameterFallbackCharset:
+		return subject + ": raw 8-bit bytes with no declared charset were read in the fallback charset, in which they are valid"
 	case CodeMIMEParameterRFC2047:
 		return subject + ": RFC 2047 encoded words, which a parameter value may not hold, were decoded"
 	case CodeMIMEParameterRawUTF8:

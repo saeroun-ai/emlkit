@@ -189,10 +189,12 @@ func TestReader_classificationFollowsTheBoundedMetadata(t *testing.T) {
 		{
 			// The charset parameter is past the Content-Type budget, so there is
 			// no charset to convert: no stage runs and nothing claims there was.
+			// The body is then text with no charset, and its 8-bit bytes are
+			// observed as such (charset.missing, info) where the body is watched.
 			name:   "charset past the content-type budget is not applied",
 			header: "Content-Type: text/plain; a=1; charset=x-made-up\r\n",
 			skip:   want{false, false, []message.Code{message.CodeLimitParameterCount}},
-			noSkip: want{false, false, []message.Code{message.CodeLimitParameterCount}},
+			noSkip: want{false, false, []message.Code{message.CodeLimitParameterCount, message.CodeCharsetMissing}},
 		},
 	} {
 		for _, skip := range []bool{true, false} {

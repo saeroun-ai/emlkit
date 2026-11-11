@@ -141,12 +141,19 @@ ways of delivering it.
    Expected: an observation such as `charset.declaration_suspect` when a body
    declared in a legacy multi-byte charset is valid non-ASCII UTF-8, and
    arguably decoding it as UTF-8.
+   **Closed**: read as UTF-8 with `charset.declaration_suspect` (Recovered)
+   under the healing profiles; the evidence rule is in charset-plugin.md,
+   "UTF-8 under a legacy declaration".
 7. **bulk-sloppy-encodings** (plugin, FallbackCharset euc-kr) — one damaged
    quoted-printable escape makes a UTF-8 body invalid UTF-8, so the whole
    body is re-decoded as EUC-KR: "Café" becomes "Caf챕" and "€" two U+FFFD
    (`charset.declaration_suspect`). Expected: a body that is overwhelmingly
    valid UTF-8 stays UTF-8; the fallback applies to bodies that are mostly
    not, or only to the invalid runs.
+   **Closed**: a body whose sniff window is mostly UTF-8 (bytes in
+   well-formed multi-byte sequences more than twice the ill-formed bytes)
+   stays UTF-8 and records `charset.invalid_sequence` (Info), as without the
+   fallback; charset-plugin.md, "The fallback charset and damaged UTF-8".
 8. **ko-filename-encoded-word-quoted** (no plugin) — an `euc-kr` encoded word
    inside a quoted filename, with no decoder for the charset, is returned as
    the literal `=?euc-kr?B?…?=` text with no diagnostic and `Undecoded`
@@ -154,6 +161,8 @@ ways of delivering it.
    Expected: as for an RFC 2231 value in an unknown charset,
    `mime.parameter_unknown_charset` (Unsupported) and `Undecoded`. With the
    plugin both names decode.
+   **Closed**: exactly that, for every parameter but `boundary`
+   (mime-parameters.md, "Fallback charset and undecodable words").
 9. **ko-raw-8bit-subject-filename** (plugin, FallbackCharset euc-kr) — a raw
    EUC-KR filename on a part whose Content-Type has no charset stays
    undecoded (`mime.parameter_unknown_charset`, Unsupported) although the
@@ -161,12 +170,19 @@ ways of delivering it.
    fallback. The part whose Content-Type says `charset=euc-kr` decodes.
    Expected: parameter decoding to fall back to `ParseOptions.FallbackCharset`
    too.
+   **Closed**: it does, when the bytes are valid in the fallback charset:
+   `mime.parameter_fallback_charset` (Recovered), `ParameterCandidate.Fallback`.
+   A header read with no parse takes `Header.FilenameCandidatesWithOptions`.
 10. **ko-undeclared-euc-kr** (no fallback) — a text body with no charset and
     8-bit bytes that are not UTF-8 records nothing at all; a body declared
     UTF-8 with the same bytes records `charset.invalid_sequence` (Info).
     Expected: an Info observation here too, so a caller that set no fallback
     learns the text is undecoded bytes. With the fallback it is
     `charset.missing`, as designed.
+    **Closed**: `charset.missing` at Info, bytes kept (and
+    `charset.declaration_suspect` at Info under a declared `us-ascii`). An
+    entity with no Content-Type field at all is still silent without a
+    fallback; charset-plugin.md, "Text with no charset and no fallback".
 11. **nul-in-text** — NUL bytes in an 8bit text body: no diagnostic (there is
     `header.nul` for headers and `cte.qp_control_byte` for quoted-printable).
     RFC 2045 forbids NUL in 8bit data, and text hidden behind NULs is a

@@ -447,6 +447,12 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 			// order mark is looked for (ROB-080-004).
 			in, hold := ctx.holdBOM(leaf, body)
 			body = in
+			if header.Has("Content-Type") {
+				// Declared text with no charset: delivered as read, and watched
+				// for bytes that are neither US-ASCII nor UTF-8
+				// (charset.missing; see charset_monitor.go).
+				body = ctx.watchUTF8("", in)
+			}
 			if ctx.session.fallbackCharset() != "" {
 				body = ctx.sniffFallback("", in)
 			}

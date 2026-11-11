@@ -20,7 +20,10 @@ func TestParse_bomConflictWithoutDecoder(t *testing.T) {
 		action                  string // in the bom_mismatch Action
 	}{
 		{"utf-16 mark, utf-8", "text/plain; charset=utf-8", "\xff\xfeh\x00i\x00", []Code{CodeCharsetBOMMismatch, CodeCharsetInvalidSequence}, "no CharsetReader decodes utf-16"},
-		{"utf-32 mark, no charset", "text/plain", "\x00\x00\xfe\xff\x00\x00\x00h", []Code{CodeCharsetBOMMismatch}, "no CharsetReader decodes utf-32"},
+		// Kept as read, like the body declared utf-8 above, and watched the same
+		// way: the bytes are neither US-ASCII nor UTF-8 (charset.missing, info).
+		// An entity with no Content-Type at all is not watched.
+		{"utf-32 mark, no charset", "text/plain", "\x00\x00\xfe\xff\x00\x00\x00h", []Code{CodeCharsetBOMMismatch, CodeCharsetMissing}, "no CharsetReader decodes utf-32"},
 		{"utf-16 mark, no content type", "", "\xfe\xff\x00h\x00i", []Code{CodeCharsetBOMMismatch}, "no CharsetReader"},
 		{"utf-8 mark, us-ascii", "text/plain; charset=us-ascii", "\xef\xbb\xbfhi", []Code{CodeCharsetBOMMismatch}, "that is UTF-8"},
 		{"utf-8 mark, utf-8", "text/plain; charset=utf-8", "\xef\xbb\xbfhi", nil, ""},

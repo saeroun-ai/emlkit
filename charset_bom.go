@@ -51,6 +51,11 @@ import (
 // us-ascii or no charset at all is that too: the parser delivers such a body as
 // it was read, which already is UTF-8, so there is nothing to heal.
 //
+// A body with no mark that declares a legacy charset is checked against its
+// bytes too, by the same hold: one that is UTF-8 all the same is read as
+// UTF-8 (charset.declaration_suspect). See cdDecideUTF8 for the evidence and
+// cdRead for what the look costs.
+//
 // Read, ReadWithOptions and New look at nothing and report nothing, as before.
 // A CharsetReader that reads its input while it builds its decoder gets that
 // input unexamined: nothing is held back from it, and nothing is reported.
@@ -239,6 +244,13 @@ type bomHold struct {
 	armed   bool      // the body has been read: the look may be taken
 	decided bool
 	healed  io.Reader // the body decoded as its mark says, when it is
+
+	// The look for UTF-8 under a legacy declaration; see cdDecideUTF8.
+	sniff    bool // the look is on: nothing has decided it yet
+	sevenBit bool // the label names a 7-bit charset, whose shifts speak for it
+	scan     cdUTF8Scan
+	utf8     bool // decided: the body is read as UTF-8 from cut on
+	cut      int  // where the declared decoder's input ends then: the ASCII before the first 8-bit byte
 }
 
 // bomRedirected is what the declared decoder's input returns once the body
@@ -267,6 +279,11 @@ func (v *bomView) Read(p []byte) (int, error) {
 		}
 		if h.healed != nil {
 			return 0, bomRedirected
+		}
+		if h.sniff || h.utf8 {
+			if n, err, done := h.cdRead(v, p); done {
+				return n, err
+			}
 		}
 	}
 	if v.off < len(h.buf) {
@@ -301,11 +318,15 @@ func (h *bomHold) body(charset string, declared io.Reader) io.Reader {
 		return declared
 	}
 	h.charset, h.class = charset, bomClassOf(charset)
+	// A decoder that read its input while it was built has it unexamined.
+	if !h.decided && h.class == bomClassOther && h.ctx.session.Profile() != ProfileStrict {
+		h.sniff, h.sevenBit = cdSuspectLabel(charset)
+	}
 	return &bomBody{h: h, declared: declared}
 }
 
 // A bomBody reads its text body as declared, or, once the look has decided
-// so, as its byte order mark says.
+// so, as its byte order mark says, or as the UTF-8 it turned out to be.
 type bomBody struct {
 	h        *bomHold
 	declared io.Reader
@@ -322,13 +343,32 @@ func (b *bomBody) Read(p []byte) (int, error) {
 	if !h.decided {
 		return n, err
 	}
-	if h.healed == nil {
-		b.r = b.declared
-		return n, err
+	if h.healed != nil {
+		// The declared decoder was given nothing of the body.
+		b.r = h.healed
+		return b.r.Read(p)
 	}
-	// The declared decoder was given nothing of the body.
-	b.r = h.healed
-	return b.r.Read(p)
+	if h.utf8 {
+		// The declared decoder's input ended at the cut, and what it made of
+		// the ASCII before it is delivered to its end; the rest of the body
+		// is read as it is. Its input is replaced only now, since it reads
+		// through the same counter.
+		if h.cut > 0 && err == nil {
+			return n, nil
+		}
+		if h.cut == 0 {
+			n = 0 // it was given nothing of the body
+		}
+		b.r = h.ctx.cdWatchHealed(h.leaf.countCharsetInput(&bomView{h: h, off: h.cut}))
+		if n > 0 {
+			return n, nil
+		}
+		return b.r.Read(p)
+	}
+	if !h.sniff {
+		b.r = b.declared
+	}
+	return n, err
 }
 
 // look reads the first bytes of the body into the hold and decides. Until a
@@ -374,6 +414,183 @@ func (h *bomHold) enough() bool {
 	return m == textproto.BOMNone || h.class.accepts(m)
 }
 
+// cdSuspectLabel reports whether a text body declared with this label, which
+// names no Unicode encoding, is looked at for UTF-8 (cdDecideUTF8), and
+// whether the label names an ISO 2022 charset, 7-bit text that is shifted in
+// and out by control characters.
+//
+// UTF-7 and HZ are left alone. Their shifts are printable ASCII ("+", "~{"),
+// which the look takes for text, and a UTF-7 decoder keeps UTF-8 as it is
+// anyway: reading such a body as UTF-8 instead would only leave its runs
+// undecoded.
+func cdSuspectLabel(label string) (sniff, sevenBit bool) {
+	lc := strings.ToLower(label)
+	switch {
+	case strings.Contains(lc, "utf-7"), strings.Contains(lc, "utf7"), strings.HasPrefix(lc, "hz"):
+		return false, false
+	case strings.Contains(lc, "iso-2022"), strings.Contains(lc, "iso2022"):
+		return true, true
+	}
+	return true, false
+}
+
+// cdRead is the declared decoder's read of its input while the look for UTF-8
+// under a legacy declaration is on, and after it decided for UTF-8. done is
+// false once the look is over and the body is decoded as declared: the caller
+// then reads on as it always did.
+//
+// While the body is ASCII the decoder is handed what it asks for, as the bytes
+// arrive, and the hold only keeps a copy: ASCII reads the same in the declared
+// charset and in UTF-8, so nothing has to be decided, and nothing is read
+// ahead. The first byte above 0x7F is held back, and from there the source is
+// read ahead of the decoder — to the first ill-formed byte, the end of the
+// sniff window or the end of the body — until cdDecideUTF8 can decide. Real
+// legacy text ends the look within a character or two.
+//
+// When the body is UTF-8 the decoder's input ends at the cut, where the first
+// such byte stands: it is handed the ASCII before it and then io.EOF — or
+// bomRedirected when there is none, so that nothing it makes of an empty
+// input is taken for text — and bomBody reads the rest as it is.
+func (h *bomHold) cdRead(v *bomView, p []byte) (n int, err error, done bool) {
+	for h.sniff {
+		s := &h.scan
+		s.scan(h.buf, false)
+		if s.bad > 0 || h.sevenBit && s.shift {
+			h.sniff = false
+			break
+		}
+		if v.off < s.lead {
+			// ASCII the decoder has not been handed yet.
+			n = copy(p, h.buf[v.off:s.lead])
+			v.off += n
+			return n, nil, true
+		}
+		if h.err != nil || len(h.buf) >= charsetSniff {
+			h.cdDecideUTF8()
+			break
+		}
+		// More of the body: what the decoder asked for while all of it is
+		// ASCII, and the rest of the window once a byte above 0x7F is held.
+		end := charsetSniff
+		if s.lead == len(h.buf) {
+			end = min(end, len(h.buf)+len(p))
+		}
+		if end > cap(h.buf) {
+			grown := make([]byte, len(h.buf), min(charsetSniff, max(end, 2*cap(h.buf))))
+			copy(grown, h.buf)
+			h.buf = grown
+		}
+		room := h.buf[len(h.buf):end]
+		got, rerr := h.src.Read(room)
+		got = max(0, min(got, len(room)))
+		h.buf = h.buf[:len(h.buf)+got]
+		h.err = rerr
+		if got == 0 && rerr == nil {
+			// The source returned nothing: so does this.
+			return 0, nil, true
+		}
+	}
+	if !h.utf8 {
+		return 0, nil, false
+	}
+	if v.off < h.cut {
+		n = copy(p, h.buf[v.off:h.cut])
+		v.off += n
+		return n, nil, true
+	}
+	if h.cut == 0 {
+		return 0, bomRedirected, true
+	}
+	return 0, io.EOF, true
+}
+
+// cdDecideUTF8 decides whether a body with no byte order mark that declares a
+// legacy charset — any label the CharsetReader accepted that names no Unicode
+// encoding: euc-kr, ks_c_5601-1987, shift_jis, gb2312, big5, iso-2022-*,
+// iso-8859-1, windows-1252 … — is UTF-8 all the same, and sets h.utf8 and
+// h.cut when it is. Senders that write UTF-8 under the charset their software was
+// configured with years ago are common, and the declared decoder turns every
+// character of such a body into another without a single error.
+//
+// The evidence is the sniff window: the first charsetSniff bytes of the body
+// after its transfer encoding was removed, or all of it when it is shorter. A
+// sequence the end of a full window cuts is left out. The body is read as
+// UTF-8 when all of these hold:
+//
+//  1. The window holds no ill-formed byte: every byte above 0x7F is part of a
+//     well-formed UTF-8 sequence.
+//  2. It holds at least cdSuspectSequences (two) multi-byte sequences. One
+//     can be an accident.
+//  3. At least one of them is three or four bytes long — or, when all are two
+//     bytes long, the declared decoder itself shows the bytes are not its
+//     own: asked to decode the window, it returns U+FFFD, or one character
+//     for every byte, which is how a single-byte charset reads anything.
+//  4. Under an ISO 2022 label the window holds no ESC, SO or SI: text that
+//     shifts is what it says it is.
+//
+// Why this is enough. Text in a double-byte charset is ill-formed UTF-8
+// almost at once: of the Hangul syllables of EUC-KR about one in ten is a
+// well-formed two-byte sequence by accident, and a three-byte one needs a
+// hanja followed by particular syllables, so a window of real EUC-KR, GBK,
+// Big5 or Shift_JIS text passes rule 1 only when it holds a handful of
+// characters, all of the accidental kind. Those few — "화환" in EUC-KR is
+// C8 AD C8 AF, which is also "ȭȯ" in UTF-8 — are two-byte sequences, and rule
+// 3 keeps them: the declared decoder reads them as pairs and without error.
+// A single-byte charset maps every byte to something, so there the UTF-8
+// evidence has to stand alone, and it does: an accented letter followed by
+// the one kind of symbol that completes a sequence ("Ã©"), twice, with no
+// other accented letter anywhere in the window, is what UTF-8 read as
+// windows-1252 looks like and not what anybody writes.
+//
+// What is delivered: the ASCII before the first byte above 0x7F as the
+// declared decoder read it — which is as anyone reads ASCII — and everything
+// from that byte on as it is, watched for bytes that are not UTF-8 after all
+// (charset.invalid_sequence). The header is not changed.
+//
+// What it costs: see cdRead. The decision is a function of the window's
+// bytes alone, however the input was cut into reads. The declared decoder is
+// asked about the window only for rule 3's second arm, under the no-progress
+// and output bounds of a parameter value.
+//
+// ProfileStrict, Read, ReadWithOptions and New decode as declared and look at
+// nothing. So does a body whose byte order mark was reported
+// (charset.bom_mismatch), which has had its look.
+func (h *bomHold) cdDecideUTF8() {
+	h.sniff = false
+	w := h.buf
+	s := &h.scan
+	s.scan(w, len(w) < charsetSniff)
+	if s.bad > 0 || s.multi < cdSuspectSequences || h.sevenBit && s.shift {
+		return
+	}
+	if s.long == 0 && !h.cdDeclaredMisreads(w[:s.at]) {
+		return
+	}
+	h.utf8, h.cut = true, s.lead
+	h.ctx.recordBody(Diagnostic{
+		Code:     CodeCharsetDeclarationSuspect,
+		Severity: SeverityRecovered,
+		Message: fmt.Sprintf("a text body declared %q is well-formed UTF-8: %d multi-byte sequences and no ill-formed byte in its first %d bytes",
+			h.charset, s.multi, s.at),
+		Field:  "Content-Type",
+		Action: "decoded the body as UTF-8, not as declared; the Content-Type is left as it was",
+	})
+}
+
+// cdDeclaredMisreads reports whether the declared charset's decoder reads w —
+// well-formed UTF-8 whose multi-byte sequences are all two bytes long — as
+// bytes that are not its own: with a U+FFFD, or as one character for every
+// byte. A decoder that fails, stalls or overruns says nothing, and the body
+// is then decoded as declared.
+func (h *bomHold) cdDeclaredMisreads(w []byte) bool {
+	dec := &metadataDecoder{poll: h.ctx.cancelPoll()}
+	s, ok := dec.convertCharset(strings.ToLower(h.charset), w)
+	if !ok {
+		return false
+	}
+	return utf8.RuneCountInString(s) == len(w) || strings.ContainsRune(s, utf8.RuneError)
+}
+
 // decide sets h.healed when the body is to be decoded as its mark says, and
 // reports a mark its declaration contradicts.
 func (h *bomHold) decide() {
@@ -384,8 +601,11 @@ func (h *bomHold) decide() {
 		m = textproto.BOMUTF16LE
 	}
 	if m == textproto.BOMNone || h.class.accepts(m) {
+		// With no mark, a legacy declaration is still checked against the
+		// bytes as they are read; see cdRead.
 		return
 	}
+	h.sniff = false
 	valid := bomValid(m, buf[bomLen(m):])
 
 	declared := fmt.Sprintf("%q", h.charset)

@@ -34,9 +34,11 @@ func TestParse_fallbackCharset(t *testing.T) {
 		{"empty body", "text/plain", "", "euc-kr", "", nil},
 		{"declared another charset", "text/plain; charset=iso-8859-1", "caf\xe9", "euc-kr", "café", nil},
 		{"not text", "application/octet-stream", eucKR, "euc-kr", eucKR, nil},
-		{"no fallback, no charset", "text/plain", eucKR, "", eucKR, nil},
+		// Not decoded, and said so at SeverityInfo: the root's
+		// TestParse_undeclaredBodyWatched pins the severity.
+		{"no fallback, no charset", "text/plain", eucKR, "", eucKR, []message.Code{message.CodeCharsetMissing}},
 		{"no fallback, declared utf-8", "text/plain; charset=utf-8", eucKR, "", eucKR, []message.Code{message.CodeCharsetInvalidSequence}},
-		{"unknown fallback", "text/plain", eucKR, "x-no-such-charset", eucKR, nil},
+		{"unknown fallback", "text/plain", eucKR, "x-no-such-charset", eucKR, []message.Code{message.CodeCharsetMissing}},
 		{"long body cut inside a character", "text/plain", strings.Repeat("a", 4095) + utf8Text, "euc-kr", strings.Repeat("a", 4095) + utf8Text, nil},
 	} {
 		header := ""

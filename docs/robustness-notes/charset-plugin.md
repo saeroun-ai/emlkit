@@ -18,7 +18,8 @@ Text that conforms to its charset decodes exactly as before.
 | ROB-080-006 | Implemented | `utf7_test.go` (`isNotIMAPModifiedUTF7`), `utf7/separation_test.go` |
 | ROB-080-008 | Implemented, plugin side | `decode_test.go` (replacement, floods, expansion, stall), `utf7_test.go` (long runs) |
 | ROB-080-004 | Implemented | `decode_test.go` (`utf16ByteOrder`); conflicts: `charset_bom.go`, `charset/bom_conflict_test.go`, `charset_bom_test.go`; see "BOM and declaration conflicts" |
-| ROB-080-002, -003, -007 | Not touched | |
+| ROB-080-003, -007 | Refined on the root side, after the corpus review | `charset_bom.go`, `charset_monitor.go`; `charset/declared_test.go`, `charset_declared_test.go`; see "Declarations the bytes contradict" |
+| ROB-080-002 | Not touched | |
 
 The acceptance column of the roadmap asks ROB-080-001 for a provider corpus.
 None was available; the evidence is the fixture table, whose bytes come from
@@ -190,6 +191,140 @@ Standard UTF-7 decoder changes:
   Windows names `unicode`/`ucs-2` (WHATWG, and the previous behaviour). This is
   what makes .NET mail readable (`charset=utf-16`, little-endian, no mark).
   Unmarked `utf-32` is big-endian without examination.
+
+## Declarations the bytes contradict (root side)
+
+Where: `charset_bom.go` (`cdRead`, `cdDecideUTF8`), `charset_monitor.go`
+(`cdUTF8Scan`, `fallbackReader`, `utf8Monitor`), under `Parse` with
+ProfileTolerant and ProfileForensic. ProfileStrict, `Read`,
+`ReadWithOptions` and `New` decode as declared and report what they always
+did. Tests: `charset/declared_test.go`, `charset_declared_test.go`,
+`charset/fallback_test.go`. The plugin is unchanged.
+
+All three rules below read the same evidence, the **sniff window**: the first
+4096 bytes (`charsetSniff`) of a text body after its transfer encoding was
+removed, or the whole body when it is shorter. Every byte above 0x7F in it is
+either inside a well-formed UTF-8 multi-byte sequence (no overlong form, no
+surrogate, nothing above U+10FFFF) or it is one *ill-formed byte*. A sequence
+cut by the end of a full window is left out; one cut by the end of the body
+is ill-formed. The decision depends on those bytes only, never on how the
+input was cut into reads (tested whole and a byte at a time).
+
+### UTF-8 under a legacy declaration
+
+A body that declares a charset the `CharsetReader` accepted and that names no
+Unicode encoding (`euc-kr`, `ks_c_5601-1987`, `shift_jis`, `gb2312`, `big5`,
+`iso-2022-jp`/`-kr`, `iso-8859-1`, `windows-1252`, `windows-1251`, ...) and
+begins with no byte order mark is read as UTF-8, and reported as
+`charset.declaration_suspect` (Recovered), when all of these hold:
+
+1. the window holds **no ill-formed byte**;
+2. it holds **at least two** multi-byte sequences (`cdSuspectSequences`);
+3. **one of them is three or four bytes long** — or, when all are two bytes
+   long, the declared decoder itself shows the bytes are not its own: asked
+   to decode the window, it returns U+FFFD, or one character for every byte
+   (which is how a single-byte charset reads anything);
+4. under an ISO 2022 label the window holds no ESC, SO or SI.
+
+Otherwise the body is decoded as declared, silently, as before.
+
+Why the rule is this one:
+
+- Text really in a double-byte charset is ill-formed UTF-8 almost at once.
+  About one EUC-KR Hangul syllable in ten is a well-formed *two-byte*
+  sequence by accident (lead C2-C8, trail A1-BF); a three-byte one needs a
+  hanja followed by particular syllables. So a real EUC-KR, GBK, Big5 or
+  Shift_JIS body passes rule 1 only when it is a handful of characters, all
+  of the accidental kind — `화환` is `C8 AD C8 AF`, also `ȭȯ` in UTF-8. Those
+  are two-byte sequences, and rule 3 keeps them: the declared decoder reads
+  them as pairs, without error.
+- A single-byte charset maps every byte to something, so there the UTF-8
+  evidence stands alone, which is why it asks for two sequences and a clean
+  window: an accented capital followed by the one kind of symbol that
+  completes a sequence (`Ã©`), twice, with no other accented letter in 4 KiB,
+  is what UTF-8 read as windows-1252 looks like and not what people write.
+- Rule 3's second arm is the only place the hook is asked (one decode of at
+  most 4096 bytes, under the no-progress guard and the 8x output cap of a
+  parameter value). It is what lets UTF-8 Cyrillic or Latin under
+  `windows-1251`, `koi8-r` or `iso-8859-1` be healed — the classic
+  `РџСЂРёРІРµС‚` — without also "healing" `화환`.
+
+What is delivered: the ASCII before the first byte above 0x7F as the declared
+decoder read it, and everything from that byte on as it is, watched for bytes
+that turn out not to be UTF-8 after the window (`charset.invalid_sequence`,
+Info). The header is not changed and `WriteTo` copies the original bytes.
+
+What it costs: nothing is read ahead while the body is ASCII — the decoder is
+handed what it asks for and the hold keeps a copy of at most 4096 bytes. From
+the first byte above 0x7F the source is read ahead of the decoder to the
+first ill-formed byte, the end of the window or the end of the body; real
+legacy text ends the look within a character or two.
+
+Not examined: `utf-7` and `hz` labels (their shifts are printable ASCII, and
+a UTF-7 decoder keeps UTF-8 anyway); a label the hook refuses
+(`charset.unknown`, body raw — which for a UTF-8 body is already UTF-8); a
+body whose byte order mark was reported; a `CharsetReader` that read its
+input while it built its decoder.
+
+Known misses, on purpose: a body with a single multi-byte character; UTF-8
+made only of two-byte sequences under a double-byte label when the declared
+decoder happens to read every pair (`café déjà` under `euc-kr` decodes to
+valid Hangul and stays that); text beyond the window; Shift_JIS half-width
+katakana that pair up as UTF-8 (`ﾃｽ` is `ý`), which the second arm of rule 3
+takes for a single-byte reading — two or more such pairs and nothing else
+8-bit in the window.
+
+### The fallback charset and damaged UTF-8
+
+`ParseOptions.FallbackCharset` is for bodies that declare no charset, UTF-8
+or US-ASCII and **are not UTF-8**. Before, one ill-formed byte in the window
+— a broken quoted-printable escape — sent the whole body through the
+fallback decoder (`Café` became `Caf챕`). Now the body stays UTF-8 when the
+window
+
+- holds no ill-formed byte, or
+- is **mostly UTF-8**: the bytes inside its well-formed multi-byte sequences
+  are more than twice its ill-formed bytes (`good > 2 × bad`,
+  `cdFallbackMajority`).
+
+Otherwise it is decoded with the fallback (`charset.missing` or
+`charset.declaration_suspect`, Recovered), as before. Real legacy text is far
+on the other side of that line: about one byte in five of EUC-KR or GBK text
+falls into a well-formed sequence by accident, fewer for Shift_JIS and the
+single-byte charsets, so `good` is a fraction of `bad`, not twice it. A tie
+goes to the fallback (`Caf\xc3\xa9 \xb0`: two good bytes, one bad). A damaged
+body that stays UTF-8 is delivered as it was read — nothing is replaced — and
+is watched like any other body, so its damage is still reported at Info.
+ProfileStrict keeps the old rule (any ill-formed byte).
+
+### Text with no charset and no fallback
+
+A text body that the parser delivers as read — declared `utf-8`, declared
+`us-ascii`, or a Content-Type with no charset — is watched for bytes that are
+not UTF-8, and the first is reported once at Info, nothing replaced:
+
+| Declared | Code |
+|---|---|
+| `utf-8` | `charset.invalid_sequence` (as before) |
+| no charset | `charset.missing` |
+| `us-ascii` | `charset.declaration_suspect` |
+
+`charset.missing` thus means "a text body declares no charset and is not
+US-ASCII or UTF-8" in both of its severities: Info when the bytes were kept
+(no fallback, or none that applies), Recovered when
+`ParseOptions.FallbackCharset` decoded them. Valid UTF-8 under no charset or
+`us-ascii` is not reported. An entity with **no Content-Type field at all**
+is watched only when a fallback charset is configured: it is text/plain only
+by default, nothing declares its bytes to be text, and the transfer-encoding
+tests pin such bodies as silent. A parse that was stopped does not report the
+body it cut. ProfileStrict watches only `utf-8`, as before.
+
+### Parameters and filenames
+
+See mime-parameters.md, "Fallback charset and undecodable words": raw 8-bit
+parameter values fall back to `ParseOptions.FallbackCharset`
+(`mime.parameter_fallback_charset`), and an encoded word in a charset with no
+decoder marks its candidate `Undecoded` (`mime.parameter_unknown_charset`).
 
 ## Limitations and open points
 

@@ -437,8 +437,10 @@ func cteCases() []cteCase {
 			name:     "base64",
 			encoding: "base64",
 			first:    "aGVs",
-			long:     func(n int) string { return strings.Repeat("a", n) },
-			decoded:  "hel",
+			// "V" decodes to "U": text, so that the body records nothing about
+			// its charset (charset.missing).
+			long:    func(n int) string { return strings.Repeat("V", n) },
+			decoded: "hel",
 		},
 		{
 			name:     "quoted-printable",
@@ -460,7 +462,7 @@ func cteCases() []cteCase {
 func cteFixture(place string, tc cteCase, n int, eol string) originFixture {
 	body := tc.first + eol
 	long := tc.long(n) + eol
-	const tail = "tail"
+	const tail = "dGFp" // as base64 it decodes to text, "tai"
 
 	if place == "root" {
 		return newOriginFixture(
@@ -727,7 +729,7 @@ func TestParse_cteLineBytes_legacyPathsUnwatched(t *testing.T) {
 func TestParse_cteLineBytes_boundedMemoryOnEndlessInput(t *testing.T) {
 	src := &endlessReader{
 		prefix: "Content-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\n",
-		line:   strings.Repeat("a", 4096),
+		line:   strings.Repeat("V", 4096), // decodes to "U": text
 		cap:    endlessCap,
 	}
 
