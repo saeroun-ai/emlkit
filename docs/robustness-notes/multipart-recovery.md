@@ -38,6 +38,14 @@ A candidate equal to the declared boundary but for case or surrounding white
 space is preferred. Lines of dashes and `-- ` signature separators do not
 qualify. At most 64 distinct candidates are tracked.
 
+Inference is tried only while at most 8 (`pfInferNestMax`) enclosing
+multiparts were themselves framed on an inferred boundary. A deeper one is
+returned as one part with no header holding its kept body, with
+`multipart.start_not_found` (Incomplete), so a message nested deeper than
+that with no usable boundary at any level loses its inner structure, not its
+bytes. Multiparts framed on their declared boundary do not count
+(`multipart_heal_nest.go`; see performance.md, item 2).
+
 ## Preamble (ROB-060-001)
 
 The bytes before the first delimiter line are kept, up to
@@ -85,7 +93,9 @@ the rest is left unread. Later calls return the same bytes without reading.
 
 - A delimiter line with text after the boundary (`--boundary junk`) is body,
   as before.
-- Parts after a closing delimiter are epilogue and are not read as parts.
+- Parts after a closing delimiter are epilogue and are not read as parts,
+  except past a closing line a nested multipart may have shared
+  (`multipart.close_shared`, nested-boundaries.md).
 - Reused and colliding nested boundaries: see `nested-boundaries.md`.
 - A repaired multipart with conflicting boundary parameters stays one opaque
   part (ROB-050-001); inference is not tried for it.

@@ -77,7 +77,7 @@ its bodies deliver.
    at `SeverityIncomplete`, its bytes intact. The same message: 5.3 MiB, 5.6 ms.
    Multiparts framed as they declare do not count. This changes what a parse
    returns for mail nested deeper than that with no usable boundary at any
-   level, which `multipart-recovery.md` does not yet say.
+   level; `multipart-recovery.md` describes it under boundary inference.
 3. **Delimiter scan over runs of dashes — linear, with the length of the
    boundary as its factor; fixed.** With a boundary of dashes, the name matched
    at every byte of a longer run of dashes and was compared whole each time.

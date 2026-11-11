@@ -6,8 +6,10 @@ detailed companion to the summary in the [README](../README.md).
 
 Every claim below points at the code that backs it (file · symbol). emlkit is
 layered — `textproto` (wire format) → root `message` (MIME semantics) →
-`mail` (convenience API), with an optional `charset` plugin. References name the
-lowest layer where the behavior lives.
+`mail` (convenience API), with an optional `charset` plugin and optional
+packages for formats inside one part (`tnef`, `smime`, `pgpmime`,
+`icalendar`, `appledouble`, `legacyenc`). References name the lowest layer
+where the behavior lives.
 
 
 ## Healing and where it is specified
@@ -16,20 +18,44 @@ Since 2026-11-10 `Parse` heals damaged mail under every profile but
 `ProfileStrict`. The rule for each case, the diagnostics it records and its
 known limits are written per area in `docs/robustness-notes/`:
 
-| Area | Note |
+| Healing area | Note |
 | --- | --- |
-| Damaged header lines, missing separators, duplicate singletons | `header-recovery.md` |
-| Unclosed, undeclared or mismatched multipart boundaries, preamble | `multipart-recovery.md` |
-| Nested multiparts whose boundaries are reused, collide or are prefixes | `nested-boundaries.md` |
-| Base64, quoted-printable, uuencode, Content-Transfer-Encoding values | `transfer-encodings.md` |
-| RFC 2047 encoded words | `rfc2047.md` |
-| Media types, parameters, RFC 2231, filenames | `mime-parameters.md` |
-| Charset labels and legacy decoders | `charset-plugin.md` |
-| Embedded messages, digests, message depth | `embedded-messages.md` |
-| Addresses, dates, Message-IDs, Received, List-* | `mail-structured-headers.md` |
-| MIME tree view, roles, related resources, signed spans | `structure-view.md` |
-| Spooling bodies for repeated reads | `spool.md` |
-| What a parse has established | `completion.md` |
+| Damaged header lines, missing separators, duplicate singletons, byte-exact header replay | [`header-recovery.md`](robustness-notes/header-recovery.md) |
+| Unclosed, undeclared or mismatched multipart boundaries, preamble, epilogue | [`multipart-recovery.md`](robustness-notes/multipart-recovery.md) |
+| Nested multiparts whose boundaries are reused, collide or are prefixes | [`nested-boundaries.md`](robustness-notes/nested-boundaries.md) |
+| Base64, quoted-printable, uuencode, Content-Transfer-Encoding values | [`transfer-encodings.md`](robustness-notes/transfer-encodings.md) |
+| RFC 2047 encoded words and header text | [`rfc2047.md`](robustness-notes/rfc2047.md) |
+| Media types, parameters, RFC 2231, filenames | [`mime-parameters.md`](robustness-notes/mime-parameters.md) |
+| Charset labels, legacy decoders, byte order mark conflicts | [`charset-plugin.md`](robustness-notes/charset-plugin.md) |
+| Embedded messages, digests, message depth | [`embedded-messages.md`](robustness-notes/embedded-messages.md) |
+| Addresses, dates, Message-IDs, Received, List-* | [`mail-structured-headers.md`](robustness-notes/mail-structured-headers.md) |
+
+| Consumer API | Note |
+| --- | --- |
+| MIME tree view, roles, related resources, signed spans and repairs | [`structure-view.md`](robustness-notes/structure-view.md) |
+| Delivery status, disposition and feedback reports | [`reports.md`](robustness-notes/reports.md) |
+| Raw bytes of every entity, recorded and seekable sources | [`raw-source.md`](robustness-notes/raw-source.md) |
+| Spooling bodies for repeated reads | [`spool.md`](robustness-notes/spool.md) |
+| What a parse has established | [`completion.md`](robustness-notes/completion.md) |
+
+| Optional package | Note |
+| --- | --- |
+| `tnef`: winmail.dat | [`tnef.md`](robustness-notes/tnef.md) |
+| `smime`: S/MIME and CMS | [`smime.md`](robustness-notes/smime.md) |
+| `pgpmime`: PGP/MIME, armor, OpenPGP packets | [`pgpmime.md`](robustness-notes/pgpmime.md) |
+| `icalendar`: `text/calendar` | [`icalendar.md`](robustness-notes/icalendar.md) |
+| `appledouble`: AppleSingle and AppleDouble | [`appledouble.md`](robustness-notes/appledouble.md) |
+| `legacyenc`: uuencode, xxencode, yEnc, BinHex inside text | [`legacy-encodings.md`](robustness-notes/legacy-encodings.md) |
+
+| Testing and audits | Note |
+| --- | --- |
+| Synthetic regression corpus and its findings | [`corpus.md`](robustness-notes/corpus.md) |
+| Fuzz targets and their invariants | [`fuzzing.md`](robustness-notes/fuzzing.md) |
+| Randomized soak with leak and memory ceilings | [`soak.md`](robustness-notes/soak.md) |
+| Differential testing against Python's `email` | [`differential.md`](robustness-notes/differential.md) |
+| Complexity tests and benchmarks | [`performance.md`](robustness-notes/performance.md) |
+| Bounds audit of the wire and framing code | [`bounds-audit-core.md`](robustness-notes/bounds-audit-core.md) |
+| Bounds audit of the value parsers and upper layers | [`bounds-audit-values.md`](robustness-notes/bounds-audit-values.md) |
 
 `docs/spam-adapter-contract.md` says what a consumer may rely on. The sections
 below describe the framing and budget contracts that preceded this work; where
@@ -41,28 +67,53 @@ that now holds for `ProfileStrict`, `Read`, `ReadWithOptions` and `New` only.
 | Standard | Scope | Implemented in |
 |----------|-------|----------------|
 | [RFC 5322](https://www.rfc-editor.org/rfc/rfc5322) | Internet Message Format — header field syntax, message structure | [`textproto/header.go`](../textproto/header.go) · `ReadHeader`, [`entity.go`](../entity.go) · `Read`, [`mail/header.go`](../mail/header.go) |
-| [RFC 2045](https://www.rfc-editor.org/rfc/rfc2045) | MIME Part 1 — Content-Type and Content-Transfer-Encoding (quoted-printable, base64, 7bit, 8bit, binary) | [`encoding.go`](../encoding.go) · `encodingReader`/`encodingWriter` |
+| [RFC 2045](https://www.rfc-editor.org/rfc/rfc2045) | MIME Part 1 — Content-Type and Content-Transfer-Encoding (quoted-printable, base64, 7bit, 8bit, binary) | [`cte_tolerant.go`](../cte_tolerant.go) · `transferDecoder` (reading; `encodingReader` for a body of no parse), [`encoding.go`](../encoding.go) · `legacyEncodingReader` (`ProfileStrict`), `encodingWriter` (writing) |
 | [RFC 2046](https://www.rfc-editor.org/rfc/rfc2046) | MIME Part 2 — multipart media types and boundaries | [`textproto/multipart.go`](../textproto/multipart.go) · `MultipartReader`/`MultipartWriter` |
-| [RFC 2047](https://www.rfc-editor.org/rfc/rfc2047) | MIME Part 3 — encoded-words in headers | [`charset.go`](../charset.go) · `decodeHeader`/`encodeHeader` |
+| [RFC 2047](https://www.rfc-editor.org/rfc/rfc2047) | MIME Part 3 — encoded-words in headers | [`rfc2047.go`](../rfc2047.go) · `DecodeHeaderText` (decoding), [`charset.go`](../charset.go) · `encodeHeader` (encoding) |
 | [RFC 2152](https://www.rfc-editor.org/rfc/rfc2152) | Standard UTF-7 MIME charset | [`charset/utf7.go`](../charset/utf7.go), [`charset/charset.go`](../charset/charset.go) |
 | [RFC 2183](https://www.rfc-editor.org/rfc/rfc2183) | Content-Disposition — inline/attachment, filename | [`header.go`](../header.go) · `ContentDisposition`, [`mail/attachment.go`](../mail/attachment.go) · `parseFilename` |
-| [RFC 2231](https://www.rfc-editor.org/rfc/rfc2231) | Parameter value continuations and charset (e.g. `filename*=`) | Go standard library `mime`, via [`header.go`](../header.go) · `parseHeaderWithParams` |
+| [RFC 2231](https://www.rfc-editor.org/rfc/rfc2231) | Parameter value continuations and charset (e.g. `filename*=`) | [`rfc2231.go`](../rfc2231.go), [`mediatype_tolerant.go`](../mediatype_tolerant.go) under `Parse` and the tolerant functions; Go standard library `mime` for `Header.ContentType`/`ContentDisposition`, via [`header.go`](../header.go) · `parseHeaderWithParams` |
 | [RFC 6532](https://www.rfc-editor.org/rfc/rfc6532) | Internationalized headers — raw UTF-8 in header values | [`mail/header.go`](../mail/header.go) · `isMultibyte`, [`textproto/header.go`](../textproto/header.go) |
 | [RFC 3501](https://www.rfc-editor.org/rfc/rfc3501) §5.1.3 | Modified UTF-7 codec for IMAP mailbox names | [`utf7/`](../utf7) · `Encoding` (used directly, not wired to the MIME `utf-7` charset) |
 
+Read only, in `mail`:
+
+| Standard | Scope | Implemented in |
+|----------|-------|----------------|
+| [RFC 8601](https://www.rfc-editor.org/rfc/rfc8601) | `Authentication-Results`, parsed; trusted only for the caller's authserv-ids and position | [`mail/authres.go`](../mail/authres.go) · `Header.AuthenticationResults` |
+| [RFC 6522](https://www.rfc-editor.org/rfc/rfc6522), [RFC 3464](https://www.rfc-editor.org/rfc/rfc3464), [RFC 6533](https://www.rfc-editor.org/rfc/rfc6533), [RFC 8098](https://www.rfc-editor.org/rfc/rfc8098), [RFC 5965](https://www.rfc-editor.org/rfc/rfc5965) | `multipart/report` and delivery status, disposition notification and feedback reports | [`mail/report.go`](../mail/report.go), [`mail/report_node.go`](../mail/report_node.go) · `Node.Report` |
+| [RFC 2387](https://www.rfc-editor.org/rfc/rfc2387), [RFC 2557](https://www.rfc-editor.org/rfc/rfc2557) | `multipart/related` root part and `cid:` / Content-Location references; nothing is fetched | [`mail/tree.go`](../mail/tree.go) · `Node.RelatedRoot`, `Node.Resolve` |
+| [RFC 1847](https://www.rfc-editor.org/rfc/rfc1847) | shape of `multipart/signed` and `multipart/encrypted`; no verification or decryption in the core | [`mail/tree.go`](../mail/tree.go) · `shape`, [`mail/tree_signed.go`](../mail/tree_signed.go) |
+
+The optional packages read further formats (TNEF, CMS and S/MIME, PGP/MIME
+and OpenPGP, iCalendar, AppleSingle and AppleDouble, uuencode, yEnc and
+BinHex); each note in `docs/robustness-notes/` names the specifications and
+what of them is read.
+
 A few details worth knowing:
 
-- **RFC 2047 (encoded-words).** Decoding accepts both `B` (base64) and `Q`
-  (quoted-printable) words in any registered charset, via the standard library's
-  `mime.WordDecoder`. **Encoding emits `Q` words only** — emlkit never produces
-  `B`-encoded words ([`charset.go`](../charset.go) · `encodeHeader`).
+- **RFC 2047 (encoded-words).** Decoding is emlkit's own, in
+  [`rfc2047.go`](../rfc2047.go): `B` and `Q` words in either case, tolerant of
+  words glued to text, split by folding, unpadded or unclosed, with adjacent
+  words of one charset joined before conversion; a word that cannot be decoded
+  is left as written and its neighbours are still decoded
+  ([`rfc2047.md`](robustness-notes/rfc2047.md)). **Encoding emits `Q` words
+  only** — emlkit never produces `B`-encoded words
+  ([`charset.go`](../charset.go) · `encodeHeader`).
 - **RFC 2152 standard UTF-7.** The optional `charset` plugin registers the MIME
   charset `utf-7` to a standard UTF-7 decoder (`+` shifts, standard base64
   `+/`). This covers legacy mail that advertises `charset=utf-7`.
-- **RFC 2231.** emlkit does not implement RFC 2231 itself; it delegates entirely
-  to Go's `mime.ParseMediaType` / `mime.FormatMediaType`, so its fidelity is
-  exactly the standard library's. A parameter value is first 2231-decoded by the
-  stdlib, then run through RFC 2047 decoding once more.
+- **RFC 2231.** Under `Parse` (`Entity.EffectiveContentType`,
+  `EffectiveContentDisposition`, `FilenameCandidates`) and in the tolerant
+  functions (`ParseMediaTypeTolerant`, `ParseContentDispositionTolerant`,
+  `ParseParameterCandidates`), a field that the standard library reads in full
+  and that holds no `*`, `=?`, backslash or 8-bit byte is read by it as
+  before; any other field is read by [`rfc2231.go`](../rfc2231.go) and
+  [`mediatype_tolerant.go`](../mediatype_tolerant.go): segments in any order,
+  any charset the `CharsetReader` knows, damaged series kept as far as they go
+  ([`mime-parameters.md`](robustness-notes/mime-parameters.md)).
+  `Header.ContentType` and `Header.ContentDisposition` still use Go's
+  `mime.ParseMediaType`, and writing uses `mime.FormatMediaType`.
 - **RFC 6532.** Header *values* carry raw bytes verbatim (only header *keys* are
   restricted to printable ASCII), so UTF-8 values pass through. The `mail` parser
   additionally treats multi-byte runes as valid atom text.
@@ -88,6 +139,9 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
 - **Empty keys are skipped**, not treated as an error — when no continuation
   line follows them; one that continuation lines follow is an orphan record
   (below). ([`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
+  Under a healing `Parse` (`textproto.HeaderLimits.Recover`) such a line is
+  kept as a one-line orphan record instead and reported as `header.empty_name`
+  ([`header-recovery.md`](robustness-notes/header-recovery.md)).
 - **Continuation lines after a damaged line** (`ROB-020-002`). A continuation
   line (one beginning with a space or a tab) belongs to the logical candidate
   before it. When that candidate is damaged — no colon or semicolon anywhere in
@@ -111,8 +165,10 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   it as usual. Valid folding, a field the semicolon fallback accepts (`X-Bad;
   value` then ` more`), and a `\r` that is content of a valid field joining an
   indented line to it (`Subject: before\r: value\r orphan` stays one Subject)
-  are read exactly as before. A damaged line **with no continuation line** is
-  read as before — an empty name skipped, any other the error it always was
+  are read exactly as before. A damaged line **with no continuation line** is,
+  without recovery, read as before — an empty name skipped, any other the error
+  it always was; under a healing `Parse` it is decided as
+  [`header-recovery.md`](robustness-notes/header-recovery.md) says
   (`ROB-020-003`, `ROB-020-006`) — except that a read failure other than
   `io.EOF` that kept its continuation from being looked at is returned as
   itself instead of that error. A damaged line whose last line ended with a
@@ -141,8 +197,10 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   — a last line with no ending or a bare-CR ending followed by `\r\n` or `\n`;
   a record begins with its damaged line, never with white space, so it never
   continues the field before it, and an unmodified complete CRLF header whose
-  only damaged lines are records round-trips byte for byte (damaged lines with
-  no continuation are still not written; this is not raw replay, `ROB-020-007`).
+  only damaged lines are records round-trips byte for byte (without recovery,
+  damaged lines with no continuation are not written; under recovery they are
+  one-line records written in their place, `ROB-020-007`, see
+  [`header-recovery.md`](robustness-notes/header-recovery.md)).
   In a part's header in which a record was recovered, later lines are first
   looked at as delimiter lines of the multipart, exactly as after a malformed
   prefix (`ROB-020-001`, below): a proved delimiter ends the header, the part's
@@ -163,9 +221,10 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   `Subject: a\rb` keeps its value `a\rb`. A bare `\r` at the start of a line is
   the empty line ending the header, `A: 1\r\r\n` is field A then the empty line
   `\r\n`, and a `\r` right before end of input is a complete line ending. The
-  stored raw bytes end every physical line with CRLF — only a complete CRLF
-  field is byte-exact — and `textproto.Header.LineEndings` reports what the
-  input used. Under `Parse` the endings are diagnosed (`header.bare_lf`,
+  stored raw bytes (`Raw`) end every physical line with CRLF — only a complete
+  CRLF field is byte-exact there — and `textproto.Header.LineEndings` reports
+  what the input used; a block read with recovery also keeps the input's own
+  line endings (`Header.RawAsRead`, [`header-recovery.md`](robustness-notes/header-recovery.md)). Under `Parse` the endings are diagnosed (`header.bare_lf`,
   `header.bare_cr`, `header.mixed_line_endings` once per parse;
   `header.truncated_line` per block), and `ProfileStrict` refuses only the
   entity whose header has a bare-CR ending or no final line ending.
@@ -293,12 +352,21 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
 
 ### Transfer encoding
 
-- **Malformed quoted-printable.** A `lenientQPReader` normalizes input that would
-  otherwise break the standard library's reader: a stray `=` becomes `=3D`, raw
-  control bytes are hex-escaped, and over-long lines get a soft break. Conformant
-  QP passes through unchanged. ([`encoding.go`](../encoding.go) · `lenientQPReader`)
-- **Indented base64.** Leading spaces/tabs (against spec) are rewritten to
-  newlines before decoding. ([`encoding.go`](../encoding.go) · `whitespaceReplacingReader`)
+- **Tolerant decoders.** Every entry point but `ProfileStrict` — `Parse`,
+  and `Read`, `ReadWithOptions` and `New`, which record nothing — decodes
+  Base64, quoted-printable and uuencode with the decoders of
+  [`cte_tolerant.go`](../cte_tolerant.go): junk, URL-safe characters, data
+  after padding, bad escapes and missing `begin`/`end` lines are decoded as
+  far as the bytes say anything, and under `Parse` each kind of repair is
+  recorded once per body ([`transfer-encodings.md`](robustness-notes/transfer-encodings.md)).
+- **Malformed quoted-printable under `ProfileStrict`.** A `lenientQPReader`
+  normalizes input that would otherwise break the standard library's reader:
+  a stray `=` becomes `=3D`, raw control bytes are hex-escaped, and over-long
+  lines get a soft break. Conformant QP passes through unchanged.
+  ([`encoding.go`](../encoding.go) · `lenientQPReader`)
+- **Indented base64 under `ProfileStrict`.** Leading spaces/tabs (against
+  spec) are rewritten to newlines before the standard library decodes.
+  ([`encoding.go`](../encoding.go) · `whitespaceReplacingReader`)
 - **Line wrapping on write** at 76 columns (base64) / 998 columns (7bit, 8bit),
   with lone `LF` upgraded to `CRLF`. ([`encoding.go`](../encoding.go) · `lineWrapper`)
 - **Unknown Content-Transfer-Encoding** is a warning, not a fatal error: the raw
@@ -334,6 +402,9 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
 - **Missing closing boundary.** On EOF before the final `--boundary--`, buffered
   bytes are flushed as body and an `ErrMissingBoundaryClose` is reported, instead
   of dropping data or looping forever. ([`textproto/multipart.go`](../textproto/multipart.go) · `scanBody` / `bodyFailure`)
+  Under `Parse` (not `ProfileStrict`) the last part instead ends with `io.EOF`,
+  `NextPart` returns `io.EOF`, and `multipart.close_not_found` (Incomplete) is
+  recorded ([`multipart-recovery.md`](robustness-notes/multipart-recovery.md)).
 - **The input after the message, under `ProfileForensic`, on request**
   (`ROB-010-005`). The iterators end at the closing delimiter of the message's
   own multipart body and do not read on; the buffered readers may already
@@ -360,8 +431,12 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   cancellation does not replace an `io.EOF` or input error already returned. A
   zero-length read does no I/O and no inspection. `MaxInputBytes` counts it as
   any read, with its existing prefetch semantics: a stop keeps what was
-  delivered, but not every admitted byte is promised to be delivered;
-  `MaxEpilogueBytes` stays reserved (#30) and is not applied. A message that
+  delivered, but not every admitted byte is promised to be delivered.
+  `MaxEpilogueBytes` does not bound this reader; it bounds what
+  `MultipartEpilogue` keeps of an epilogue, and for the message's own body
+  under `ProfileForensic` that epilogue is read through this reader
+  ([`multipart_epilogue.go`](../multipart_epilogue.go),
+  [`multipart-recovery.md`](robustness-notes/multipart-recovery.md)). A message that
   frames no parts reports `none`: its body runs to the end of the input, and a
   message pasted into it is body — no body is scanned, split or flagged.
   Evidence comes from the first 4096 bytes delivered: after blank lines, an
@@ -375,10 +450,16 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   the window deciding against. That is a suspicion only: a conformant epilogue
   can look the same, and a concatenated message that does not begin that way
   within the window is not recognized. An ordinary, blank, empty or binary
-  epilogue records nothing. Nested multipart epilogues, preambles and raw
-  replay are not covered (#30, #41). Other profiles are unchanged.
+  epilogue records nothing. The preamble and epilogue of every multipart a
+  healing parse iterates, nested ones included, are offered by
+  `MultipartPreamble` and `MultipartEpilogue`, and the input's raw bytes by a
+  `Source` ([`raw-source.md`](robustness-notes/raw-source.md)). Other profiles
+  are unchanged.
   ([`trailing.go`](../trailing.go), [`textproto/multipart.go`](../textproto/multipart.go) · `MultipartReader.Epilogue`)
-- **Preamble** before the first boundary is skipped. ([`textproto/multipart.go`](../textproto/multipart.go) · `nextPart`)
+- **Preamble** before the first boundary is skipped by the iterators. Under
+  `Parse` (not `ProfileStrict`) up to `MaxPreambleBytes` of it is kept,
+  returned by `MultipartPreamble`, and read for boundary inference; a longer
+  one records `limit.preamble_bytes`. ([`textproto/multipart.go`](../textproto/multipart.go) · `nextPart`, `keepPreamble`; [`multipart_heal.go`](../multipart_heal.go) · `MultipartPreamble`)
 - **Trailing whitespace** after a boundary delimiter is tolerated. ([`textproto/multipart.go`](../textproto/multipart.go) · `skipLWSPChar`)
 - **Malformed/empty `boundary` parameter on write** is re-synchronized: the writer
   rewrites the Content-Type header to match the boundary it actually emits, so the
@@ -394,11 +475,24 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
 - **Korean `cp949` / `x-windows-949` labels** (any case) are accepted by the
   optional `charset` plugin as code page 949, the same decoder `euc-kr`,
   `windows-949` and `ks_c_5601-1987` use, extended Hangul syllables included,
-  for bodies and RFC 2047 words alike. Only the declared label is honored:
-  nothing detects a missing or wrong charset declaration.
+  for bodies and RFC 2047 words alike.
   ([`charset/charset.go`](../charset/charset.go) · `charsets`)
-- **Malformed encoded-words** degrade to the raw header value; in parameter
-  parsing the decode error is swallowed entirely. ([`charset.go`](../charset.go) · `decodeHeader`)
+- **Missing or wrong charset declarations** are not guessed by default.
+  Under `Parse` (not `ProfileStrict`), a text body whose byte order mark
+  contradicts the declared label is decoded as the mark says when the bytes
+  after it fit (`charset.bom_mismatch`; [`charset_bom.go`](../charset_bom.go),
+  [`charset-plugin.md`](robustness-notes/charset-plugin.md)). With
+  `ParseOptions.FallbackCharset`, a text body that declares no charset, UTF-8
+  or US-ASCII and is not UTF-8 is decoded with the fallback
+  (`charset.missing`, `charset.declaration_suspect`;
+  [`charset_monitor.go`](../charset_monitor.go)). Pending:
+  charset-declaration healing is being changed in another change; this entry
+  describes the code before it.
+- **Malformed encoded-words** are decoded as far as they go and the rest of
+  the value is decoded around them; a word whose charset has no decoder is
+  left as written. In parameter values the same decoder is used, and text
+  outside encoded words is passed through byte for byte.
+  ([`rfc2047.go`](../rfc2047.go), [`rfc2047.md`](robustness-notes/rfc2047.md))
 - **Missing Content-Type** defaults to `text/plain`. ([`header.go`](../header.go) · `ContentType`)
 
 ### `mail` convenience layer
@@ -451,12 +545,17 @@ These are deliberate boundaries, each with a reason.
   `ProfileForensic` caller may read about (`ROB-010-005`, above); nothing is
   split there either. `Read`, `ReadWithOptions`, `New`,
   `textproto` and the `mail` constructors never recognize an envelope, and no
-  writer writes one; replaying the original input is not provided
-  (`ROB-020-007`, `ROB-110`). This is not a claim of parity with any mbox
-  reader. ([`mbox.go`](../mbox.go), [`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
+  writer writes one; the input's own bytes, the line included, are readable
+  through a `Source` (`ParseAt`, `ParseSource`;
+  [`raw-source.md`](robustness-notes/raw-source.md)). This is not a claim of
+  parity with any mbox reader. ([`mbox.go`](../mbox.go), [`textproto/header.go`](../textproto/header.go) · `ReadHeader`)
 - **An `Entity` is consumed once.** The body is a stream; reading it (or calling
-  `Walk`) exhausts the entity. There is no random-access / buffered message type.
-  ([`entity.go`](../entity.go) · `Walk`)
+  `Walk`) exhausts the entity. ([`entity.go`](../entity.go) · `Walk`) A parse
+  from `ParseAt` or `ParseSource` keeps the input readable beside the stream:
+  `RawReader`, `RawHeader`, `RawBody` and a fresh `DecodedBody` per entity
+  ([`source.go`](../source.go), [`raw-source.md`](robustness-notes/raw-source.md)),
+  and `mail.Spool` keeps decoded bodies for repeated reads
+  ([`spool.md`](robustness-notes/spool.md)).
 - **Encoded-words are written as `Q` only**, never `B`. ([`charset.go`](../charset.go) · `encodeHeader`)
 - **Header size is bounded.** Every header block defaults to a 1 MiB cap
   (`Limits.MaxHeaderBytes`, or the same budget spelled
@@ -595,15 +694,20 @@ These are deliberate boundaries, each with a reason.
   claims an overflow, so the diagnostic is recorded once and delivered once
   however many scopes race into it.
   ([`session.go`](../session.go) · `publishStop`, [`limit_tree.go`](../limit_tree.go) · `chargePart`/`resolvePart`)
-- **`MaxMessageDepth` is reserved until nested messages exist.** It counts nested
-  `message/rfc822` and `message/global` entities, and this engine treats such a
-  body as an opaque leaf rather than as a nested entity, so there is no
-  nested-message transition to count. The field is validated, resolved and
-  reported by `ParseSession.Limits`, and `limit.message_depth` is reserved but
-  never emitted, until `ROB-090-001` introduces that model and `ROB-090-002`
-  activates the budget. A `message/rfc822` part is meanwhile one ordinary part of
-  `MaxPartCount`, and the structure inside its opaque body costs neither tree
-  budget. ([`limits.go`](../limits.go))
+- **`MaxMessageDepth` bounds embedded messages when they are read.** A
+  `message/rfc822` or `message/global` body is a leaf until the caller asks
+  for the message inside it: `Entity.EmbeddedMessage`, `Entity.Walk` and
+  `Entity.Drain` under `ParseOptions.WalkEmbeddedMessages`, or `mail.ReadTree`
+  with `TreeOptions.DescendMessages`. The message itself is depth zero; an
+  embedded message past the budget (32 by default) is not read: one
+  `limit.message_depth` diagnostic and an entity-scoped `FatalError`, with the
+  carrier, its body and the parse left as they were. An embedded message that
+  is read is one part of `MaxPartCount` and one level of `MaxMIMEDepth`; a
+  carrier nobody asks about costs one part and nothing inside it is counted.
+  ([`embedded.go`](../embedded.go),
+  [`embedded-messages.md`](robustness-notes/embedded-messages.md)) The doc
+  comments of `Limits` and `Limits.MaxMessageDepth` in `limits.go` still call
+  it reserved; the code in `embedded.go` enforces it.
 - **`MaxInputBytes` is counted once, at the input, and only as it is read.**
   Under `Parse` one reader at the raw source bounds every read of the parse —
   header, bodies, multipart framing and part headers, and the bytes an iterator
@@ -669,17 +773,24 @@ These are deliberate boundaries, each with a reason.
   the input limiter fails with, joined only by the multipart framing — and the
   guard calls no `Is`, `As` or `Unwrap` of a source's own error and never
   replaces one; a decoder may still reword an ordinary source error, as it
-  always has. Nothing is replayed (#41), and no raw API is added: the existing
-  verbatim `WriteTo` path stays a conditional one-shot copy.
+  always has. Nothing of the one-shot `Body` is replayed, and the verbatim
+  `WriteTo` path stays a conditional one-shot copy; a parse given a `Source`
+  can read the raw body again, and `DecodedBody` decodes it again under the
+  same per-body budgets ([`raw-source.md`](robustness-notes/raw-source.md)).
   ([`limit_body.go`](../limit_body.go))
-- **The remaining budgets in `Limits` are still resolved but not consulted.**
-  Everything outside the fifteen enforced ones — `MaxInputBytes`,
-  `MaxHeaderBytes`, `MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`,
-  `MaxTotalHeaderBytes`, `MaxTotalHeaderCount`, `MaxParameterCount`, `MaxParameterSegments`, `MaxMIMEDepth`, `MaxPartCount`,
-  `MaxDiagnosticCount`, `MaxEncodedBodyBytes`, `MaxDecodedBodyBytes` and
-  `MaxTotalDecodedBytes` — is validated and
-  reported by `ParseSession.Limits`, and their `limit.*` codes are reserved but
-  not yet emitted. ([`limits.go`](../limits.go))
+- **Two budgets in `Limits` are resolved but not consulted.** Beside the
+  fifteen above, `MaxMessageDepth` (above), `MaxPreambleBytes` (the preamble a
+  healing multipart iterator keeps, and how far boundary inference and the
+  look-ahead past a shared close read; `limit.preamble_bytes`) and
+  `MaxEpilogueBytes` (what `MultipartEpilogue` keeps; `limit.epilogue_bytes`)
+  are enforced ([`multipart-recovery.md`](robustness-notes/multipart-recovery.md),
+  [`nested-boundaries.md`](robustness-notes/nested-boundaries.md)).
+  `MaxMemorySpoolBytes` and `MaxDiskSpoolBytes` are validated and reported by
+  `ParseSession.Limits`, and nothing reads them: `limit.memory_spool_bytes` is
+  never emitted, and `mail.Spool` takes its quotas from `SpoolOptions`, which
+  is where `limit.disk_spool_bytes` comes from. The doc comment of `Limits`
+  in `limits.go` still says only fifteen are enforced.
+  ([`limits.go`](../limits.go), [`mail/spool.go`](../mail/spool.go))
 
 ## Behavioral guarantees
 
@@ -695,7 +806,11 @@ These are deliberate boundaries, each with a reason.
   `Content-Transfer-Encoding`). So an empty input is written as
   `Mime-Version: 1.0\r\n\r\n`, and a header of unmodified ordinary fields that
   `io.EOF` ended gains that field and that line; writing such output again
-  gives the same bytes. Original-byte replay is #41's.
+  gives the same bytes. Under a healing `Parse` an unchanged header that has
+  `MIME-Version` is written as read when its body is copied as read
+  ([`header-recovery.md`](robustness-notes/header-recovery.md)), and the
+  input's own bytes are readable through a `Source`
+  ([`raw-source.md`](robustness-notes/raw-source.md)).
   ([`entity.go`](../entity.go) · `WriteTo`)
 - **Body byte-preservation.** When the output transfer-encoding and charset match
   the input (case-insensitively), the original undecoded body bytes are copied

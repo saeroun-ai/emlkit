@@ -1,8 +1,8 @@
 # MIME media types, parameters and filenames (ROB-050-002 to ROB-050-010)
 
 Implementation notes for GitHub issues #22, #23 and #24. Every item below is
-implemented and tested and awaits independent review; none is claimed `Done`.
-The ledger in `robustness-roadmap.md` is not edited by this change.
+implemented and tested; the ledger in `robustness-roadmap.md` now marks
+ROB-050-002 to ROB-050-010 `Done`.
 
 The goal is to read broken real-world `Content-Type` and `Content-Disposition`
 fields as well as possible, keep the raw value, and say what was repaired.
@@ -247,6 +247,7 @@ for nothing usable. It is idempotent.
 - `Entity.ParameterCandidates` and `FilenameCandidates` read the retained
   occurrences once more and may call `CharsetReader` again.
 - `mime.filename_conflict` is recorded only by `Entity.FilenameCandidates`.
+  `mail.ReadTree` calls it for every node, so a tree read records it.
   `mail.Reader` hands out headers, not entities, so a caller of
   `AttachmentHeader.Filename` sees a conflict only by comparing the
   candidates of `FilenameCandidates` itself.

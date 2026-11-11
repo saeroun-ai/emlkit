@@ -135,8 +135,10 @@ classifies the two parts as it does any part (both are usually
   specification, the `._` layout of xnu's `vfs_xattr.c`), and a synthetic
   Apple Mail-shaped message. They should be checked against real Apple Mail
   messages when some are at hand.
-- Reading only: there is no writer, no BinHex 4.0 or MacBinary decoding, and
-  no automatic hook in `mail.ReadTree`.
+- Reading only: there is no writer, no MacBinary decoding, and no automatic
+  hook in `mail.ReadTree`. `Recognize` names BinHex media types but this
+  package does not decode them; the `legacyenc` package decodes BinHex 4.0
+  blocks it finds by their banner in a body (legacy-encodings.md).
 - Version 1's file info entry (7), the Macintosh, ProDOS, MS-DOS and AFP file
   info entries and the directory id are kept raw. Icons, resource contents
   and attribute values (binary plists, quarantine strings) are not

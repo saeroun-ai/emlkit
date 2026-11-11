@@ -4,227 +4,204 @@
 
 A maintained fork of [emersion/go-message](https://github.com/emersion/go-message).
 
-A Go library for the Internet Message Format (email and MIME). It is
-**streaming-first** (everything is built on `io.Reader` / `io.Writer`) and
-**DKIM-friendly** (parsed messages re-serialize byte-for-byte). The API is
-layered — pick the lowest layer that does what you need:
+emlkit is a Go library for the Internet Message Format (email and MIME). Its
+main use is the front end of a spam classifier: `message.Parse` reads damaged
+mail as far as its bytes allow, repairs what it must, records every repair
+as a coded diagnostic, and holds the whole parse to resource budgets.
+`mail.ReadTree` then gives the MIME tree with each part classified, decoded
+and hashed. The API is streaming (`io.Reader` / `io.Writer`), and a header
+field read and not changed is written back byte for byte.
 
-* [`textproto`](https://godocs.io/github.com/saeroun-ai/emlkit/textproto) — the
-  raw RFC 5322 / MIME wire format, with no value decoding.
-* root [`message`](https://pkg.go.dev/github.com/saeroun-ai/emlkit) — MIME
-  semantics: transfer-encoding and charset decoding, the multipart tree.
-* [`mail`](https://godocs.io/github.com/saeroun-ai/emlkit/mail) — a convenience
-  API that models a message as text parts + attachments.
+Module `github.com/saeroun-ai/emlkit`, Go 1.26 or later, one dependency:
+`golang.org/x/text`.
 
-It implements:
+## Packages
 
-* [RFC 5322]: Internet Message Format
-* [RFC 2045], [RFC 2046] and [RFC 2047]: Multipurpose Internet Mail Extensions
-* [RFC 2183]: Content-Disposition Header Field
+The core is layered; pick the lowest layer that does what you need.
+
+| Package | What it does |
+| --- | --- |
+| [`textproto`](https://pkg.go.dev/github.com/saeroun-ai/emlkit/textproto) | RFC 5322 and MIME wire format, no value decoding; header recovery on request (`HeaderLimits.Recover`) |
+| root [`message`](https://pkg.go.dev/github.com/saeroun-ai/emlkit) | MIME semantics: `Parse` and its profiles, healing, diagnostics, `Limits`, `Completion`, transfer and charset decoding, embedded messages, raw sources |
+| [`mail`](https://pkg.go.dev/github.com/saeroun-ai/emlkit/mail) | `ReadTree` and its views, `Reader` and `Writer`, tolerant address, date, Message-ID, `Received` and `List-*` accessors, `Authentication-Results`, delivery and feedback reports, `Spool` |
+| [`charset`](https://pkg.go.dev/github.com/saeroun-ai/emlkit/charset) | optional charset plugin: `import _ "github.com/saeroun-ai/emlkit/charset"` decodes most legacy charsets; adds about 1 MiB |
+| [`utf7`](https://pkg.go.dev/github.com/saeroun-ai/emlkit/utf7) | the IMAP modified UTF-7 codec (RFC 3501), apart from the MIME `utf-7` charset |
+
+Optional packages read formats that hide content inside one MIME part. The
+core imports none of them and none imports the core; each takes plain values
+from a `mail.Node`, has its own `Limits` and reports its own `Issue` values.
+
+| Package | Reads | Note |
+| --- | --- | --- |
+| `tnef` | `winmail.dat` (`application/ms-tnef`): attachments, bodies, compressed RTF | [tnef.md](docs/robustness-notes/tnef.md) |
+| `smime` | S/MIME and CMS: classification, signed content to re-parse, signer metadata, signature checks; certificate chains only to roots the caller gives | [smime.md](docs/robustness-notes/smime.md) |
+| `pgpmime` | PGP/MIME structure, ASCII armor, cleartext signatures, OpenPGP packet metadata; verification and decryption only through the caller's interfaces | [pgpmime.md](docs/robustness-notes/pgpmime.md) |
+| `icalendar` | `text/calendar` invitations: events, attendees, scheduling intent | [icalendar.md](docs/robustness-notes/icalendar.md) |
+| `appledouble` | AppleSingle and AppleDouble: names, forks, Finder info, extended attributes | [appledouble.md](docs/robustness-notes/appledouble.md) |
+| `legacyenc` | uuencode, xxencode, `begin-base64`, yEnc and BinHex blocks inside text bodies | [legacy-encodings.md](docs/robustness-notes/legacy-encodings.md) |
 
 ## Quick start
 
-Read a mail message and iterate its parts:
+This is the flow of `mail/example_adapter_test.go`, which `go test` runs on a
+damaged message.
 
 ```go
 package main
 
 import (
-	"io"
+	"fmt"
 	"log"
+	"os"
 
+	"github.com/saeroun-ai/emlkit"
+	_ "github.com/saeroun-ai/emlkit/charset" // decode legacy charsets
 	"github.com/saeroun-ai/emlkit/mail"
 )
 
 func main() {
-	var r io.Reader // an io.Reader containing a mail message
-
-	mr, err := mail.CreateReader(r)
-	if mr == nil {
-		log.Fatal(err) // no usable reader, whatever the error looks like
-	} else if err != nil {
-		// A warning (unknown transfer encoding or charset): the reader is
-		// still usable.
-		log.Printf("warning: %v", err)
+	session, root, err := message.Parse(os.Stdin, nil) // nil: tolerant profile, default Limits
+	if root == nil {
+		log.Fatal(err) // no usable message
 	}
-	defer mr.Close()
-
-	for {
-		p, err := mr.NextPart()
-		if err == io.EOF {
-			break
-		} else if p == nil {
-			log.Fatal(err) // structural, I/O or fatal error: stop
-		} else if err != nil {
-			// A warning: the part is usable, and its body is what the stage
-			// with no decoder left undecoded. Iteration continues.
-			log.Printf("warning: %v", err)
-		}
-
-		switch h := p.Header.(type) {
-		case *mail.InlineHeader:
-			// Message text (plain and/or HTML).
-			b, err := io.ReadAll(p.Body)
-			if err != nil {
-				// Reading a body can fail too (I/O, truncation, a budget):
-				// b holds what was read before it, but it is not complete.
-				log.Fatal(err)
-			}
-			log.Printf("Got text: %v", string(b))
-		case *mail.AttachmentHeader:
-			// An attachment.
-			filename, _ := h.Filename()
-			log.Printf("Got attachment: %v", filename)
-		}
+	tree, err := mail.ReadTree(root, nil) // reads every body to its end
+	if err != nil {
+		log.Println("stopped:", err) // a budget, a sink or the Body hook; the tree so far is kept
 	}
+
+	fmt.Println("completion:", session.Completion().State)
+	for _, d := range session.Diagnostics() {
+		fmt.Println(d.Severity, d.Code, d.Path) // branch on Code, never on Message
+	}
+	for _, n := range tree.Root.Bodies("text/plain", "text/html") {
+		fmt.Printf("body %s: %d bytes\n", n.MediaType, n.Size)
+	}
+	for _, n := range tree.Root.Attachments() {
+		fmt.Printf("attachment %s %q\n", n.MediaType, message.SafeFilename(n.Filename))
+	}
+	h := mail.Header{Header: tree.Root.Header}
+	subject, _ := h.TextDiagnostics("Subject")
+	fmt.Println("subject:", subject)
 }
 ```
 
-### Reading under resource budgets
+[docs/spam-adapter-contract.md](docs/spam-adapter-contract.md) says what each
+of these results may be relied on for, what `Completion` states mean, how to
+treat signed content and `Authentication-Results`, how to read raw bytes, and
+lists every diagnostic code.
 
-`mail.CreateReader` and `message.Read` bound only the message header (1 MiB).
-To hold every entity of an untrusted message to the parser's budgets and to
-collect structured diagnostics, parse with `message.Parse` and hand the entity
-to `mail.NewReader`:
+To iterate a message as text parts and attachments instead of a tree, pass
+the entity from `Parse` to `mail.NewReader`; it classifies each part by the
+metadata the parse interpreted (`Entity.EffectiveContentType` and
+`EffectiveContentDisposition`) and stops when the parse was stopped.
 
-```go
-session, e, err := message.Parse(r, nil) // nil: default Limits
-if e == nil || message.IsFatal(err) {
-	log.Fatal(err) // no usable message, or a budget/sink stopped the parse
-}
-mr := mail.NewReader(e)
-// ...iterate mr exactly as above; a FatalError from NextPart ends it...
-for _, d := range session.Diagnostics() {
-	log.Println(d) // every defect observed, with its MIME path
-}
-```
+`message.Read`, `ReadWithOptions`, `New` and `mail.CreateReader` keep the
+behaviour they had before `Parse`: no session, no diagnostics, only the root
+header budgeted. Use `Parse` for untrusted mail.
 
-`mail.Reader` classifies each part by the metadata the parse interpreted it with
-(`Entity.EffectiveContentType` and `EffectiveContentDisposition`, which are
-bounded, read once and fixed at construction), not by reparsing the raw header.
-It also stops whenever the parse was stopped, including for a single-part
-message.
+## Limits
 
-`message.ParseContext(ctx, r, opts)` is `Parse` under a context, for the whole
-lazy life of the parse: once `ctx` is done, every later read of the input and of
-every `Body`, `NextPart`, `Walk` and `mail.Reader` reports the parse's one stop.
-That is a `FatalError` wrapping `ctx.Err()` (and its cause), with no diagnostic —
-unless a sink or a budget had already stopped the parse, in which case that
-earlier stop stays the one reported, with its own cause and its diagnostic, if
-it has one. Cancellation is checked
-before and after reads and at scope and metadata-scan boundaries; it never
-interrupts a blocked `Read`, a `CharsetReader` or a sink, never closes `r` and
-starts no goroutine. Close a source you own, for example from your own
-`context.AfterFunc`, to make a blocked read return.
+`message.Limits` holds the budgets of one parse. Every field is an `int64`:
+zero selects the default below, `message.LimitDisabled` (-1) turns one off,
+and a value below -1 is refused with `ErrInvalidLimits`. They apply under
+`Parse`, `ParseContext`, `ParseAt` and `ParseSource`; `message.DefaultLimits()`
+returns these values.
 
-Under `Parse` and `ParseContext`, a reader that keeps returning `(0, nil)` is
-given 99 such reads in a row; the 100th is a stall. A stalled input ends the
-parse with one `input.no_progress` diagnostic and a `FatalError` matching
-`io.ErrNoProgress`; a `CharsetReader` reader that stalls a body without taking
-input ends that body alone (`body.decoder_no_progress`), and one that stalls
-an encoded-word parameter keeps the raw value (`header.decoder_no_progress`).
-`Read`, `ReadWithOptions` and the `Header` accessors are unchanged, and a
-reader that blocks or loops inside one call is not interrupted.
+| Field | Default | Bounds |
+| --- | --- | --- |
+| `MaxInputBytes` | 256 MiB | bytes read from the input |
+| `MaxHeaderBytes` | 1 MiB | one header block |
+| `MaxHeaderFieldBytes` | 64 KiB | one field with its continuation lines |
+| `MaxHeaderCount` | 1024 | fields of one header block |
+| `MaxLineBytes` | 64 KiB | one header, framing, Base64 or quoted-printable line |
+| `MaxTotalHeaderBytes` | 32 MiB | all header blocks of the parse |
+| `MaxTotalHeaderCount` | 100 000 | all header fields of the parse |
+| `MaxParameterCount` | 256 | parameters of one `Content-Type` or `Content-Disposition` |
+| `MaxParameterSegments` | 256 | RFC 2231 segments of one parameter |
+| `MaxMIMEDepth` | 100 | multipart nesting |
+| `MaxMessageDepth` | 32 | embedded-message nesting, when embedded messages are read |
+| `MaxPartCount` | 10 000 | parts of the whole tree |
+| `MaxPreambleBytes` | 1 MiB | preamble kept by a healing multipart iterator |
+| `MaxEpilogueBytes` | 1 MiB | epilogue kept by `MultipartEpilogue` |
+| `MaxEncodedBodyBytes` | 128 MiB | wire bytes of one leaf body |
+| `MaxDecodedBodyBytes` | 128 MiB | decoded bytes of one leaf body |
+| `MaxTotalDecodedBytes` | 512 MiB | decoded bytes of all leaf bodies |
+| `MaxDiagnosticCount` | 1000 | diagnostics recorded and delivered |
+| `MaxMemorySpoolBytes` | 8 MiB | not read by anything yet |
+| `MaxDiskSpoolBytes` | 1 GiB | not read by anything yet |
 
-An error your reader returns is an ordinary input failure, not a stop and not a
-diagnostic. Under `Parse` the bytes returned with it are delivered, the reader
-is never read again after its first error (`io.EOF` included), and the error
-surfaces where the parse reaches it: from `Parse` while the header is read,
-otherwise from the `Body` or part read that needs the missing input — so
-`Parse` may succeed and a body report the failure later. A body reports it
-however its decoders ended, joined with a decoder's own error when there is
-one. Every entry point's header reader reports the first read failure of a
-header block as itself, with the fields read whole before it, rather than as a
-malformed line.
+`mail.Spool` takes its quotas from `mail.SpoolOptions` (8 MiB in memory,
+1 GiB on disk by default), not from the two spool fields. What exceeding each
+budget ends is in the [contract](docs/spam-adapter-contract.md#limits) and in
+[docs/conformance.md](docs/conformance.md#not-supported--rejected).
 
-An empty input, and complete header fields ended by `io.EOF` rather than an
-empty line, are framed the same under every profile and compatibility policy:
-the entity has exactly the fields read (raw bytes and order kept) and an empty
-body, or, after an empty line, whatever follows it, blank lines included. That
-framing adds no error or diagnostic of its own, and nothing requires a `From`,
-`Date` or `MIME-Version`, not even `ProfileStrict`; what the fields declare
-(an unknown encoding or charset, malformed parameters) is interpreted as usual.
-A header-only multipart with a usable boundary has no part: `NextPart` returns
-an error wrapping `io.EOF`, then `io.EOF`. `WriteTo` is serialization, not a
-replay of the input: it adds `Mime-Version: 1.0` to a header that has none and
-always writes the empty line, so `""` is written as
-`"Mime-Version: 1.0\r\n\r\n"`.
+## Behaviour worth knowing
 
-Errors and diagnostics answer different questions, so read both: an error says
-whether a scope could continue, the session says what was observed. `Parse`
-enforces **fifteen** budgets today — `MaxInputBytes`, `MaxHeaderBytes`,
-`MaxHeaderFieldBytes`, `MaxHeaderCount`, `MaxLineBytes`, `MaxTotalHeaderBytes`,
-`MaxTotalHeaderCount`, `MaxParameterCount`,
-`MaxParameterSegments`, `MaxMIMEDepth`, `MaxPartCount`, `MaxDiagnosticCount`,
-`MaxEncodedBodyBytes`, `MaxDecodedBodyBytes` and `MaxTotalDecodedBytes`.
-`MaxDiagnosticCount` (default 1000) caps diagnostics, not parsing: the
-diagnostic that reaches it is replaced by one `limit.diagnostic_count`
-diagnostic, later diagnostics are neither retained nor
-delivered to a sink, and the cap alone does not stop the parse — metadata is
-still healed and bodies and parts still returned, while every other budget or
-Strict refusal still fails with its own `FatalError` and diagnostic. `MaxInputBytes` is
-counted once at the input, on the raw bytes actually read from it — including
-body bytes buffered ahead while the header was read — so a body or epilogue
-never read from the input is never checked. One byte past the budget ends the
-whole parse with a `FatalError` and one `limit.input_bytes` diagnostic rather
-than a successful `io.EOF`. The body budgets bound leaf bodies (entities whose
-`MultipartReader` is nil) as they stream: wire bytes per body (default 128 MiB),
-decoded bytes per body (128 MiB, counted in bytes, so a cut may split a UTF-8
-character) and decoded bytes of all leaves (512 MiB). A per-body overflow keeps
-the header and the delivered prefix and ends that body with a `FatalError`; its
-parent can go on to the next part unless another limit or a sink stops it. The
-total ends the parse. A framed multipart container's raw body is outside them
-and bounded by `MaxInputBytes`. Nothing is replayed: raw bytes a body consumed
-are gone. The other `Limits` fields are validated but **not enforced yet**, and
-there is no cancellation support yet. `Read` and `ReadWithOptions` have no total
-input budget; only their message-header cap (`ReadOptions.MaxHeaderBytes`)
-applies. See
-[docs/conformance.md](docs/conformance.md).
+- `Parse` reads only the header. Bodies and parts are read as the caller
+  consumes them, so the diagnostics are complete only after `ReadTree` or
+  `Entity.Drain`; `ParseSession.Completion` says how far the parse got.
+- An `Entity` body is read once. A parse from `ParseAt` or `ParseSource`
+  can hand out each entity's raw bytes and a fresh decoded body again
+  ([raw-source.md](docs/robustness-notes/raw-source.md)), and `mail.Spool`
+  keeps decoded bodies for repeated reads
+  ([spool.md](docs/robustness-notes/spool.md)).
+- `ParseContext` checks its context before and after every read and at scope
+  boundaries. It never interrupts a blocked `Read`, never closes the input and
+  starts no goroutine; close a source you own to make a blocked read return.
+- An error the input returns is an input failure, not a diagnostic: it
+  surfaces where the parse reaches it, from `Parse` while the header is read,
+  otherwise from the body or part read that needs the missing bytes. A reader
+  that returns `(0, nil)` 100 times in a row ends the parse
+  (`input.no_progress`).
+- `Entity.WriteTo` serializes; it is not a replay. It adds
+  `Mime-Version: 1.0` to a header without one. Otherwise a header from a
+  healing parse that was not changed is written as read when the body is
+  copied as read
+  ([header-recovery.md](docs/robustness-notes/header-recovery.md)); the
+  raw readers of a `Source` give the input's own bytes.
+- Writing permits only `utf-8` and `us-ascii` charsets; other charsets are
+  decoded on read and never emitted.
 
-## Features
+## Testing on this host
 
-* Streaming API
-* Automatic encoding and charset handling (to decode all charsets, add
-  `import _ "github.com/saeroun-ai/emlkit/charset"` to your application)
-* A [`mail`](https://godocs.io/github.com/saeroun-ai/emlkit/mail) subpackage
-  to read and write mail messages
-* DKIM-friendly
-* A [`textproto`](https://godocs.io/github.com/saeroun-ai/emlkit/textproto)
-  subpackage that just implements the wire format
+Every local Go build, test, fuzz run and benchmark runs inside the bounded
+runner, `scripts/qa-bounded.py`, one job at a time. The commands and limits
+are in [CLAUDE.md](CLAUDE.md#host-safe-verification).
 
-## Standards & conformance
+## Documentation
 
-emlkit targets production mail: robust against malformed input, faithful to the
-standards, byte-exact on round-trip. The full, code-referenced details are in
-[docs/conformance.md](docs/conformance.md) — a summary:
+- [docs/spam-adapter-contract.md](docs/spam-adapter-contract.md): what a
+  consumer may rely on, the whole flow, and every diagnostic code.
+- [docs/conformance.md](docs/conformance.md): standards implemented,
+  lenient input accepted, what is refused, and the behavioural contracts,
+  each pointing at its code.
+- [docs/robustness-notes/](docs/robustness-notes/): one note per area of
+  healing, per consumer API, per optional package and per kind of testing.
+  The index is in [conformance.md](docs/conformance.md#healing-and-where-it-is-specified).
+- [docs/robustness-roadmap.md](docs/robustness-roadmap.md): the ledger of
+  items and their status.
 
-**Implemented standards**
+## Standards
 
 | Standard | Scope |
-|----------|-------|
+| --- | --- |
 | RFC 5322 | Internet Message Format |
-| RFC 2045 / 2046 / 2047 | MIME (bodies, multipart, encoded-words) |
-| RFC 2152 | standard UTF-7 (`charset` plugin) |
+| RFC 2045, 2046, 2047 | MIME bodies, multipart, encoded words (decoded tolerantly, written as Q words) |
 | RFC 2183 | Content-Disposition |
-| RFC 2231 | parameter continuations (via Go `mime`) |
+| RFC 2231 | parameter continuations and charsets |
 | RFC 6532 | UTF-8 in headers |
-| RFC 3501 §5.1.3 | modified UTF-7 for IMAP (`utf7` package) |
+| RFC 2152 | standard UTF-7 (`charset` plugin) |
+| RFC 3501 section 5.1.3 | modified UTF-7 for IMAP (`utf7`) |
+| RFC 8601 | `Authentication-Results`, read and marked trusted only on the caller's terms |
+| RFC 3464, 6533, 8098, 5965, 6522 | delivery status, disposition and feedback reports (`mail`) |
 
-**Tolerates** common real-world breakage — malformed quoted-printable, indented
-base64, bare-LF line endings, empty/missing charset, semicolon header separators,
-empty/consecutive multipart parts, a missing final boundary, over-long header
-keys, and more.
-([full list →](docs/conformance.md#accepted-lenient-input))
+The optional packages read further formats; their notes name the
+specifications. Details, tolerances and limits are in
+[docs/conformance.md](docs/conformance.md).
 
-**Won't do**, by design — write a non-UTF-8 charset (decoded on read, never
-emitted on write), decode exotic charsets without the opt-in `charset` plugin,
-or parse mbox archives.
-([details →](docs/conformance.md#not-supported--rejected))
-
-**Guarantees** — verbatim header round-trip (DKIM), body byte-preservation when
-the encoding is unchanged, and an error-with-usable-result contract where unknown
-charset/encoding are warnings rather than failures, in `message` and `mail` alike.
-([details →](docs/conformance.md#behavioral-guarantees))
+Out of scope by design: writing non-UTF-8 charsets, reading mbox archives
+(one leading `From_` line can be kept apart on request), fetching
+`message/external-body`, unpacking archives, rendering HTML, and verifying
+DKIM, SPF, DMARC or ARC.
 
 ## License
 
@@ -235,9 +212,3 @@ The original code and all fork modifications are licensed under the MIT license:
 
 * Original work: Copyright (c) 2016 emersion
 * Fork modifications: Copyright (c) 2026 TIENIPIA Co., Ltd.
-
-[RFC 5322]: https://tools.ietf.org/html/rfc5322
-[RFC 2045]: https://tools.ietf.org/html/rfc2045
-[RFC 2046]: https://tools.ietf.org/html/rfc2046
-[RFC 2047]: https://tools.ietf.org/html/rfc2047
-[RFC 2183]: https://tools.ietf.org/html/rfc2183

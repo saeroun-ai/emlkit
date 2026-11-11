@@ -6,10 +6,10 @@ Code: `legacyenc/` (optional; nothing in the core imports it). Tests:
 ## Evidence
 
 ROB-140-006 asks for BinHex and yEnc to be evaluated against measured corpus
-demand. This repository has no real mail to measure. `testdata/corpus/` holds
-30 fixtures, and its manifest says that every one is synthetic and "none is
-derived from real mail". Each fixture was written for a defect the core heals.
-Only one of them involves a legacy encoding: `uuencode-missing-end.eml`, whose
+demand. This repository has no real mail to measure. `testdata/corpus/` held
+30 fixtures when this was written and holds 65 now (corpus.md); its manifest
+says that every one is synthetic and "none is derived from real mail". Only
+one of them involves a legacy encoding: `uuencode-missing-end.eml`, whose
 header *declares* `Content-Transfer-Encoding: x-uuencode`. No fixture holds
 BinHex, yEnc or xxencode, and none holds a uuencoded block inside an ordinary
 text body. Demand is therefore **unmeasured**, which is not the same as
@@ -282,8 +282,9 @@ with `>`.
 
 ## Limitations
 
-- BinHex is found only by its banner. Bare `:`-framed data, BinHex 5.0,
-  MacBinary and AppleSingle/AppleDouble (ROB-140-002) are not handled.
+- BinHex is found only by its banner. Bare `:`-framed data, BinHex 5.0 and
+  MacBinary are not handled. AppleSingle and AppleDouble are read by the
+  `appledouble` package (appledouble.md, ROB-140-002), not here.
 - Quoted blocks that a mail client re-wrapped, or whose quote depth changes
   inside the block, end at the first changed line.
 - A yEnc block that has no `=yend` decodes the prose after it until the quote

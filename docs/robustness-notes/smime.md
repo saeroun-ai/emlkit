@@ -277,6 +277,15 @@ instead of dropping them) and runs them against OpenSSL's own messages: the
 detached signature verifies over the raw span and fails over the decoded body,
 and the opaque message re-parses to its text part.
 
+`mail.ReadTree` now makes the `repaired` test itself: a `multipart/signed`
+node is `Unverifiable`, with the reasons in `UnverifiableReason`, when a
+repair lies in its signed part or signature part, its own framing or header
+was repaired, it has no span, or its protocol or micalg does not fit
+(structure-view.md, "Signed content and repairs"). Its rule differs from
+the helper above: it also counts repairs of the signature part and of the
+container's own framing and header, and it does not count Unsupported
+diagnostics, which mark raw content passed through unread.
+
 For an opaque part larger than `TreeOptions.MaxBodyBytes`, read the part with
 `TreeOptions.Body` into a bounded buffer of your own, or use
 `WriteSignedContent` to stream the content out without a second copy.
@@ -297,4 +306,5 @@ For an opaque part larger than `TreeOptions.MaxBodyBytes`, read the part with
 - Not covered: CRL and OCSP checks, counter-signature and timestamp
   verification, signed receipts (RFC 2634), triple wrapping as a unit,
   `digestedData`, `encryptedData`, `authenticatedData`, MD5 and DSA
-  signatures, ECDH/KEK/password decryption, 3DES/RC2, PGP/MIME (ROB-140-005).
+  signatures, ECDH/KEK/password decryption, 3DES/RC2. PGP/MIME is the
+  `pgpmime` package's (pgpmime.md, ROB-140-005).

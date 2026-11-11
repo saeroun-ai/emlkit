@@ -7,9 +7,9 @@ Scope: in the root package `rfc2047.go`, `rfc2231.go`, `mediatype_tolerant.go`,
 `entity.go`, `multipart*.go`, `cte_tolerant.go`, `encoding.go`, `limit_*.go`)
 are part A and are not covered here.
 
-Tests: `bounds_values_test.go`, `mail/bv_bounds_test.go`, and the gated
-`mail/bv_tree_open_test.go` for what is left open. Audited at `e58d480`,
-2026-11-11.
+Tests: `bounds_values_test.go`, `mail/bv_bounds_test.go`, and
+`mail/bv_tree_test.go` (gated as `bv_tree_open_test.go` while defects 4 and 5
+were open). Audited at `e58d480`, 2026-11-11.
 
 ## What was asked of each site
 
@@ -28,11 +28,11 @@ small multiple of N bytes of output, retained memory or work.
 | 1 | `mail/address_tolerant.go: interpretBare` | The bound of 16384 entries was checked between list elements only. Addresses that no comma separates (`a@b a@b a@b …`) are one element, and every one of them became an entry: 100 000 entries from 400 KB, about 130 retained bytes for each 4 of input. | Fixed: the bound is checked inside the run, the rest of the run is not parsed, and `address.partial_list` (limit_exceeded) is reported once. |
 | 2 | `mail/msgid_tolerant.go: result` | Entries in angle brackets and the bare words read in their place were each bounded by 16384 and then appended: up to 32768 entries where 16384 are documented. | Fixed: the bare words appended are those that still fit; `message_id.partial_list` (limit_exceeded) reports the rest. |
 | 3 | `charset_monitor.go: utf8Monitor.validate` | A sequence a read had cut was judged by the rune alone. `utf8.DecodeRune` returns U+FFFD both for a decoding error (width 1) and for an encoded U+FFFD (width 3), so a valid U+FFFD that straddled two reads was reported as `charset.invalid_sequence`. | Fixed: the width decides. |
-| 4 | `mail/tree.go: treeBuilder.read` | **Hang.** When the source fails inside a multipart, the iterator returns no part and a newly wrapped error on every call; the loop ends only on two identical error values, so it spins for ever. Reproduced under `Parse` and under `Read` with a 45-byte message whose reader fails instead of ending. | **Open** — the file was not this audit's to change. See below. |
-| 5 | `mail/spool.go: Spool.Body` | `io.LimitReader(r, memRoom+1)` overflows for `SpoolOptions.MemoryBytes == math.MaxInt64`: the limit is negative, nothing is read, and every body is kept as empty with `cut == false`. | **Open**, same reason. |
-| 6 | `mail/tree.go: roleOf`, `underRoot`, `RelatedRoot` | Quadratic in the parts of one multipart: `indexOf` scans the siblings for every leaf, and under a `multipart/related` whose `start` names no part (or the last one) `RelatedRoot` normalizes every sibling's Content-ID for every leaf. Measured: 2000 parts 62 ms, 4000 parts 235 ms, 8000 parts 899 ms (a 432 KB message); about 1.4 s at the default `MaxPartCount` of 10000, and minutes if that budget is raised or the entity came from `Read`, which has none. | **Open**, same reason. |
+| 4 | `mail/tree.go: treeBuilder.read` | **Hang.** When the source fails inside a multipart, the iterator returns no part and a newly wrapped error on every call; the loop ends only on two identical error values, so it spins for ever. Reproduced under `Parse` and under `Read` with a 45-byte message whose reader fails instead of ending. | Open at the audit (the file was not its to change); fixed since by `cf293f3`: the loop stops once the input is known to have failed and bounds a run of refused parts (`treeMaxFailedParts`). |
+| 5 | `mail/spool.go: Spool.Body` | `io.LimitReader(r, memRoom+1)` overflows for `SpoolOptions.MemoryBytes == math.MaxInt64`: the limit is negative, nothing is read, and every body is kept as empty with `cut == false`. | Open at the audit; fixed since by `cf293f3`: `memRoom` is clamped to `math.MaxInt64-1`. |
+| 6 | `mail/tree.go: roleOf`, `underRoot`, `RelatedRoot` | Quadratic in the parts of one multipart: `indexOf` scans the siblings for every leaf, and under a `multipart/related` whose `start` names no part (or the last one) `RelatedRoot` normalizes every sibling's Content-ID for every leaf. Measured: 2000 parts 62 ms, 4000 parts 235 ms, 8000 parts 899 ms (a 432 KB message); about 1.4 s at the default `MaxPartCount` of 10000, and minutes if that budget is raised or the entity came from `Read`, which has none. | Open at the audit; fixed since by `cf293f3`: classification reads a part's position from its parent and finds a related root once per container (`mail/tree_scale.go`, performance.md item 1). |
 
-### Suggested fixes for the open ones
+### Suggested fixes, as written at the audit
 
 - **4.** In the `p == nil` branch of `treeBuilder.read`, count the calls that
   returned no part and stop at a cap — the parse's `MaxPartCount`, or 10000
@@ -50,8 +50,9 @@ small multiple of N bytes of output, retained memory or work.
   search only under signed, encrypted and report parents), and compute a
   related container's root once per container rather than once per leaf.
 
-`EMLKIT_BV_OPEN=1 go test -run TestBVOpen ./mail/` runs the reproducers of 4
-and 5; they are skipped otherwise, because 4 fails by never returning.
+The reproducers of 4 and 5 were gated behind `EMLKIT_BV_OPEN=1` while the
+defects were open. They now run in every test run as `TestBV_treeAndSpool`
+in `mail/bv_tree_test.go`.
 
 ## Sites reviewed
 
@@ -107,13 +108,13 @@ it. Sizes are worst cases per input byte.
 | `header.go: headerParser` | `p.s[0]`, `p.s[i:]` | Safe: `peek` is called behind `empty`. The strict accessors quote the whole remaining value in an error (`%q`, up to 4×), as they always did. |
 | `MsgIDList`, `ListCommandURLList` | loop until empty | Safe: every iteration consumes a byte or fails. |
 | `reader.go`, `writer.go`, `address.go`, `attachment.go`, `inline.go` | none | Nothing to bound. |
-| `tree.go: read` (leaf) | `chunk[:min(int64(m), room)]`, `MaxBodyBytes`, `MaxTotalBytes` | Safe: `room > 0` and at most `m`. A negative budget keeps nothing. Allocates a 32 KiB buffer per leaf, which is churn, not retention. |
-| `tree.go: read` (multipart loop) | calls that return no part | **Open** (defect 4). |
-| `tree.go: classify`, `roleOf` | sibling scans | **Open** (defect 6). |
+| `tree.go: read` (leaf) | `chunk[:min(int64(m), room)]`, `MaxBodyBytes`, `MaxTotalBytes` | Safe: `room > 0` and at most `m`. A negative budget keeps nothing. Allocated a 32 KiB buffer per leaf at the audit; now lent from a pool (`pfTreeChunks`, performance.md item 5). |
+| `tree.go: read` (multipart loop) | calls that return no part | Defect 4, fixed since. |
+| `tree.go: classify`, `roleOf` | sibling scans | Defect 6, fixed since. |
 | `tree.go: shape` | `%q` of the `protocol` and `report-type` parameters | Bounded by the field (up to 4×); one diagnostic per node, with no count limit of its own. |
 | `tree.go: Bodies` | recursion over alternatives | Bounded: quadratic in the nesting depth, which `MaxMIMEDepth` (100) bounds. |
 | `tree.go: ReportFields`, `normalizeCID` | groups, `s[:4]` | Safe: 1024 groups, each header read under 1 MiB and 4096 fields. |
-| `spool.go: Body` | `memRoom+1` | **Open** (defect 5). |
+| `spool.go: Body` | `memRoom+1` | Defect 5, fixed since. |
 | `spool.go: copyLimited` | `chunk[:max(room, 0)]` | Safe. |
 
 ### `charset/`, `utf7/`, `internal/errgraph`
@@ -154,7 +155,7 @@ hold the value, its decoded bytes and that buffer at once.
 
 ## Judged risky and left
 
-- The open defects 4, 5 and 6 above.
+- Defects 4, 5 and 6 above were left open by the audit and fixed afterwards.
 - `mail.decodeWord` (display names, List-Id) decodes through
   `mime.WordDecoder`, which reads a `CharsetReader`'s output without the
   expansion cap and the no-progress guard the root package's decoder has. The
@@ -165,7 +166,10 @@ hold the value, its decoded bytes and that buffer at once.
   an Authentication-Results value, 16 bytes per word or comment of a Received
   clause.
 - `Tree.Diagnostics` has no count bound of its own; it holds at most one
-  diagnostic per node, and nodes are bounded by `MaxPartCount`.
-- `ReadTree` recurses once per nesting level and allocates a 32 KiB read
-  buffer per leaf. Depth is bounded by `MaxMIMEDepth` and `MaxMessageDepth`
-  under `Parse`; an entity from `Read` has neither bound.
+  shape diagnostic per node, one `signed.unverifiable` per `multipart/signed`
+  node and one `dkim.view_repaired` (added since the audit), and nodes are
+  bounded by `MaxPartCount`.
+- `ReadTree` recurses once per nesting level. Depth is bounded by
+  `MaxMIMEDepth` and `MaxMessageDepth` under `Parse`; an entity from `Read`
+  has neither bound. Its 32 KiB read buffer is now pooled rather than
+  allocated per leaf.

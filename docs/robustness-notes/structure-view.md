@@ -36,11 +36,11 @@ Also new in the root package: `Entity.Origin()` (path and input offsets) and
 | `signature` | second part of `multipart/signed` |
 | `encrypted` | part of `multipart/encrypted` |
 | `report` | `message/*` report part of `multipart/report` |
-| `message` | `message/rfc822`, `message/global`, `text/rfc822-headers`, unless `Content-Disposition: attachment` |
+| `message` | `message/rfc822`, `message/global`, `message/news`, `text/rfc822-headers`, `message/rfc822-headers`, `message/global-headers`, unless `Content-Disposition: attachment` and not descended into |
 | `attachment` | `Content-Disposition: attachment` |
 | `related` | in a `multipart/related`, outside its root part, with a Content-ID or Content-Location |
-| `body` | `text/*` with no filename, or with `Content-Disposition: inline` |
-| `attachment` | `text/*` with a filename and no inline disposition |
+| `body` | `text/*` but `text/calendar`, with no filename, or with `Content-Disposition: inline` |
+| `attachment` | `text/*` but `text/calendar`, with a filename and no inline disposition |
 | `body` | `text/calendar` alternative with no filename |
 | `related` | non-text with `Content-Disposition: inline` |
 | `attachment` | anything else |
@@ -63,6 +63,8 @@ Also new in the root package: `Entity.Origin()` (path and input offsets) and
   (ROB-120-005); an unmatched reference is unresolved.
 - `Node.ReportFields()` (ROB-090-005): the field groups of a delivery status,
   disposition notification or feedback report; `Data` is the raw fallback.
+  `Node.Report()` reads the same parts into typed models, tolerant of the
+  damage real bounces carry; see reports.md.
 - `Node.Walk(fn)`.
 
 ## Raw bytes for signatures (ROB-090-006, ROB-110-005)
@@ -71,7 +73,11 @@ Also new in the root package: `Entity.Origin()` (path and input offsets) and
 before any decoding or repair. A verifier that kept the input slices it there:
 for `multipart/signed` that is `Children[0]`'s span. Spans are known for parts
 framed by a multipart of the input; not for the root, for parts of an inferred
-boundary, or for a message embedded in an encoded part.
+boundary, or for a message embedded in an encoded part. A parse from
+`ParseAt` or `ParseSource` also hands out the root's bytes and each entity's
+header and body through `Entity.RawReader`, `RawHeader` and `RawBody`, and
+`Node.RawSection` slices a caller's `io.ReaderAt` at a node's span; see
+raw-source.md.
 
 ## Shape diagnostics
 
@@ -87,7 +93,9 @@ when the part count or declared protocol/report-type does not fit, and
   read of the message even with `MaxBodyBytes: -1`.
 - `Filename` is the chosen candidate of ROB-050-009; `Filenames` holds all of
   them. Neither is a safe path: use `message.SafeFilename`.
-- No signature is verified and nothing is decrypted (ROB-140).
+- No signature is verified and nothing is decrypted here. The optional
+  packages `smime` and `pgpmime` read signatures and verify them with keys or
+  a verifier the caller supplies (smime.md, pgpmime.md).
 - Content-Base is not consulted for relative references.
 
 ## Signed content and repairs (ROB-120-006)

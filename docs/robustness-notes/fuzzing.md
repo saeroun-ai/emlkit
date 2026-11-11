@@ -43,7 +43,7 @@ the target leaves that case out and says so.
 
 | Target | File | Reads | Asserts |
 |---|---|---|---|
-| `FuzzReadHeaderRecover` | `fuzz_recover_test.go` | a block ≤ 16 KiB through `ReadHeaderRecover`, under generous budgets and under tight ones (1 KiB, 256-byte fields, 16 fields, 128-byte lines) | ends; the fields, line endings, mark, prefix, records, repairs, unread bytes, what is left in the reader and the error are the same whole, a byte at a time, seven bytes at a time and with `io.EOF` on the last bytes (always through the default 4096-byte buffer: the decision may depend on a smaller one, as `recover.go` says); the unread bytes are exactly the last bytes consumed, returned only when the block ended at a body line, at the place `BodySeparatorMissing` reports; every record is the input's bytes inside the block; written back, a complete CRLF block is unchanged and one that ended at a body line is that block plus the empty line it lacked — blocks with other line endings (stored as CRLF, ROB-020-007) and with a line of empty name (dropped, ROB-020-006) are left out, as `header-recovery.md` documents; read back, the written header has the same fields and writes the same bytes (for a header under the 4096-byte recovery window) |
+| `FuzzReadHeaderRecover` | `fuzz_recover_test.go` | a block ≤ 16 KiB through `ReadHeaderRecover`, under generous budgets and under tight ones (1 KiB, 256-byte fields, 16 fields, 128-byte lines) | ends; the fields, line endings, mark, prefix, records, repairs, unread bytes, what is left in the reader and the error are the same whole, a byte at a time, seven bytes at a time and with `io.EOF` on the last bytes (always through the default 4096-byte buffer: the decision may depend on a smaller one, as `recover.go` says); the unread bytes are exactly the last bytes consumed, returned only when the block ended at a body line, at the place `BodySeparatorMissing` reports; every record is the input's bytes inside the block; written back, a complete CRLF block is unchanged and one that ended at a body line is that block plus the empty line it lacked — blocks with other line endings and with a line of empty name are left out of this check (`FuzzHeaderExact_replay` below holds those to the exact replay `header-recovery.md` describes since ROB-020-006 and -007); read back, the written header has the same fields and writes the same bytes (for a header under the 4096-byte recovery window) |
 | `FuzzReadHeader_lineEndings` | `line_endings_test.go` | a block ≤ 8 KiB through `ReadHeader` | one outcome under seven deliveries and two buffer sizes; prefix and orphan records are the input's bytes and survive write and read back |
 | `FuzzMultipartReader_lineEndings` | `multipart_lineend_test.go` | a multipart body ≤ 8 KiB | one outcome whole, a byte or seven at a time, and with `io.EOF` on the last bytes, under no line budget and a small one |
 | `FuzzMultipartReader_malformedPrefixDelimiter` | `prefix_test.go` | a line after a part header's malformed prefix | a missing separator reported exactly for a whole delimiter, against an independent reading; chunk invariance |
@@ -63,6 +63,23 @@ the target leaves that case out and says so.
 |---|---|---|---|
 | `FuzzReader` | `fuzz_test.go` | a label ≤ 256 bytes and data ≤ 4 KiB, decoded in that charset and in twenty fixed ones (UTF-8, EUC-KR, CP949, ISO-2022-KR, Shift_JIS, EUC-JP, ISO-2022-JP, GB2312, GB18030, Big5, HZ, UTF-7, UTF-16, UTF-16LE, US-ASCII, ISO-8859-1, ISO-8859-9, windows-1252, KOI8-R, unknown-8bit) | `Lookup` deterministic, its error `Reader`'s, a match with an encoding and a lower-case name; each decoder ends, gives valid UTF-8, at most three bytes per byte in plus 16, and the same output whole and a byte at a time |
 | `FuzzDecodeHeaderText_charsets` | `fuzz_test.go` | a label, data and raw text, each ≤ 4 KiB, with the plugin installed: the raw text, the data as a B word, a Q word and two B words split in the middle, the raw text with the label as fallback charset, and the data as a `text/plain` body in that charset | each decoding deterministic, valid UTF-8, no CR, LF or NUL the input did not hold, at most three bytes per byte in plus 16, at most 64 diagnostics; the parsed body and its diagnostics the same whole and a byte at a time |
+
+### Targets added after this note
+
+These targets came with later work and are described in the note of their
+area rather than above.
+
+| Target | File | What it checks |
+|---|---|---|
+| `FuzzHeaderExact_replay` | `textproto/header_exact_test.go` | every block a recovering read accepts is written back byte for byte, whatever its line endings and damage (header-recovery.md) |
+| `FuzzBoundsCore_framingBudgets` | `textproto/bounds_core_test.go` | framing under arbitrary budgets (negative, tiny, past 32 bits) and chunking: no panic or loop, no more body than the input, no more preamble than the limit (bounds-audit-core.md) |
+| `FuzzReportParsers` | `mail/report_test.go` | no report parser panics or returns more diagnostics than its bound (reports.md) |
+| `FuzzDecode` | `tnef/fuzz_test.go` | tnef.md |
+| `FuzzParse` | `smime/smime_test.go` | smime.md |
+| `FuzzParse` | `pgpmime/fuzz_test.go` | pgpmime.md |
+| `FuzzParse` | `icalendar/fuzz_test.go` | icalendar.md |
+| `FuzzParse` | `appledouble/fuzz_test.go` | appledouble.md |
+| `FuzzDecode` | `legacyenc/fuzz_test.go` | legacy-encodings.md |
 
 `utf7` (IMAP mailbox names) and `internal/errgraph` have no fuzz target.
 

@@ -235,7 +235,9 @@ tree.Root.Walk(func(n *mail.Node) bool {
 ```
 
 `repairedUnder` is the caller's test for a diagnostic with an `Action` whose
-`Path` has the multipart's path as a prefix. `Node.Data` is capped by
+`Path` has the multipart's path as a prefix. `mail.ReadTree` now marks such
+a container itself: `Node.Unverifiable` and `UnverifiableReason` on the
+`multipart/signed` node (structure-view.md, "Signed content and repairs"). `Node.Data` is capped by
 `TreeOptions.MaxBodyBytes` (`Node.Truncated` says so); a signature or an
 encrypted payload larger than that cap must be read with the `Body` hook
 instead.

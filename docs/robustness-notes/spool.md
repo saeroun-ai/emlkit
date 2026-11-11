@@ -35,9 +35,12 @@ Digests are computed while the body streams, with no second pass
 
 ## Limitations
 
-- The spool keeps decoded bodies. Raw, undecoded bytes are reached through
-  `Entity.RawSpan` and the caller's own copy of the input; there is no raw
-  spool and no indexed re-parse (ROB-110-001 open).
+- The spool keeps decoded bodies. Raw, undecoded bytes come from a
+  `message.Source`: `ParseAt` reads a seekable input in place, and a
+  recorded source (`NewRecordedSource`, `ParseSource`) keeps the stream in
+  memory or a caller's `RawStore`, with a private re-parse to index parts not
+  yet reached (raw-source.md, ROB-110-001). The spool does not use a source,
+  and a source does not keep decoded bodies.
 - `Limits.MaxMemorySpoolBytes` and `MaxDiskSpoolBytes` of the parse are not
   read by the spool; it has its own options.
 - Readers opened before `Close` on a temporary file keep working only as long
