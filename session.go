@@ -191,6 +191,11 @@ type ParseSession struct {
 	// error the input returned, io.EOF included. See completion.go.
 	prog     sessionProgress
 	inputEnd error
+
+	// raw is the Source this parse reads, for a parse started by ParseAt or
+	// ParseSource, and nil for every other. It is written once, before the
+	// session is returned, and never afterwards. See source.go.
+	raw *srcBinding
 }
 
 // newParseSession returns an empty session that records the profile and
