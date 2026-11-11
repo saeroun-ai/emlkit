@@ -25,6 +25,11 @@ type headerField struct {
 	// a header's orphan records in their place among the fields read with
 	// them by it; see OrphanContinuation.
 	seq int
+
+	// orig is the field's bytes exactly as they were read, when the block was
+	// read with HeaderLimits.Recover and they differ from b, which ends every
+	// physical line with "\r\n"; nil otherwise. See header_exact.go.
+	orig []byte
 }
 
 func newHeaderField(k, v string, b []byte) *headerField {
@@ -76,6 +81,10 @@ func (f *headerField) raw() ([]byte, error) {
 // an orphan record, written back in its place among the fields (see
 // OrphanContinuation); a damaged line with no continuation line is not.
 //
+// A block read with HeaderLimits.Recover keeps every byte, whatever ended its
+// lines, and is written back exactly as it was read while its fields are not
+// modified; see Intact, RawAsRead, WriteHeaderAsRead and header_exact.go.
+//
 // Mutating the header is restricted: the only two allowed operations are
 // inserting a new header field at the top and deleting a header field. This is
 // again necessary for DKIM.
@@ -111,6 +120,12 @@ type Header struct {
 	// heal is what recovery did to the block, or nil for a block that needed
 	// none or was not read with HeaderLimits.Recover. See recover.go.
 	heal *headerHeal
+
+	// hpTail is set for a block read whole with HeaderLimits.Recover every
+	// byte of which the header kept. It is never modified, so Copy shares it;
+	// whether the fields are still the ones read is asked of them when the
+	// header is written. See header_exact.go.
+	hpTail *hpBlockTail
 }
 
 func makeHeaderMap(fs []*headerField) map[string][]*headerField {
@@ -287,7 +302,7 @@ func (h *Header) Copy() Header {
 	l := make([]*headerField, len(h.l))
 	copy(l, h.l)
 	m := makeHeaderMap(l)
-	return Header{l: l, m: m, ends: h.ends, bom: h.bom, prefix: h.prefix, orphans: h.orphans, heal: h.heal}
+	return Header{l: l, m: m, ends: h.ends, bom: h.bom, prefix: h.prefix, orphans: h.orphans, heal: h.heal, hpTail: h.hpTail}
 }
 
 // Len returns the number of fields in the header.
@@ -906,6 +921,10 @@ type headerScan struct {
 	// did to the block. See recover.go.
 	unread []byte
 	heal   headerHeal
+
+	// hpSep is the empty line that ended the block, as it was read, or "" for
+	// a block that ended without one. See header_exact.go.
+	hpSep string
 }
 
 // A crLine is what a line ended by a bare '\r' that may still prove to be
@@ -2028,7 +2047,15 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 		case pend.kind == pendDamaged:
 			// A damaged line that nothing continued: no field, and not kept,
 			// as before. Every path that must still report it as an error
-			// settles it before it gets here.
+			// settles it before it gets here. Under recovery one with an
+			// empty name is kept, as a record of one line (ROB-020-006).
+			if scan.lim.Recover && pend.headErr == nil {
+				pend.single = true
+				if o := pend.record(len(fs)); o != nil {
+					scan.heal.damaged++
+					orphans = append(orphans, o)
+				}
+			}
 		default:
 			fs = append(fs, pend.field(len(fs)+1))
 		}
@@ -2054,6 +2081,12 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 	// the error it always was, built when the line was read.
 	settleDamaged := func() error {
 		err := pend.headErr
+		if err == nil && scan.lim.Recover {
+			// Under recovery the bytes of a line with an empty name are
+			// kept, as a record of one line (ROB-020-006).
+			finish()
+			return nil
+		}
 		pend = pendingField{}
 		return err
 	}
@@ -2086,6 +2119,7 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 			ends := scan.ends
 			ends.known = true
 			h.ends = &ends
+			h.hpTail = scan.hpTailOf(&h, prefixStart)
 		}
 		return h, err
 	}
@@ -2166,6 +2200,7 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 		if len(kv) == 0 {
 			scan.endCapture(len(scan.capture))
 			if err == nil {
+				scan.hpNoteSeparator()
 				if pend.kind == pendDamaged {
 					if derr := settleDamaged(); derr != nil {
 						return result(derr)
@@ -2185,6 +2220,7 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 			var raw []byte
 			rawLast := 0
 			if pend.rawKind() {
+				pend.hpMaterialize()
 				raw, rawLast = scan.exact(kv)
 			}
 			pend.join(kv, last, raw, rawLast)
@@ -2238,6 +2274,15 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 			// The field before this one is complete now.
 			finish()
 			pend = pendingField{key: key, kv: kv, valueStart: i + 1, lastLine: last}
+			if scan.lim.Recover {
+				// The field's exact bytes are kept beside the ones every
+				// line of which ends with "\r\n", when they differ
+				// (ROB-020-007; see header_exact.go).
+				pend.hpExact = true
+				if !scan.hpAllCRLF() {
+					pend.raw, pend.rawLast = scan.exact(kv)
+				}
+			}
 			continue
 		}
 
@@ -2251,6 +2296,12 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 			}
 			scan.heal.joined++
 			base := len(pend.kv)
+			if pend.hpExact && (pend.raw != nil || !scan.hpAllCRLF()) {
+				pend.hpMaterialize()
+				raw, rawLast := scan.exact(kv)
+				pend.rawLast = len(pend.raw) + rawLast
+				pend.raw = append(pend.raw, raw...)
+			}
 			pend.kv = append(pend.kv, kv...)
 			pend.lastLine = base + last
 			continue
@@ -2302,8 +2353,17 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 		case head == headEmptyName:
 			// As per RFC 7230 field-name is a token, tokens consist of one or
 			// more chars. An empty name with nothing continuing it is skipped,
-			// as it always was, under recovery too: the budget tests count on
-			// such a line costing a candidate and nothing else.
+			// as it always was. Under recovery its bytes are kept, as a record
+			// of one line, and the block is read on as it always was: the line
+			// costs what it cost when it was skipped — one candidate, and its
+			// bytes as read — and nothing after it is looked at as a
+			// delimiter line because of it (ROB-020-006).
+			if scan.lim.Recover {
+				raw, rawLast := scan.exact(kv)
+				scan.heal.damaged++
+				pend = pendingField{kv: kv, lastLine: last, kind: pendRecord,
+					raw: raw, rawLast: rawLast, start: start, single: true}
+			}
 		default:
 			// Nothing continues it: the error it always was — unless a read
 			// failure kept its continuation lines from being looked at.
@@ -2458,12 +2518,17 @@ type pendingField struct {
 	// single marks a record that recovery keeps though no continuation line
 	// followed its damaged line. See recover.go.
 	single bool
+
+	// hpExact marks a field read under recovery, which keeps its exact bytes
+	// in raw as a record does — or leaves raw nil while they are kv's own,
+	// every line of it having ended with "\r\n". See header_exact.go.
+	hpExact bool
 }
 
 // rawKind reports whether p keeps exact bytes of its own: an orphan record,
 // or a damaged line that may become one.
 func (p *pendingField) rawKind() bool {
-	return p.kind == pendRecord || p.kind == pendDamaged
+	return p.kind == pendRecord || p.kind == pendDamaged || p.hpExact
 }
 
 // join appends cand, a candidate that a '\r' made the continuation of this
@@ -2510,6 +2575,9 @@ func (p *pendingField) dropLastLine() {
 func (p *pendingField) field(seq int) *headerField {
 	f := newHeaderField(p.key, trimAroundNewlines(p.kv[p.valueStart:]), p.kv)
 	f.seq = seq
+	if p.hpExact && p.raw != nil {
+		f.orig = p.raw[:len(p.raw):len(p.raw)]
+	}
 	return f
 }
 
@@ -2640,9 +2708,20 @@ func formatHeaderField(k, v string) string {
 // "\n" given one. A record begins with its damaged line, never with white
 // space, so it cannot become a continuation of the field written before it.
 // See OrphanContinuation.
+//
+// An intact header (see Header.Intact: read with HeaderLimits.Recover and not
+// changed since) whose block ended with an empty line ended by "\r\n" or "\n"
+// is written as the block's exact bytes instead: every line with the line
+// ending it had, a line with an empty name included, and the empty line in the
+// form it had (ROB-020-007). An intact header whose block had no empty line,
+// or one ended by a bare '\r', is written as described above, ended by the
+// empty line "\r\n"; WriteHeaderAsRead replays those too.
 func WriteHeader(w io.Writer, h Header) error {
 	if h.bom.wide() {
 		return errWideHeader(h.bom)
+	}
+	if h.hpReplays(false) {
+		return h.hpReplay(w)
 	}
 	if h.bom == BOMUTF8 {
 		if _, err := io.WriteString(w, bomBytes[BOMUTF8]); err != nil {

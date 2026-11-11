@@ -986,6 +986,13 @@ func (e *Entity) writeBodyTo(w *Writer) error {
 // empty line (ROB-010-001); for such input, parsing what WriteTo wrote and
 // writing it again gives the same bytes.
 //
+// An entity from a healing Parse whose header and body are both as they were
+// read is the exception to that: its header is written byte for byte, every
+// line ending as the input had it, and, as its body is then the input's too,
+// without an empty line the input did not have (ROB-020-007; see
+// header_exact.go). A header that lacks MIME-Version still gets the field, and
+// is then written as any changed header is.
+//
 // A header read after a UTF-8 byte order mark is written with the mark first,
 // before the MIME-Version field WriteTo may add. An entity whose header block
 // began with a UTF-16 or UTF-32 mark was not read as a header, and WriteTo
@@ -1007,7 +1014,7 @@ func (e *Entity) WriteTo(w io.Writer) error {
 	if stop := e.parse.session.cancelErr(); stop != nil {
 		return stop
 	}
-	ew, err := CreateWriter(w, e.Header)
+	ew, err := hpCreateWriter(w, e.Header, e)
 	if err != nil {
 		return err
 	}

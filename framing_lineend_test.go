@@ -543,17 +543,19 @@ func TestParse_lineEndings_legacyRecordsNothing(t *testing.T) {
 	}
 }
 
-// TestParse_lineEndings_writeNormalizes pins that WriteTo serializes a header
-// read with LF, CR or no final line ending as CRLF, and that the result reads
-// back to the same fields and body with no line-ending diagnostic; a CRLF
-// header is written byte for byte as it was read.
+// TestParse_lineEndings_writeNormalizes pins that WriteTo writes an unmodified
+// header a healing parse read with LF or CR line endings byte for byte, as it
+// writes a CRLF one, and one with no final line ending and no empty line
+// without them (ROB-020-007; it used to write CRLF and the empty line for
+// them), and that the result reads back to the same fields and body and is
+// written the same again.
 func TestParse_lineEndings_writeNormalizes(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"Mime-Version: 1.0\r\nA: 1\r\n folded\r\n\r\nbody", "Mime-Version: 1.0\r\nA: 1\r\n folded\r\n\r\nbody"},
-		{"Mime-Version: 1.0\nA: 1\n folded\n\nbody", "Mime-Version: 1.0\r\nA: 1\r\n folded\r\n\r\nbody"},
-		{"Mime-Version: 1.0\rA: 1\r folded\r\rbody", "Mime-Version: 1.0\r\nA: 1\r\n folded\r\n\r\nbody"},
+		{"Mime-Version: 1.0\nA: 1\n folded\n\nbody", "Mime-Version: 1.0\nA: 1\n folded\n\nbody"},
+		{"Mime-Version: 1.0\rA: 1\r folded\r\rbody", "Mime-Version: 1.0\rA: 1\r folded\r\rbody"},
 		{"Mime-Version: 1.0\r\nSubject: a\rb\r\n\r\nbody", "Mime-Version: 1.0\r\nSubject: a\rb\r\n\r\nbody"},
-		{"Mime-Version: 1.0\r\nA: 1", "Mime-Version: 1.0\r\nA: 1\r\n\r\n"},
+		{"Mime-Version: 1.0\r\nA: 1", "Mime-Version: 1.0\r\nA: 1"},
 	} {
 		_, e, _ := Parse(strings.NewReader(tc.in), nil)
 		var out bytes.Buffer
@@ -561,8 +563,12 @@ func TestParse_lineEndings_writeNormalizes(t *testing.T) {
 			t.Errorf("%q: WriteTo() = (%q, %v), want %q", tc.in, out.String(), err, tc.want)
 			continue
 		}
+		// What was written with CRLF records nothing when read back; what
+		// was replayed records what the input did.
+		first, _, _ := Parse(strings.NewReader(tc.in), nil)
 		session, again, err := Parse(bytes.NewReader(out.Bytes()), nil)
-		if err != nil || session.Diagnostics() != nil {
+		if replayed := out.String() == tc.in; err != nil || (!replayed && session.Diagnostics() != nil) ||
+			(replayed && !reflect.DeepEqual(codesOfDiags(session.Diagnostics()), codesOfDiags(first.Diagnostics()))) {
 			t.Errorf("%q: reparse = (%v, %v)", tc.in, err, codesOfDiags(session.Diagnostics()))
 			continue
 		}

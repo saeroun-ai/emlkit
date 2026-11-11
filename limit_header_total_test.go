@@ -186,7 +186,7 @@ func (f totalFixture) boundaries(kind string) []int64 {
 // every scope that reports it.
 func checkTotalStop(t *testing.T, session *ParseSession, err error, kind string, limit int64, blk *totalBlock, at int64) {
 	t.Helper()
-	checkTotalStopDiags(t, session, session.Diagnostics(), err, kind, limit, blk, at)
+	checkTotalStopDiags(t, session, hpNoEmptyNameNotes(session.Diagnostics()), err, kind, limit, blk, at)
 }
 
 // checkTotalStopDiags is checkTotalStop holding diags, rather than everything
@@ -270,7 +270,7 @@ func verifyTotalParse(t *testing.T, label string, f totalFixture, kind string, l
 	// is the one the total refuses — the first child's own block — which stops
 	// the parse with nothing looked at.
 	reached := refused == nil || !reflect.DeepEqual(refused.path, []int{0})
-	diags := f.takeLFNote(t, label, session.Diagnostics(), reached)
+	diags := f.takeLFNote(t, label, hpNoEmptyNameNotes(session.Diagnostics()), reached)
 	if refused == nil {
 		if got.err != nil || len(diags) != 0 {
 			t.Errorf("%s: (%v, %v), want a clean parse", label, got.err, codesOfDiags(diags))

@@ -401,7 +401,7 @@ func TestParse_headerLimits_boundary(t *testing.T) {
 										// An LF fixture records its root's one header.bare_lf
 										// note and, the whole tree read, the root's
 										// multipart.bare_lf (ROB-010-002), and nothing else.
-										if d := takeLineNotes(t, "", eol, tc.fixture.text, session.Diagnostics(), true); len(d) != 0 {
+										if d := takeLineNotes(t, "", eol, tc.fixture.text, hpNoEmptyNameNotes(session.Diagnostics()), true); len(d) != 0 {
 											t.Errorf("Diagnostics() = %v, want none", codesOfDiags(d))
 										}
 										return
@@ -415,7 +415,7 @@ func TestParse_headerLimits_boundary(t *testing.T) {
 									// A refused root header records no line-ending note; a
 									// refused part's root was read first, and the root's
 									// first delimiter line framed before any part.
-									diags := session.Diagnostics()
+									diags := hpNoEmptyNameNotes(session.Diagnostics())
 									if len(tc.path) > 0 {
 										diags = takeLineNotes(t, "", eol, tc.fixture.text, diags, true)
 									}
@@ -493,7 +493,7 @@ func TestParse_headerLimits_disabled(t *testing.T) {
 					if !reflect.DeepEqual(got.bodies, tc.all) {
 						t.Errorf("bodies = %v, want %v", got.bodies, tc.all)
 					}
-					if d := session.Diagnostics(); d != nil {
+					if d := hpNoEmptyNameNotes(session.Diagnostics()); d != nil {
 						t.Errorf("Diagnostics() = %v, want none from a disabled budget", codesOfDiags(d))
 					}
 				})
@@ -518,7 +518,7 @@ func TestParse_headerLimits_maxInt64IsFinite(t *testing.T) {
 			if !reflect.DeepEqual(got.bodies, tc.all) {
 				t.Errorf("bodies = %v, want %v", got.bodies, tc.all)
 			}
-			if d := session.Diagnostics(); d != nil {
+			if d := hpNoEmptyNameNotes(session.Diagnostics()); d != nil {
 				t.Errorf("Diagnostics() = %v, want none", codesOfDiags(d))
 			}
 			if got := session.Limits(); *specField(&got, spec) != math.MaxInt64 {
@@ -792,7 +792,7 @@ func TestParse_headerLimits_chunkInvariance(t *testing.T) {
 							// of the root's first line, "Mime-Version: 1.0". Its
 							// first delimiter line is then framed before any part,
 							// refused or not, so its multipart.bare_lf follows.
-							diags := session.Diagnostics()
+							diags := hpNoEmptyNameNotes(session.Diagnostics())
 							if eol == "\n" && (delta == 0 || len(tc.path) > 0) {
 								diags = takeBareLFNote(t, label, diags, int64(len("Mime-Version: 1.0")))
 								diags = takeMultipartLFNote(t, label, diags, rootDelimiterLF(tc.fixture.text))

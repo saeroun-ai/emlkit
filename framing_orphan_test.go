@@ -181,7 +181,9 @@ func TestRead_orphanContinuation(t *testing.T) {
 // folded fields, a field read with the semicolon, a '\r' that is content of a
 // valid field joining an indented line to it, and damaged lines with no
 // continuation — the empty name skipped and the others failing the root as
-// they always did, with nothing recorded for them.
+// they always did, with nothing recorded for them — under ProfileStrict. A
+// healing parse keeps each such line apart, the empty name included
+// (ROB-020-003, ROB-020-006).
 func TestParse_orphanContinuationUnchanged(t *testing.T) {
 	for _, tc := range []struct {
 		text   string
@@ -200,8 +202,9 @@ func TestParse_orphanContinuationUnchanged(t *testing.T) {
 	} {
 		for _, profile := range []Profile{ProfileTolerant, ProfileStrict} {
 			session, e, err := Parse(strings.NewReader(tc.text), &ParseOptions{Profile: profile})
-			if tc.err != "" && profile != ProfileStrict {
-				// Header recovery keeps such a line apart (ROB-020-003).
+			if (tc.err != "" || strings.Contains(tc.text, "\r\n: value\r\nX-Keep")) && profile != ProfileStrict {
+				// Header recovery keeps such a line apart (ROB-020-003), and
+				// one with an empty name too (ROB-020-006).
 				if e == nil || err != nil || session.Len() != 1 {
 					t.Errorf("%q/%v: (entity %v, %v, %v), want the healed entity and one diagnostic", tc.text, profile, e != nil, err, codesOfDiags(session.Diagnostics()))
 				}
@@ -1012,7 +1015,7 @@ func FuzzParse_orphanContinuation(f *testing.F) {
 		for _, r := range e.Header.OrphanContinuations() {
 			s, end := r.Location()
 			b := r.Bytes()
-			if s < 0 || end > int64(len(text)) || text[s:end] != string(b) || r.Lines() < 2 {
+			if s < 0 || end > int64(len(text)) || text[s:end] != string(b) || r.Lines() < 1 {
 				t.Fatalf("record %q at [%d, %d), %d lines, is not the input's", b, s, end, r.Lines())
 			}
 			if b[0] == ' ' || b[0] == '\t' {
@@ -1022,8 +1025,22 @@ func FuzzParse_orphanContinuation(f *testing.F) {
 				t.Fatalf("record %q is followed by a continuation line", b)
 			}
 		}
+		// ProfileStrict reads the same records and fields, unless header
+		// recovery, which it does not do, healed the block: a line joined to
+		// the field before it, a damaged line kept alone, or a block ended
+		// before its body (ROB-020-003 to ROB-020-006).
+		healed := false
+		if n, _ := e.Header.UnindentedContinuations(); n > 0 {
+			healed = true
+		}
+		if missing, _, _ := e.Header.BodySeparatorMissing(); missing {
+			healed = true
+		}
+		for _, r := range e.Header.OrphanContinuations() {
+			healed = healed || r.Lines() == 1
+		}
 		strict := orphanOutcomeOf(t, strings.NewReader(text), ProfileStrict)
-		if strict.entity != want.entity || !reflect.DeepEqual(strict.records, want.records) || !reflect.DeepEqual(strict.fields, want.fields) {
+		if !healed && (strict.entity != want.entity || !reflect.DeepEqual(strict.records, want.records) || !reflect.DeepEqual(strict.fields, want.fields)) {
 			t.Fatalf("Strict %+v, Tolerant %+v", strict, want)
 		}
 		var out bytes.Buffer
@@ -1034,8 +1051,15 @@ func FuzzParse_orphanContinuation(f *testing.F) {
 		if err != nil || again == nil {
 			return
 		}
+		// An unmodified block that ended with its empty line is written as
+		// it was read (ROB-020-007); any other gets its last line ended.
+		replayed := strings.HasPrefix(text, out.String())
 		var written []string
 		for _, r := range e.Header.OrphanContinuations() {
+			if replayed {
+				written = append(written, string(r.Bytes()))
+				continue
+			}
 			written = append(written, writtenRawLines(string(r.Bytes())))
 		}
 		if got := recordsOfEntity(again); !reflect.DeepEqual(got, written) {

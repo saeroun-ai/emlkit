@@ -23,6 +23,9 @@ import (
 //   - header.missing_colon and header.invalid_name: damaged lines kept apart
 //     from the fields, byte for byte, because the block evidently went on
 //     after them;
+//   - header.empty_name: lines with nothing before their colon (": value"),
+//     which are read past as they always were and now kept the same way, byte
+//     for byte (ROB-020-006; see header_exact.go);
 //   - header.missing_body_separator, or header.whitespace_body_separator when
 //     the line before held only white space: the block ended before a line
 //     that is no field, which begins the body.

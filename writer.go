@@ -134,22 +134,7 @@ func createWriter(w io.Writer, header *Header) (*Writer, error) {
 // way and written in their place among the fields read with them, after the
 // added MIME-Version; they declare nothing either.
 func CreateWriter(w io.Writer, header Header) (*Writer, error) {
-	// Ensure that modifications are invisible to the caller
-	header = header.Copy()
-
-	// If the message uses MIME, it has to include MIME-Version
-	if !header.Has("Mime-Version") {
-		header.Set("MIME-Version", "1.0")
-	}
-
-	ww, err := createWriter(w, &header)
-	if err != nil {
-		return nil, err
-	}
-	if err := textproto.WriteHeader(w, header.Header); err != nil {
-		return nil, err
-	}
-	return ww, nil
+	return hpCreateWriter(w, header, nil)
 }
 
 // errNilWriter is what a nil *Writer returns instead of failing on itself.

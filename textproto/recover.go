@@ -34,10 +34,12 @@ import (
 // that is no field, which is how a separator of spaces or tabs is read
 // (ROB-020-004).
 //
-// A damaged line ended by a bare '\r' is decided as before (see settleCR), and
-// so is one with an empty name. Nothing is looked at past one buffer of the
-// reader, so the decision is the same however the input chunks its reads, and
-// depends on the reader's size only below recoverWindow.
+// A damaged line ended by a bare '\r' is decided as before (see settleCR). One
+// with an empty name is read past as before, and its bytes are kept, as a
+// record of one line (ROB-020-006; see header_exact.go, which also says how a
+// block read this way is written back byte for byte). Nothing is looked at
+// past one buffer of the reader, so the decision is the same however the input
+// chunks its reads, and depends on the reader's size only below recoverWindow.
 
 // recoverWindow and recoverLines bound the look past a damaged line.
 const (

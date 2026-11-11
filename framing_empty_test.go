@@ -273,15 +273,24 @@ func writeFresh(t *testing.T, name string, e *Entity, err error) (string, bool) 
 // header-only input gains that field and that line. Parsing what was written
 // gives the same body and the written fields, and writing it again gives the
 // same bytes.
+//
+// A healing parse is the exception when nothing has to be added: a header
+// that says MIME-Version and was not changed is written as it was read, with
+// no empty line the input did not have (ROB-020-007). Read, ReadWithOptions
+// and ProfileStrict write the empty line, as they always did.
 func checkFramingRewrite(t *testing.T, name string, f framingForm, parse func(io.Reader) (*ParseSession, *Entity, error), src func() io.Reader) {
 	t.Helper()
 	_, e, err := parse(src())
+	want := f.wire
+	if e != nil && !f.addsMIME && e.Header.Intact() {
+		want = f.text
+	}
 	wire, ok := writeFresh(t, name, e, err)
 	if !ok {
 		return
 	}
-	if wire != f.wire {
-		t.Errorf("%s: WriteTo wrote %q, want %q", name, wire, f.wire)
+	if wire != want {
+		t.Errorf("%s: WriteTo wrote %q, want %q", name, wire, want)
 		return
 	}
 
@@ -289,14 +298,14 @@ func checkFramingRewrite(t *testing.T, name string, f framingForm, parse func(io
 	if f.addsMIME {
 		again.fields = append([]framingField{mimeVersionField}, f.fields...)
 	}
-	again.bodyAt = int64(len(f.wire) - len(f.body))
-	s, e, err := parse(strings.NewReader(f.wire))
+	again.bodyAt = int64(len(want) - len(f.body))
+	s, e, err := parse(strings.NewReader(want))
 	if checkFramingHeader(t, name+"/reparsed", again, s, e, err) {
 		checkFramingBody(t, name+"/reparsed", again, s, e)
 	}
-	_, e, err = parse(strings.NewReader(f.wire))
-	if second, ok := writeFresh(t, name+"/rewritten", e, err); ok && second != f.wire {
-		t.Errorf("%s: second WriteTo wrote %q, want %q", name, second, f.wire)
+	_, e, err = parse(strings.NewReader(want))
+	if second, ok := writeFresh(t, name+"/rewritten", e, err); ok && second != want {
+		t.Errorf("%s: second WriteTo wrote %q, want %q", name, second, want)
 	}
 }
 
