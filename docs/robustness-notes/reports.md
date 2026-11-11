@@ -1,0 +1,103 @@
+# Reports (ROB-090-005)
+
+Code: `mail/report.go` (model, three parsers), `mail/report_node.go`
+(`Node.Report`), `mail/report_scan.go` (field scanner, value readers),
+`mail/report_code.go` (codes). Tests: `mail/report_test.go`.
+
+The shape of a `multipart/report` is checked by `ReadTree`
+(`report.invalid`, see structure-view.md). This note is about reading what
+the report says.
+
+## API
+
+- `ParseDeliveryStatus(data)` — RFC 3464 / RFC 6533 `DeliveryStatus`:
+  per-message `ReportingMTA`, `OriginalEnvelopeID`, `DSNGateway`,
+  `ReceivedFromMTA`, `ArrivalDate`, then `Recipients` (`RecipientStatus`):
+  `OriginalRecipient`, `FinalRecipient`, `Action` (normalised, with
+  `ActionRaw`), `Status` (`EnhancedStatus`: class, subject, detail, `Raw`,
+  `Valid`, `Inferred`, `Comment`), `RemoteMTA`, `DiagnosticCode`,
+  `LastAttemptDate`, `WillRetryUntil`, `FinalLogID`. `Address()` gives the
+  Final-Recipient, else the Original-Recipient.
+- `ParseDispositionNotification(data)` — RFC 8098 `DispositionNotification`:
+  `ReportingUA` (`UAName`, `UAProduct`), `MDNGateway`, `OriginalRecipient`,
+  `FinalRecipient`, `OriginalMessageID`, `Disposition` (`MDNDisposition`:
+  action mode, sending mode, type, modifiers), `Errors`, and RFC 3798's
+  `Failures` and `Warnings`.
+- `ParseFeedbackReport(data)` — RFC 5965 `FeedbackReport`: `FeedbackType`,
+  `UserAgent`, `Version`, `OriginalEnvelopeID`, `OriginalMailFrom`,
+  `OriginalRcptTo`, `ArrivalDate`, `ReportingMTA`, `SourceIP`/`SourceAddr`,
+  `Incidents`, `ReportedDomains`, `ReportedURIs`, `AuthenticationResults`
+  (raw; `AuthResults()` parses them, none trusted).
+- `Node.Report()` — on a `multipart/report`, or on a report part, returns a
+  `Report`: `Kind`, the typed model, `ReportType`, `Container`,
+  `Description` (human-readable part), `Part`, `Original` (the returned
+  `message/rfc822`, `message/global`, `text/rfc822-headers`,
+  `message/global-headers`), `OriginalHeader` and `Diagnostics`. A report part
+  outside a `multipart/report` is read alone. Any other node gives nil.
+
+Every model keeps `Fields` (each field as read: name as written, value
+unfolded, bytes untouched), `Unknown` (fields the model does not know, such
+as `X-Postfix-Sender`, `Removal-Recipient`), `Unparsed` (skipped lines) and
+`Diagnostics`. Typed values of the form `type; value` are `ReportValue`:
+`Raw`, lower-cased `Type`, `Value`, `Comment`. Dates are `DateResult` from
+`ParseDateTolerant`.
+
+## Tolerance
+
+| Damage | Reading | Code |
+| --- | --- | --- |
+| LF, lone CR, mixed line ends | each ends a line | none |
+| folded field | unfolded | none |
+| unindented line of free text after Diagnostic-Code, Error, Authentication-Results or an unknown field | continuation | `report.unindented_continuation` |
+| any other line that is no field (`name:` with an ftext name; a `name://` is a URL) | skipped, kept in `Unparsed` | `report.garbage_line` |
+| `Name : value` | name without the space | `report.invalid_field` |
+| no blank line between per-message and recipient fields | recipient group begins at the first recipient field | `report.missing_group_separator` |
+| no blank line between recipients | new group where Final-Recipient or Original-Recipient repeats (Postfix writes Final before Original, so the order alone is no boundary) | `report.missing_group_separator` |
+| per-message field among a recipient's | moved to the per-message group; a repeat stays in the recipient's `Unknown` | `report.misplaced_field` |
+| report fields in the report part's MIME header (no blank line after Content-Type) | read as report fields | `report.misplaced_field` |
+| blank line inside an MDN or ARF | one group | `report.unexpected_blank_line` |
+| field repeated where it may appear once | first used | `report.duplicate_field` |
+| `Status: 5.1.1 (bad mailbox)` | comments allowed | none |
+| `Status: 550 5.1.1 user unknown`, `5.1.1.` | code read out of the text | `report.invalid_status` recovered |
+| `Status: 550` | 5.0.0 | `report.invalid_status` recovered |
+| `Status: 5.1`, class not 2/4/5 | not `Valid`, `Raw` kept | `report.invalid_status` invalid_metadata |
+| no Status | from an RFC 3463 code in Diagnostic-Code, else its reply code; `Inferred` | `report.missing_field` recovered |
+| `Action: FAILED (x)` | case and comments ignored | none |
+| `Action: failure`, `bounced`, `deferred`, `success`... | mapped to the RFC 3464 action | `report.invalid_action` recovered |
+| unknown action | empty, `ActionRaw` kept | `report.invalid_action` |
+| no Action | from the status class, `ActionRaw` empty | `report.missing_field` recovered |
+| `type; value` with no type | `rfc822` for an address with `@`, `dns` for a host name, `smtp` for text starting with a reply code | `report.invalid_field` recovered |
+| `rfc822: addr` | colon read as the separator | `report.invalid_field` recovered |
+| `rfc822; <addr>` | brackets removed | `report.invalid_field` info |
+| Disposition without `;`, without a mode, unknown mode or type | split by what it looks like, lower-cased | `report.invalid_field` |
+| unknown Feedback-Type, Version not 1, `Received-Date` | kept / read as Arrival-Date | `report.invalid_field` info |
+| `Source-IP: [192.0.2.1]`, `IPv6:` prefix | address inside | `report.invalid_field` recovered |
+| unreadable Source-IP or Incidents | text kept, zero value | `report.invalid_field` |
+| mandatory field missing | left empty | `report.missing_field` |
+| UTF-8 in a report that is ASCII-only (not `message/global-*`) | read as UTF-8 | `report.non_ascii` info |
+| bytes that are not UTF-8 | U+FFFD in the typed value, bytes kept in `Fields` | `report.non_ascii` recovered |
+| report-type missing or of another kind than the report part | part read by its media type | `report.type_mismatch` info |
+| no part labelled as a report | second part read by the report-type, else by its fields | `report.type_mismatch` recovered |
+| no report part / no human-readable part | | `report.missing_part` |
+| report part cut at `MaxBodyBytes` | whole lines kept are read | `report.truncated` |
+
+Diagnostics of the parse functions carry no path; `Node.Report` sets the
+MIME path of the part (structure diagnostics carry the `multipart/report`'s).
+
+## Bounds
+
+256 KiB of a report body are read (cut at a line end), 4096 fields, 1024
+recipients, 32 unparsed lines of up to 998 bytes, 128 diagnostics (the last
+is `limit.diagnostic_count`). Beyond a bound: `report.limit_exceeded`. Every
+scan is one pass; comments are counted, not recursed into.
+
+## Limitations
+
+- xtext and the RFC 6533 `utf-8-addr-xtext` / `unitext` encodings of
+  addresses are not decoded; the value is as written.
+- Bounces that are not `multipart/report` at all (plain-text bounces of old
+  MTAs) are not recognised; that is heuristics, not this model.
+- Extension fields of RFC 6591 (auth-failure) and others are in `Unknown`,
+  not typed.
+- The status triple found inside free text may be a version number that
+  looks like one; such a reading is always reported.
