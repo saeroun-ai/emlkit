@@ -86,7 +86,6 @@ the rest is left unread. Later calls return the same bytes without reading.
 - A delimiter line with text after the boundary (`--boundary junk`) is body,
   as before.
 - Parts after a closing delimiter are epilogue and are not read as parts.
-- With a reused boundary the outer multipart's own later parts may fall after
-  the inner closing delimiter and be lost as epilogue.
+- Reused and colliding nested boundaries: see `nested-boundaries.md`.
 - A repaired multipart with conflicting boundary parameters stays one opaque
   part (ROB-050-001); inference is not tried for it.

@@ -52,6 +52,10 @@ const noBoundary = "\x00emlkit\x00no-boundary\x00"
 type boundaryChain struct {
 	b  string
 	up *boundaryChain
+
+	// nbShared is the iterator of b's: how many more closing delimiter lines
+	// it may read on past, -1 for any number. See multipart_nested.go.
+	nbShared int
 }
 
 func (c *boundaryChain) has(b string) bool {

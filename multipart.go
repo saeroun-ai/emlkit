@@ -66,6 +66,10 @@ type multipartReader struct {
 	endNoted bool
 	reused   bool
 
+	// nbChecked reports that the declared boundary was looked at for one an
+	// enclosing multipart's collides with; see multipart_nested.go.
+	nbChecked bool
+
 	// digest reports that the entity is a multipart/digest, whose parts are
 	// message/rfc822 unless they say otherwise.
 	digest bool
@@ -117,6 +121,9 @@ func (r *multipartReader) nextPart() (*Entity, error) {
 			fmt.Sprintf("multipart declares the boundary %q of a multipart it is nested in", r.declared), boundaryReusedAction); fatal != nil {
 			return nil, fatal
 		}
+	}
+	if fatal := r.nbNoteConflict(); fatal != nil {
+		return nil, fatal
 	}
 
 	p, err := r.r.NextPart()
@@ -195,6 +202,13 @@ func (r *multipartReader) nextPart() (*Entity, error) {
 		// ProfileForensic, to an explicit inspection. Nothing is read here;
 		// see trailing.go.
 		if err == io.EOF {
+			// A closing delimiter line a nested multipart may have shared is
+			// read on past; see multipart_nested.go.
+			if again, ferr := r.nbResume(); ferr != nil {
+				return nil, ferr
+			} else if again {
+				return r.nextPart()
+			}
 			// Under recovery the end of the framing is looked at once: what it
 			// lacked is recorded, and a body it could not frame is returned
 			// as a part or framed again on the boundary found in it. See
@@ -240,6 +254,7 @@ func (r *multipartReader) nextPart() (*Entity, error) {
 	r.next++
 
 	e, err := newWithOptions(Header{p.Header}, p, r.skipTextAttachmentDecoding, ctx)
+	r.nbCredit(e)
 	if !r.inferred {
 		// A part of the kept body an inferred boundary framed has no span in
 		// the input the reader below counted.

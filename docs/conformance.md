@@ -20,6 +20,7 @@ known limits are written per area in `docs/robustness-notes/`:
 | --- | --- |
 | Damaged header lines, missing separators, duplicate singletons | `header-recovery.md` |
 | Unclosed, undeclared or mismatched multipart boundaries, preamble | `multipart-recovery.md` |
+| Nested multiparts whose boundaries are reused, collide or are prefixes | `nested-boundaries.md` |
 | Base64, quoted-printable, uuencode, Content-Transfer-Encoding values | `transfer-encodings.md` |
 | RFC 2047 encoded words | `rfc2047.md` |
 | Media types, parameters, RFC 2231, filenames | `mime-parameters.md` |
