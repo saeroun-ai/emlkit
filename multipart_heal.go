@@ -114,6 +114,12 @@ func (r *multipartReader) healEnd() (e *Entity, err error, again bool) {
 	if len(bytes.TrimSpace(pre)) == 0 {
 		return nil, r.noteFraming(CodeMultipartEmpty, SeverityInfo, "multipart body holds no part", emptyMultipartAction), false
 	}
+	if pfInferredAbove(r.parent.bounds) > pfInferNestMax {
+		// Inference at every level of a deep tree keeps and reads the same
+		// bytes once a level; see multipart_heal_nest.go.
+		e, err = r.pfUnframed(pre, over)
+		return e, err, false
+	}
 	if found, ambiguous := inferBoundary(pre, r.declared); found != "" && !over {
 		code, msg := CodeMultipartBoundaryMismatch, fmt.Sprintf("no line of the multipart body is a delimiter of the declared boundary %q; the body holds delimiter lines of %q", r.declared, found)
 		if r.declared == "" {
@@ -129,6 +135,7 @@ func (r *multipartReader) healEnd() (e *Entity, err error, again bool) {
 			}
 		}
 		r.inferred = true
+		r.parent.bounds = pfMarkInferred(r.parent.bounds)
 		r.endNoted = false
 		r.ends = textproto.LineEndings{}
 		r.r = textproto.NewMultipartReader(bytes.NewReader(pre), found)

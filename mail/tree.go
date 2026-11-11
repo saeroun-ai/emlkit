@@ -265,7 +265,7 @@ func ReadTree(e *message.Entity, opts *TreeOptions) (*Tree, error) {
 	root, err := b.read(e, nil, nil, nil)
 	t.Root = root
 	if root != nil {
-		b.classify(root, 0)
+		b.classify(root)
 		b.shape(root, t)
 		b.sgIntegrity(t, err)
 	}
@@ -280,8 +280,6 @@ type treeBuilder struct {
 	// sgByPath is each node by the MIME path the parse gave its entity,
 	// which the parse's diagnostics name; see tree_signed.go.
 	sgByPath map[string]*Node
-	// relRoots is the root part of each multipart/related, looked up once.
-	relRoots map[*Node]*Node
 }
 
 // read builds the node of e and everything under it. warn is the warning e
@@ -396,7 +394,9 @@ func (b *treeBuilder) read(e *message.Entity, path []int, parent *Node, warn err
 	}
 	var buf bytes.Buffer
 	var rerr error
-	chunk := make([]byte, 32<<10)
+	scratch := pfTreeChunks.Get().(*[]byte)
+	defer pfTreeChunks.Put(scratch)
+	chunk := *scratch
 	for {
 		m, err := body.Read(chunk)
 		if m > 0 {
@@ -471,8 +471,6 @@ func sameErr(a, b error) (same bool) {
 	return a == b
 }
 
-// classify sets the Role and Reason of n and of every node under it
-// (ROB-100-002).
 // treeMaxFailedParts bounds how many parts in a row a multipart may refuse
 // before ReadTree stops asking it for the next: the default MaxPartCount.
 const treeMaxFailedParts = 10000
@@ -484,30 +482,27 @@ func (b *treeBuilder) inputFailed() bool {
 	return s != nil && s.Completion().InputErr != nil
 }
 
-// classify gives n, the idx-th child of its parent, and everything under it
-// their roles. The root part of each multipart/related is looked up once, so
-// a wide container costs its width and not the square of it.
-func (b *treeBuilder) classify(n *Node, idx int) {
-	n.Role, n.Reason = b.roleOf(n, idx)
-	for i, c := range n.Children {
-		b.classify(c, i)
-	}
+// classify sets the Role and Reason of n and of every node under it
+// (ROB-100-002).
+func (b *treeBuilder) classify(n *Node) {
+	// Parents first, as roleOf reads the roles above a node. One memo of the
+	// related roots serves the whole tree: see pfRelatedRoots.
+	roots := make(pfRelatedRoots)
+	n.walk(func(c *Node) bool {
+		c.Role, c.Reason = pfRoleOf(c, roots)
+		return true
+	})
 }
 
-// relatedRoot is rel.RelatedRoot(), remembered.
-func (b *treeBuilder) relatedRoot(rel *Node) *Node {
-	if root, ok := b.relRoots[rel]; ok {
-		return root
-	}
-	if b.relRoots == nil {
-		b.relRoots = make(map[*Node]*Node)
-	}
-	root := rel.RelatedRoot()
-	b.relRoots[rel] = root
-	return root
+func roleOf(n *Node) (Role, string) {
+	return pfRoleOf(n, nil)
 }
 
-func (b *treeBuilder) roleOf(n *Node, idx int) (Role, string) {
+// pfRoleOf is roleOf, looking the root part of a multipart/related up in
+// roots when it is given one. It asks where n stands among its siblings by
+// position, never by searching for it, so that classifying a container costs
+// its parts once and not their square (ROB-120-002).
+func pfRoleOf(n *Node, roots pfRelatedRoots) (Role, string) {
 	// A multipart that was framed has no digest; one left unframed was read
 	// as one opaque leaf, which has one even when Data was not kept (an empty
 	// body, MaxBodyBytes below zero, a Body hook).
@@ -517,16 +512,16 @@ func (b *treeBuilder) roleOf(n *Node, idx int) (Role, string) {
 	if p := n.Parent; p != nil {
 		switch p.MediaType {
 		case "multipart/signed":
-			if idx == 1 {
+			if pfChildAt(p, 1) == n {
 				return RoleSignature, "second part of multipart/signed"
 			}
 		case "multipart/encrypted":
-			if idx == 0 {
+			if pfChildAt(p, 0) == n {
 				return RoleEncrypted, "control part of multipart/encrypted"
 			}
 			return RoleEncrypted, "payload of multipart/encrypted"
 		case "multipart/report":
-			if idx >= 1 && strings.HasPrefix(n.MediaType, "message/") && !carriesMessage(n.MediaType) {
+			if pfChildAt(p, 0) != n && strings.HasPrefix(n.MediaType, "message/") && !carriesMessage(n.MediaType) {
 				return RoleReport, "machine-readable part of multipart/report"
 			}
 		}
@@ -537,7 +532,7 @@ func (b *treeBuilder) roleOf(n *Node, idx int) (Role, string) {
 	if n.Disposition == "attachment" {
 		return RoleAttachment, "Content-Disposition: attachment"
 	}
-	if rel := relatedOf(n); rel != nil && !underRoot(b.relatedRoot(rel), rel, n) && (n.ContentID != "" || n.ContentLocation != "") {
+	if rel := relatedOf(n); rel != nil && !roots.under(rel, n) && (n.ContentID != "" || n.ContentLocation != "") {
 		return RoleRelated, "resource of multipart/related with a Content-ID or Content-Location"
 	}
 	if strings.HasPrefix(n.MediaType, "text/") && n.MediaType != "text/calendar" {
@@ -564,17 +559,6 @@ func carriesMessage(mediaType string) bool {
 	switch mediaType {
 	case "message/rfc822", "message/global", "message/news", "text/rfc822-headers", "message/rfc822-headers", "message/global-headers":
 		return true
-	}
-	return false
-}
-
-// underRoot reports whether n is root, the root part of the multipart/related
-// rel, or a part of it.
-func underRoot(root, rel, n *Node) bool {
-	for c := n; c != nil && c != rel; c = c.Parent {
-		if c == root {
-			return true
-		}
 	}
 	return false
 }

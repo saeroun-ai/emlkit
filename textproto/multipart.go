@@ -521,6 +521,16 @@ func (r *MultipartReader) scanBody(p *Part) (int, error) {
 			c, elen = j-1, 1
 		}
 		if c < 0 {
+			// Not at the start of a line, and neither is anything up to the
+			// next line ending: the search goes on after that. Stepping one
+			// byte at a time instead compares the whole name at every byte
+			// of a run of dashes that a boundary of dashes matches
+			// (ROB-060-013).
+			q := bytes.IndexAny(buf[j:], "\r\n")
+			if q < 0 {
+				break
+			}
+			from = j + q + 1
 			continue
 		}
 		m := r.match(buf, c, elen, eof, full)
@@ -937,6 +947,7 @@ func (r *MultipartReader) keepPreamble(line []byte, end LineEnding) {
 		}
 		return
 	}
+	r.preamble = pfGrow(r.preamble, len(line)+len(term), limit)
 	r.preamble = append(append(r.preamble, line...), term...)
 }
 

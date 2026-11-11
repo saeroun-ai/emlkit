@@ -308,9 +308,10 @@ func (d *tolerantBase64) Read(p []byte) (int, error) {
 			return 0, d.err
 		}
 		if d.in == nil {
-			d.in = make([]byte, cteChunk)
-			d.out = make([]byte, 0, cteChunk)
+			d.in = make([]byte, pfChunkFirst)
+			d.out = make([]byte, 0, pfChunkFirst)
 		}
+		d.in = pfChunk(d.in, d.consumed)
 		n, err := d.r.Read(d.in)
 		n = max(0, min(n, len(d.in)))
 		d.out, d.pos = d.out[:0], 0
@@ -494,9 +495,10 @@ func (d *tolerantQP) Read(p []byte) (int, error) {
 			return 0, d.err
 		}
 		if d.in == nil {
-			d.in = make([]byte, cteChunk)
-			d.out = make([]byte, 0, cteChunk+qpRunMax)
+			d.in = make([]byte, pfChunkFirst)
+			d.out = make([]byte, 0, pfChunkFirst)
 		}
+		d.in = pfChunk(d.in, d.consumed)
 		n, err := d.r.Read(d.in)
 		n = max(0, min(n, len(d.in)))
 		d.out, d.pos = d.out[:0], 0
@@ -697,10 +699,11 @@ func (d *tolerantUU) Read(p []byte) (int, error) {
 			return 0, d.err
 		}
 		if d.in == nil {
-			d.in = make([]byte, cteChunk)
-			d.out = make([]byte, 0, cteChunk)
+			d.in = make([]byte, pfChunkFirst)
+			d.out = make([]byte, 0, pfChunkFirst)
 			d.line = make([]byte, 0, uuLineMax)
 		}
+		d.in = pfChunk(d.in, d.consumed)
 		n, err := d.r.Read(d.in)
 		n = max(0, min(n, len(d.in)))
 		d.out, d.pos = d.out[:0], 0
