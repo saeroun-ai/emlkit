@@ -1,0 +1,15 @@
+Subject: related
+Content-Type: multipart/related; boundary="r"; type="text/html"
+
+--r
+Content-Type: text/html; charset=us-ascii
+
+<img src="cid:logo@example.com">
+--r
+Content-Type: image/png
+Content-ID: <logo@example.com>
+Content-Disposition: inline; filename="logo.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgo=
+--r--

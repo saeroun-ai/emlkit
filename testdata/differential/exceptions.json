@@ -1,0 +1,140 @@
+{
+  "schema": "emlkit-differential-exceptions/1",
+  "exceptions": [
+    {
+      "parser": "python-email",
+      "fixture": "base64-data-after-padding",
+      "path": "[]",
+      "field": "body_*",
+      "rationale": "emlkit decodes Base64 data after padding as a further segment (cte.base64_data_after_padding, a deliberate choice so a scanner sees what a permissive client shows): \"hihi\". Python's non-strict fallback misdecodes the second group into \"hi\\x1a\\x1a\"."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "cte-token-with-junk",
+      "path": "[]",
+      "field": "body_*",
+      "rationale": "emlkit reads the Content-Transfer-Encoding value '\"BASE64\"; x=1' as base64 (cte.invalid_token) and decodes the body; Python does not recognize the value and keeps the encoded text."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "embedded-message-base64",
+      "path": "[0 0]",
+      "field": "body_*",
+      "rationale": "emlkit decodes the base64 a message/rfc822 part declares before reading the message it carries (message.illegal_transfer_encoding); Python parses the encoded text itself as the embedded message, which then has no header and a body of base64."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "header-colonless-line",
+      "path": "[]",
+      "field": "to",
+      "rationale": "emlkit keeps a colonless line apart as an orphan record and goes on reading the header when a well-known field follows it (header.missing_colon); Python ends the header at that line, so the To field after it is body text."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "header-colonless-line",
+      "path": "[]",
+      "field": "body_*",
+      "rationale": "The same healing: emlkit's body begins after the real empty line, Python's at the colonless line."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "header-unindented-boundary",
+      "path": "[]",
+      "field": "children",
+      "rationale": "emlkit joins the unindented 'boundary=\"B\"' line to the Content-Type field it continues (header.unindented_continuation) and frames the multipart; Python ends the header there, finds no boundary and keeps the multipart as one leaf."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "header-whitespace-separator",
+      "path": "[]",
+      "field": "subject",
+      "open": true,
+      "rationale": "Both read the white-space-only line as a fold of the Subject. emlkit's header value replaces each fold and the white space around it with one space and drops an empty continuation, giving \"s\"; RFC 5322 section 3.2.2 unfolding removes only the CRLF, which Python follows, giving \"s \\t\". See Open differences in docs/robustness-notes/differential.md."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "multipart-boundary-mismatch",
+      "path": "[]",
+      "field": "children",
+      "rationale": "emlkit frames the body on the boundary its delimiter lines use when the declared one appears on no line (multipart.boundary_mismatch); Python finds no start boundary and keeps the multipart as one leaf."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "multipart-empty",
+      "path": "[]",
+      "field": "children",
+      "rationale": "emlkit reads an empty multipart body as a container with no part (multipart.empty); Python keeps it as a leaf of zero bytes."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "multipart-missing-close",
+      "path": "[1]",
+      "field": "body_*",
+      "rationale": "With no closing delimiter emlkit's last part runs to the end of the input and keeps its final line ending (multipart.close_not_found): RFC 2046 gives a CRLF to the delimiter that follows it, and none does. Python drops the final line ending as if one did."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "multipart-no-boundary-param",
+      "path": "[]",
+      "field": "children",
+      "rationale": "emlkit infers the boundary a multipart without a boundary parameter uses (multipart.boundary_inferred); Python reports NoBoundaryInMultipartDefect and keeps one leaf."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "multipart-no-delimiter",
+      "path": "[]",
+      "field": "children",
+      "rationale": "emlkit returns a multipart body with no delimiter line as one part with no header (multipart.start_not_found), so the text is still a body part; Python keeps the multipart as one leaf."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "multipart-reused-boundary",
+      "path": "[0]",
+      "field": "children",
+      "rationale": "Both read the inner multipart's parts as parts of the outer one. emlkit keeps the inner multipart as a container with no part (multipart.nested_boundary_reused), Python as a leaf of zero bytes."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "multipart-truncated-close",
+      "path": "[0]",
+      "field": "body_*",
+      "rationale": "emlkit reads the cut '--Bound-' at the end of the input as the closing delimiter (multipart.close_truncated); Python finds no close and keeps the cut delimiter in the part's body."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "qp-damaged",
+      "path": "[]",
+      "field": "body_*",
+      "rationale": "emlkit keeps '=ZZ' as text (cte.qp_invalid_hex), reads '=' and a bare CR as a soft line break (cte.qp_invalid_soft_break) and keeps a final '=' (cte.qp_trailing_equals); Python's binascii.a2b_qp drops the text after the bare-CR soft break up to the next line, losing \"break\\r\\n\", and drops the final '='."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "seven-bit-violation",
+      "path": "[]",
+      "field": "text_sha256",
+      "rationale": "The bytes agree. A body that declares no charset is delivered by emlkit as it was read (here valid UTF-8), the 8-bit bytes reported with cte.seven_bit_violation; Python decodes it as US-ASCII and replaces each 8-bit byte with U+FFFD. emlkit guesses a charset only with ParseOptions.FallbackCharset."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "utf8-declared-not-utf8",
+      "path": "[]",
+      "field": "text_sha256",
+      "rationale": "The bytes agree. emlkit delivers a body declared UTF-8 that is not UTF-8 as it was read and reports charset.invalid_sequence, so a consumer must validate the text; Python replaces the invalid byte with U+FFFD. emlkit re-decodes such a body only with ParseOptions.FallbackCharset."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "dx-address-forms",
+      "path": "[]",
+      "field": "from",
+      "rationale": "emlkit reads 'Doe, John <john@example.com>' as one address named \"Doe, John\" (address.unquoted_comma, MimeKit's AllowUnquotedCommaInAddresses default); Python splits it at the comma into a local-only address \"Doe\" and \"John <john@example.com>\". AddressOptions.StrictCommas gives Python's reading."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "dx-subject-folded",
+      "path": "[]",
+      "field": "subject",
+      "open": true,
+      "rationale": "emlkit's header value replaces a fold of CRLF and a tab with one space; RFC 5322 section 3.2.2 unfolding removes only the CRLF and keeps the tab, as Python does. See Open differences in docs/robustness-notes/differential.md."
+    }
+  ]
+}

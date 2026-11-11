@@ -1,0 +1,26 @@
+From: outer@example.com
+Subject: outer
+Content-Type: multipart/mixed; boundary="o"
+
+--o
+Content-Type: text/plain
+
+see the forwarded message
+--o
+Content-Type: message/rfc822
+Content-Disposition: attachment; filename="fwd.eml"
+
+From: inner@example.com
+Subject: inner
+Content-Type: multipart/alternative; boundary="i"
+
+--i
+Content-Type: text/plain
+
+inner plain
+--i
+Content-Type: text/html
+
+<p>inner html</p>
+--i--
+--o--

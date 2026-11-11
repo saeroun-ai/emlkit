@@ -1,0 +1,9 @@
+From: sender@example.com
+Subject: a long subject that is
+	folded =?utf-8?q?with_an_encoded?=
+ =?utf-8?q?_word?= split
+Date: 1 Jul 03 10:52:37 EST
+Content-Type: TEXT/PLAIN; CHARSET="US-ASCII"
+Content-Transfer-Encoding: Base64
+
+aGVsbG8K
