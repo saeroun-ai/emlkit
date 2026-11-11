@@ -1,0 +1,30 @@
+From: emlkit test <test@example.com>
+To: test@example.com
+Subject: PGP/MIME signed
+Date: Wed, 11 Nov 2026 10:00:00 +0900
+MIME-Version: 1.0
+Content-Type: multipart/signed; micalg=pgp-sha256;
+ protocol="application/pgp-signature"; boundary="sig-b"
+
+This is an OpenPGP/MIME signed message (RFC 4880 and 3156)
+--sig-b
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+서명된 PGP/MIME 본문입니다.
+- dash line
+
+--sig-b
+Content-Type: application/pgp-signature; name="signature.asc"
+Content-Description: OpenPGP digital signature
+Content-Disposition: attachment; filename="signature.asc"
+
+-----BEGIN PGP SIGNATURE-----
+
+iIcEABYIAC8WIQTTBvmVyfyqtA//cwmiIn3QE1CR0gUCavPFrxEcdGVzdEBleGFt
+cGxlLmNvbQAKCRCiIn3QE1CR0tsJAQDtCSmknoMT39yJv5QYKgukcI9s0MWA/KzY
++q1sqlsDOgD9HMD9c8NWtvEfwJ5EGs83sQJicu6bEWFRUhHD4yfHbgU=
+=Wa2M
+-----END PGP SIGNATURE-----
+
+--sig-b--

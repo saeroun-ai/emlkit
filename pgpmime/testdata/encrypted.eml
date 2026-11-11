@@ -1,0 +1,33 @@
+From: emlkit test <test@example.com>
+To: test@example.com
+Subject: PGP/MIME encrypted
+Date: Wed, 11 Nov 2026 10:00:00 +0900
+MIME-Version: 1.0
+Content-Type: multipart/encrypted;
+ protocol="application/pgp-encrypted"; boundary="enc-b"
+
+This is an OpenPGP/MIME encrypted message (RFC 4880 and 3156)
+--enc-b
+Content-Type: application/pgp-encrypted
+Content-Description: PGP/MIME version identification
+
+Version: 1
+
+--enc-b
+Content-Type: application/octet-stream; name="encrypted.asc"
+Content-Description: OpenPGP encrypted message
+Content-Disposition: inline; filename="encrypted.asc"
+
+-----BEGIN PGP MESSAGE-----
+
+hF4DkWuLzIgFkB0SAQdAJbmHInw9mvY77WTbw0IYCckm4DNbL9fCgeLDy5j9Pz8w
+NgMGkvVN63okJBdkgUGY+xVFxFzjbq2VoVdfcdBxDEQW+08GzfqkTchslr2C30Tl
+0r8B9139N5BD5/nF5OKYuF9mAP2eR1kZYW2+49cKzAApZnLI4gbyMaebeIA5vg0P
+TPg8y7BvrOKrGlCDFeRtxDWgbE1Ki5ksrz671PUp/yRY/yzMrWfWA1tYnIis2bcx
+iptJOD6gEzYxCneVeWdBTEKNDCyr7nPU6e2xHqj+tLRn/b5QT6BQ8CQjY2rexHi9
++hKExXliJnGu0sqQUeZ05+y48EiqusK7lHmZaDnb1UqNGDQALxEJudhQMAFFab0x
+Gw==
+=+fON
+-----END PGP MESSAGE-----
+
+--enc-b--
