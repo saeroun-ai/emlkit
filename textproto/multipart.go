@@ -533,7 +533,13 @@ func (r *MultipartReader) scanBody(p *Part) (int, error) {
 			from = j + q + 1
 			continue
 		}
-		m := r.match(buf, c, elen, eof, full)
+		// A full buffer decides a candidate only when the candidate begins it:
+		// one further in is undecided until the body before it has been
+		// delivered and the bytes after it have arrived. Deciding it there
+		// read "\n--boundary-" at the end of a full buffer as body, and lost
+		// the closing delimiter with it, depending on how the input's reads
+		// filled the buffer.
+		m := r.match(buf, c, elen, eof, full && c == 0)
 		if done, n, err := r.decide(p, m, buf, c, elen, failed); done {
 			return n, err
 		}

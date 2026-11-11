@@ -46,7 +46,7 @@ import (
 
 const (
 	messageDepthAction     = "did not read the embedded message; the entity that carries it and its body stay as they were"
-	embeddedInvalidAction  = "kept the entity as a leaf; the bytes read while looking for the embedded header are lost to its Body"
+	embeddedInvalidAction  = "kept the entity as a leaf, with its body as it was before the embedded header was looked for"
 	embeddedEmptyAction    = "returned an embedded message with no header fields and an empty body"
 	embeddedMessageNothing = "the entity carries no message"
 )
@@ -77,7 +77,11 @@ func (e *Entity) CarriesMessage() bool {
 // The first call consumes Body; later calls return the same entity and error.
 // Read the embedded message through the returned entity — its Body, its
 // MultipartReader, Walk — and not through this entity's Body, which now
-// stands wherever the embedded reads left it.
+// stands wherever the embedded reads left it. When no entity is returned —
+// the embedded header could not be read, or the message was refused — a
+// parse that heals leaves Body as it was before the call, so the entity can
+// still be read as the leaf it is; under ProfileStrict, and for an entity
+// not from Parse, the bytes the attempt read are gone from it.
 //
 // The embedded entity belongs to this entity's parse when it has one: its
 // path is this entity's followed by 0, its defects are recorded in the same
@@ -126,9 +130,12 @@ func (e *Entity) readEmbedded(walking bool) (*Entity, error) {
 		return nil, newFatalDiagnostic(d)
 	}
 
-	cr := &countingReader{r: e.Body}
-	br := bufio.NewReader(cr)
+	// The carrier's body is read in whole blocks and, where the parse heals,
+	// kept until the header has been read; see chunk_invariance.go.
 	limits := c.headerLimits()
+	blocks := &ciBlocks{r: e.Body, keep: limits.Recover}
+	cr := &countingReader{r: blocks}
+	br := bufio.NewReader(cr)
 	var h textproto.Header
 	var unread []byte
 	var err error
@@ -140,6 +147,7 @@ func (e *Entity) readEmbedded(walking bool) (*Entity, error) {
 		h, err = textproto.ReadHeader(br)
 	}
 	if err != nil {
+		e.ciRestore(blocks)
 		if stop := c.fatalErr(); stop != nil {
 			return nil, stop
 		}
@@ -186,8 +194,10 @@ func (e *Entity) readEmbedded(walking bool) (*Entity, error) {
 	// The embedded message is one more entity of the tree.
 	var counter multipartReader
 	if aerr := counter.admitPart(ctx); aerr != nil {
+		e.ciRestore(blocks)
 		return nil, aerr
 	}
+	blocks.release()
 	return newWithOptions(Header{h}, body, e.skipTextAttachmentDecoding, ctx)
 }
 
@@ -196,10 +206,15 @@ func (e *Entity) readEmbedded(walking bool) (*Entity, error) {
 type embeddedReader struct {
 	e    *Entity
 	done bool
+
+	// ciRested reports that what the message left of e's body was read; see
+	// chunk_invariance.go.
+	ciRested bool
 }
 
 func (r *embeddedReader) NextPart() (*Entity, error) {
 	if r.done {
+		r.ciRest()
 		return nil, io.EOF
 	}
 	r.done = true
@@ -211,6 +226,7 @@ func (r *embeddedReader) NextPart() (*Entity, error) {
 		if stop := r.e.parse.fatalErr(); stop != nil {
 			return nil, stop
 		}
+		r.ciRest()
 		return nil, io.EOF
 	}
 	return emb, err

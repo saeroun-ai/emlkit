@@ -344,13 +344,13 @@ func (h *skHarness) iteration(iter uint64) (skStats, error) {
 		return st, fmt.Errorf("reading the input in small chunks: %w", err)
 	}
 	// A budget is spent as bytes are read, and readers fetch ahead, so only
-	// a parse under the default budgets must not depend on the chunking; and
-	// where a sink stops the parse depends on when a diagnostic is found
-	// relative to the bodies being read. ProfileStrict keeps a base64 decoder
-	// whose verdict depends on where reads end, and a carrier whose message
-	// could not be read keeps a rest that does too; both are open (see
+	// a parse under the default budgets must not depend on the chunking. A
+	// sink that stops the parse at its n-th diagnostic is compared too: the
+	// diagnostics come in one order, so the stop falls in one place.
+	// ProfileStrict keeps a base64 decoder whose verdict depends on where
+	// reads end, which is its earlier behavior (see
 	// TestSoak_strictBase64Chunked and docs/robustness-notes/soak.md).
-	comparable := !cfg.small && cfg.sinkStop == 0 && cfg.opts.Profile != message.ProfileStrict && !whole.unread && !chunked.unread
+	comparable := !cfg.small && cfg.opts.Profile != message.ProfileStrict
 	if comparable && whole.out.String() != chunked.out.String() {
 		return st, fmt.Errorf("reading the input in chunks of at most %d bytes changed the outcome\nwhole:\n%s\nchunked:\n%s", cfg.chunkMax, whole.out.String(), chunked.out.String())
 	}
@@ -581,17 +581,6 @@ func (c *skConfig) String() string {
 		c.sink, c.sinkStop, c.discard, c.chunkMax, skHostileNames[c.hostile], c.hostileAt)
 }
 
-// embedded reports that the consumer reads the messages that carriers embed.
-func (c *skConfig) embedded() bool {
-	switch c.mode {
-	case skModeDrain, skModeWalk:
-		return c.opts.WalkEmbeddedMessages
-	case skModeTree, skModeSpool:
-		return c.tree.DescendMessages
-	}
-	return false
-}
-
 // reader returns the input as the small-chunk reader delivers it: at most
 // chunkMax bytes a read, with an occasional short run of empty reads. Given
 // cancel, it is the hostile reader the configuration names.
@@ -754,7 +743,6 @@ type skPass struct {
 	out      strings.Builder
 	decoded  int64
 	complete bool // the consumer read everything and ended at the end
-	unread   bool // the tree holds a carrier whose message could not be read
 	state    message.CompletionState
 	codes    []message.Code
 }
@@ -990,15 +978,9 @@ func (p *skPass) tree(e *message.Entity) error {
 				return fmt.Errorf("child %d of %v has the path %v", i, n.Path, c.Path)
 			}
 		}
-		if opts.DescendMessages && n.Role == mail.RoleMessage && len(n.Children) == 0 && n.Err != nil {
-			// A carrier whose message could not be read keeps what is left of
-			// its body, and what the failed read took depends on the
-			// chunking, which is open (seed 1300007, iteration 480).
-			p.unread = true
-			fmt.Fprintf(&p.out, "%v %s %s unread\n", n.Path, n.MediaType, n.Role)
-		} else {
-			fmt.Fprintf(&p.out, "%v %s %s %d %x trunc=%v err=%v warn=%v dup=%v\n", n.Path, n.MediaType, n.Role, n.Size, n.SHA256[:4], n.Truncated, n.Err != nil, n.Warning != nil, n.DuplicateOf != nil)
-		}
+		// A carrier whose message could not be read is a leaf with its whole
+		// body, compared like any other (seed 1300007, iteration 480).
+		fmt.Fprintf(&p.out, "%v %s %s %d %x trunc=%v err=%v warn=%v dup=%v span=%v/%d-%d\n", n.Path, n.MediaType, n.Role, n.Size, n.SHA256[:4], n.Truncated, n.Err != nil, n.Warning != nil, n.DuplicateOf != nil, n.HasSpan, n.SpanStart, n.SpanEnd)
 		if n.Err != nil && (len(n.Children) > 0 || n.Role == mail.RoleContainer) {
 			// A part the iterator returned as an error alone was not read.
 			p.complete = false
@@ -1250,12 +1232,10 @@ func (p *skPass) check(s *message.ParseSession, sink *skSink) error {
 
 	fmt.Fprintf(&p.out, "state=%v entities=%d bodies=%d/%d multiparts=%d/%d ambiguous=%v stop=%v\n",
 		c.State, c.Entities, c.BodiesRead, c.Bodies, c.MultipartsRead, c.Multiparts, c.Ambiguous, c.Stop != nil)
-	// Sorted: the order a decoder below an embedded message discovers its
-	// defects in depends on how far it was read ahead, which is open; see
-	// TestSoak_diagnosticOrder. For the same reason the transfer decoding
-	// diagnostics are left out where embedded messages are read: a walk
-	// leaves a carrier when its message ends, and how much of the carrier's
-	// body was decoded by then depends on the chunking.
+	// In the order they were recorded in, which is part of the outcome: a
+	// transfer decoder reports a repair when its consumer has read up to it,
+	// and a carrier's body is read in whole blocks, so the order does not
+	// depend on the chunking (see TestSoak_diagnosticOrder).
 	var lines []string
 	if sink != nil && p.cfg.discard {
 		lines = append(lines, sink.seen...)
@@ -1263,10 +1243,6 @@ func (p *skPass) check(s *message.ParseSession, sink *skSink) error {
 	for _, d := range diags {
 		lines = append(lines, fmt.Sprintf("%s %s %v", d.Severity, d.Code, d.Path))
 	}
-	if p.cfg.embedded() {
-		lines = slices.DeleteFunc(lines, func(l string) bool { return strings.Contains(l, " cte.") })
-	}
-	slices.Sort(lines)
 	for _, l := range lines {
 		p.out.WriteString(l + "\n")
 	}
@@ -2128,21 +2104,66 @@ func skDrainCodes(t *testing.T, src io.Reader, opts *message.ParseOptions) []str
 	return append(out, s.Completion().State.String())
 }
 
-// TestSoak_rootCloseLost is open: what seed 1300007, iteration 5509 found. The
-// message ends with the root multipart's closing delimiter, and its part [2]
-// declares a boundary its body does not use, so it is framed again on the one
-// found in it. Read with a large buffer, the root then records
-// multipart.close_not_found and the parse ends incomplete; read a few bytes
-// at a time, it does not. The parts are the same either way.
+// TestSoak_rootCloseLost is what seed 1300007, iteration 5509 found. The
+// message ends with the root multipart's closing delimiter. Read with a large
+// buffer, the root recorded multipart.close_not_found and the parse ended
+// incomplete; read a few bytes at a time, it did not. The last part's body
+// filled the framing reader's buffer up to "\n--boundary-", one byte short of
+// the closing delimiter, and a candidate a full buffer cut was taken for
+// body, wherever in the buffer it began (textproto's scanBody; see
+// TestChunkInvariance_closeAtBufferEnd there). The part framed on an inferred
+// boundary before it only placed the bytes so.
 func TestSoak_rootCloseLost(t *testing.T) {
-	skOpen(t, "the root's closing delimiter is lost after a part framed on an inferred boundary, depending on read size")
 	in, err := os.ReadFile(filepath.Join("testdata", "soak", "root-close-lost-after-inferred-boundary.eml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	whole := skDrainCodes(t, bytes.NewReader(in), nil)
+	if slices.Contains(whole, "multipart.close_not_found []") {
+		t.Errorf("read whole, the root's closing delimiter was not found:\n%q", whole)
+	}
 	if small := skDrainCodes(t, &skNoEmptyReads{bytes.NewReader(in), 7}, nil); !slices.Equal(whole, small) {
 		t.Errorf("read 7 bytes at a time:\n%q\nwhole:\n%q", small, whole)
+	}
+}
+
+// TestSoak_signedSpan is what seed 1300007, iteration 7043 found, once the
+// soak got past 5509. The signed part of a multipart/signed is itself a
+// multipart. ReadTree took a child's raw span as soon as the child was read,
+// when a multipart child's part has been read to its end only if a buffer
+// happened to reach the delimiter after it: read whole it had a span, read
+// three bytes at a time it had none, and the tree said signed.unverifiable.
+// The span is now taken once the parent's iterator has moved past the child.
+func TestSoak_signedSpan(t *testing.T) {
+	in, err := os.ReadFile(filepath.Join("..", "testdata", "corpus", "signed-pgp-mime.eml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spans := func(src io.Reader) string {
+		_, e, perr := message.Parse(src, nil)
+		if e == nil {
+			t.Fatalf("no entity: %v", perr)
+		}
+		tr, terr := mail.ReadTree(e, nil)
+		if terr != nil || len(tr.Root.Children) == 0 {
+			t.Fatalf("ReadTree: %v", terr)
+		}
+		signed := tr.Root.Children[0]
+		if len(signed.Children) == 0 || !signed.HasSpan {
+			t.Errorf("the signed part %s with %d parts has no raw span", signed.MediaType, len(signed.Children))
+		}
+		out := fmt.Sprintf("%v %d-%d unverifiable=%v", signed.HasSpan, signed.SpanStart, signed.SpanEnd, tr.Root.Unverifiable)
+		for _, d := range tr.Diagnostics {
+			out += " " + string(d.Code)
+		}
+		return out
+	}
+	whole := spans(bytes.NewReader(in))
+	if strings.Contains(whole, string(mail.CodeSignedUnverifiable)) {
+		t.Errorf("read whole: %s", whole)
+	}
+	if small := spans(&skNoEmptyReads{bytes.NewReader(in), 3}); small != whole {
+		t.Errorf("read 3 bytes at a time: %s; whole: %s", small, whole)
 	}
 }
 
@@ -2171,14 +2192,14 @@ func TestSoak_strictBase64Chunked(t *testing.T) {
 	}
 }
 
-// TestSoak_diagnosticOrder is open: what seed 1300007, iteration 214 found.
-// The carrier of an embedded message is quoted-printable; the decoder's
-// diagnostics and those of the embedded message's parse interleave in an
-// order that depends on how far the embedded header reader read ahead into
-// the decoder, so reading the input in small chunks reorders them. The
-// diagnostics and the tree are otherwise the same.
+// TestSoak_diagnosticOrder is what seed 1300007, iteration 214 found. The
+// carrier of an embedded message is quoted-printable; the decoder's
+// diagnostics and those of the embedded message's parse interleaved in an
+// order that depended on how far the embedded header reader had read ahead
+// into the decoder, so reading the input in small chunks reordered them. The
+// decoder now reports a repair when its consumer has read up to it, and the
+// carrier's body is read in whole blocks (chunk_invariance.go).
 func TestSoak_diagnosticOrder(t *testing.T) {
-	skOpen(t, "diagnostic order under a quoted-printable message/rfc822 carrier depends on input chunking")
 	in, err := os.ReadFile(filepath.Join("testdata", "soak", "qp-embedded-diagnostic-order.eml"))
 	if err != nil {
 		t.Fatal(err)

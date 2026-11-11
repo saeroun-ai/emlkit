@@ -54,6 +54,29 @@ and `EmbeddedMessage` reads it.
 | `message.embedded_truncated` | the carrier holds no bytes at all (explicit call only) |
 | `message.illegal_transfer_encoding` | `message/rfc822` declared Base64 or quoted-printable; decoded as declared |
 
+## Independent of how the input arrives
+
+Code: `chunk_invariance.go`. Under the healing profiles:
+
+- The carrier's body is read for the embedded parse in whole blocks, so what
+  the carrier's decoder and monitors report while the embedded parse reads
+  ahead does not depend on the input's read sizes.
+- An embedded header that cannot be read (`message.embedded_invalid`), or a
+  message refused after its header was read, leaves the carrier's `Body` as
+  it was before the attempt: the bytes the attempt took are given back (up to
+  1 MiB + 64 KiB; a longer attempt is not undone). `mail.ReadTree` keeps such
+  a carrier as a leaf with its whole body.
+- `Walk` under `WalkEmbeddedMessages` reads the rest of a carrier's body
+  before it goes on to the carrier's siblings: the bytes after an embedded
+  multipart's closing delimiter, and the whole body when the message could not
+  be read or was refused. The carrier's last transfer-decoding diagnostics
+  and its place in `Completion` therefore do not depend on buffering. A
+  walkFunc that wants the bytes of an unreadable message calls
+  `EmbeddedMessage` itself and, given none, reads the carrier's `Body`. An
+  embedded message that is a single body is left to walkFunc.
+
+`ProfileStrict` walks and fails as before.
+
 ## Limitations
 
 - Reading the embedded message consumes the carrier's `Body`, so the carrier

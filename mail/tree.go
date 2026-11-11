@@ -314,8 +314,20 @@ func (b *treeBuilder) read(e *message.Entity, path []int, parent *Node, warn err
 	if mr := e.MultipartReader(); mr != nil {
 		var last error
 		fails := 0
+		// A part's span is known for certain once the iterator has moved past
+		// it; taken before, it is known only when a buffer happened to read
+		// to the part's end, which for a multipart child depends on how the
+		// input arrived. So the child read last is asked again after the call.
+		var ciPrev *message.Entity
+		ciSpan := func() {
+			if ciPrev != nil {
+				b.span(ciPrev, n.Children[len(n.Children)-1])
+				ciPrev = nil
+			}
+		}
 		for i := 0; ; i++ {
 			p, err := mr.NextPart()
+			ciSpan()
 			if err == io.EOF {
 				break
 			}
@@ -349,6 +361,7 @@ func (b *treeBuilder) read(e *message.Entity, path []int, parent *Node, warn err
 			if cerr != nil {
 				return n, cerr
 			}
+			ciPrev = p
 		}
 		b.span(e, n)
 		return n, nil

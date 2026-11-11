@@ -83,6 +83,13 @@ type cteNotes struct {
 	seen    uint32
 	pending uint32
 	at      [cteNoteCount]int64
+
+	// ciOut is the output buffer of the decoder these notes belong to, ciHeld
+	// the settled notes its consumer has not read up to yet, and ciAt how
+	// much of that buffer precedes each; see chunk_invariance.go.
+	ciOut  *[]byte
+	ciHeld uint32
+	ciAt   [cteNoteCount]int32
 }
 
 // note marks k, observed offset bytes into the body as it was read.
@@ -113,15 +120,9 @@ func (n *cteNotes) settle() {
 			}
 		}
 		n.pending &^= 1 << first
-		info := cteNoteInfo[first]
-		n.ctx.recordBody(Diagnostic{
-			Code:     info.code,
-			Severity: info.severity,
-			Message:  info.message,
-			Field:    "Content-Transfer-Encoding",
-			Action:   info.action,
-			Location: n.ctx.bodyLocationAt(n.at[first]),
-		})
+		// Recorded now, or once the consumer has read up to here; see
+		// chunk_invariance.go.
+		n.ciRecord(first)
 	}
 	n.pending = 0
 }
@@ -300,10 +301,11 @@ func (d *tolerantBase64) Read(p []byte) (int, error) {
 	}
 	for {
 		if d.pos < len(d.out) {
-			n := copy(p, d.out[d.pos:])
+			n := d.notes.ciTake(p, d.out, d.pos)
 			d.pos += n
 			return n, nil
 		}
+		d.notes.ciRelease(d.pos)
 		if d.err != nil {
 			return 0, d.err
 		}
@@ -487,10 +489,11 @@ func (d *tolerantQP) Read(p []byte) (int, error) {
 	}
 	for {
 		if d.pos < len(d.out) {
-			n := copy(p, d.out[d.pos:])
+			n := d.notes.ciTake(p, d.out, d.pos)
 			d.pos += n
 			return n, nil
 		}
+		d.notes.ciRelease(d.pos)
 		if d.err != nil {
 			return 0, d.err
 		}
@@ -691,10 +694,11 @@ func (d *tolerantUU) Read(p []byte) (int, error) {
 	}
 	for {
 		if d.pos < len(d.out) {
-			n := copy(p, d.out[d.pos:])
+			n := d.notes.ciTake(p, d.out, d.pos)
 			d.pos += n
 			return n, nil
 		}
+		d.notes.ciRelease(d.pos)
 		if d.err != nil {
 			return 0, d.err
 		}
@@ -877,11 +881,17 @@ func (c parseContext) transferDecoder(name string, r io.Reader) (dec io.Reader, 
 	notes := &cteNotes{ctx: c}
 	switch name {
 	case "quoted-printable":
-		return &tolerantQP{r: r, notes: notes}, true
+		d := &tolerantQP{r: r, notes: notes}
+		notes.ciOut = &d.out
+		return d, true
 	case "base64":
-		return &tolerantBase64{r: r, notes: notes, stopAtPadding: c.session.Compatibility() == CompatibilityPythonEmail}, true
+		d := &tolerantBase64{r: r, notes: notes, stopAtPadding: c.session.Compatibility() == CompatibilityPythonEmail}
+		notes.ciOut = &d.out
+		return d, true
 	case "x-uuencode":
-		return &tolerantUU{r: r, notes: notes}, true
+		d := &tolerantUU{r: r, notes: notes}
+		notes.ciOut = &d.out
+		return d, true
 	case "7bit":
 		if c.session == nil {
 			return r, true

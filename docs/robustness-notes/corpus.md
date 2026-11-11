@@ -93,17 +93,23 @@ entry behind; delete both. `TestCorpus` fails while the counts differ.
 ## Findings
 
 Outcomes that look wrong or debatable, as recorded on 2026-11-11. Nothing
-here was changed in the parser.
+here was changed in the parser, except findings 1 and 2, which are closed: no
+fixture records a `byteAtATime` difference any more, and
+`TestChunkInvariance_fixtures` holds every fixture to one outcome for four
+ways of delivering it.
 
-1. **forwarded-rfc822-attachment** — Completion depends on delivery: read
-   whole the state is `complete`, read a byte at a time `in-progress`
-   (recorded as `byteAtATime`). A message/rfc822 carrying a multipart, walked
-   with `WalkEmbeddedMessages`. Expected: `complete` either way; it looks as
-   if the carrier's bytes after the embedded closing delimiter count as read
-   only when a buffer happened to fetch them.
-2. **bulk-sloppy-encodings** — diagnostic order depends on delivery:
+1. **forwarded-rfc822-attachment** — closed. Completion depended on delivery:
+   read whole the state was `complete`, read a byte at a time `in-progress`.
+   A message/rfc822 carrying a multipart, walked with `WalkEmbeddedMessages`:
+   the carrier's bytes after the embedded closing delimiter counted as read
+   only when a buffer had fetched them. `Walk` now reads what an embedded
+   multipart left of its carrier before it goes on (embedded-messages.md);
+   the state is `complete` either way.
+2. **bulk-sloppy-encodings** — closed. Diagnostic order depended on delivery:
    `cte.qp_invalid_hex` before `charset.invalid_sequence` read whole, after it
-   read a byte at a time. Expected: one order, for example by input offset.
+   read a byte at a time. The order is now by position in the body, here
+   `charset.invalid_sequence` first, since a transfer decoder records a
+   repair when its consumer has read up to it (transfer-encodings.md).
 3. **nested-reused-boundary-deep** — an inner multipart reuses the outer
    boundary; the inner closing delimiter closes the outer one, and the outer
    multipart's attachment after it (`a.pdf`) is lost as epilogue with no

@@ -85,6 +85,16 @@ recorded at once.
 A caller that stops reading a body before its end may therefore miss the
 repairs of the final unended line.
 
+A decoder reads its input in blocks, and a repair it has settled is recorded
+when its consumer has read the decoded bytes before it, not when the decoder
+met it: a `Read` never returns bytes past the next settled repair, and the
+`Read` that begins there records it (`chunk_invariance.go`). The diagnostics
+of a body therefore come in the order of their positions — a
+`cte.qp_invalid_hex` after a `charset.invalid_sequence` that precedes it in
+the text — whatever the read sizes of the input, and a caller that stops
+reading before a repair's position does not get it. `cte.seven_bit_violation`
+is recorded when its byte is read.
+
 ## Multipart and message/rfc822 (ROB-060-012)
 
 - A multipart that declares anything but `7bit`, `8bit` or `binary` has the

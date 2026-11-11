@@ -4,7 +4,10 @@ Code: `mail/soak_test.go` (`TestSoak`, and the `TestSoak_*` tests for what it
 found), inputs in `mail/testdata/soak/`. Fixes: `multipart_stuck.go`,
 `textproto/multipart_stuck.go`, with small hooks in `multipart.go`,
 `textproto/multipart.go`, `entity.go`, `completion.go` (`Entity.Drain`) and
-`mail/tree.go` (`roleOf`).
+`mail/tree.go` (`roleOf`). Chunk invariance: `chunk_invariance.go`, with hooks
+in `cte_tolerant.go`, `embedded.go`, `textproto/multipart.go` (`scanBody`) and
+`mail/tree.go` (spans); tests `TestChunkInvariance_*` in the root package and
+in `textproto`.
 
 ## What it generates
 
@@ -94,19 +97,14 @@ For every pass:
   deleted exactly once;
 - `mail.Reader.NextPart` ends, or repeats its error, within 65,536 calls.
 
-Whole and chunked reads must give the same outcome (tree, leaf sizes and
-digests, counters, diagnostics as a sorted list). They are not compared
-when:
+Whole and chunked reads must give the same outcome: the tree, every leaf's
+size, digest and raw span, the counters, and the diagnostics in the order
+they were recorded in, including with a sink that stops the parse at its
+n-th diagnostic. They are not compared when:
 
 - a budget is small, since budgets are spent as bytes are read and readers
   fetch ahead;
-- a sink stops the parse, since where the stop falls depends on when a
-  diagnostic is found relative to the body reads;
-- the profile is Strict (see the open findings);
-- a tree holds a carrier whose message could not be read (open).
-
-Transfer-decoding diagnostics are also left out of the comparison when the
-consumer reads embedded messages (open).
+- the profile is Strict (see the open findings).
 
 Every 100 iterations (1000 in long mode), and at the end, it checks
 resources. Goroutines must return to the count before the first iteration,
@@ -154,6 +152,12 @@ went at about 2700 to 5400 a second. There were three long 30 s runs.
 The last ran 22,775 iterations before it hit the 22774 hang; the
 iterations found are listed below, and each was rerun alone after its fix.
 
+The chunk-invariance round (fixes 5 to 9) ran the 30 s soak with
+`EMLKIT_SOAK_KEEP_GOING=1`: 180,511 iterations with 26 differences between
+whole and chunked reads, of two kinds (fixes 8 and 9). After those, 181,381
+iterations in 30 s with none (about 6000 a second), and 177,355 with seed 7;
+with parses a sink stops compared as well, 185,691 with none.
+
 ### Fixed
 
 1. **`mail.ReadTree` never returned** (iterations 67, 4621, 22774). ReadTree
@@ -197,43 +201,81 @@ iterations found are listed below, and each was rerun alone after its fix.
    `MaxBodyBytes < 0`, or the total budget spent) such a body has no Data,
    so it was classified `RoleContainer`, and every view skipped it. It now
    takes `Size == 0` too. `TestSoak_opaqueMultipartRole`.
+5. **The root's closing delimiter was lost at the end of a full buffer**
+   (iteration 5509, `testdata/soak/root-close-lost-after-inferred-boundary.eml`,
+   `TestSoak_rootCloseLost`). Read whole, the root recorded
+   `multipart.close_not_found` and the parse ended `incomplete`; read a few
+   bytes at a time, it did not. The part framed on an inferred boundary was
+   not the cause, it only placed the bytes. `textproto`'s `scanBody` told
+   `match` that the buffer was full for every delimiter candidate in it, and
+   `match` decides a candidate the buffer cuts as "never a delimiter", which
+   is only true of one that begins the buffer. A full buffer that ended with
+   `\n--boundary-`, one byte short of the closing delimiter, was delivered as
+   body, and the delimiter with it. (A buffer ending with `\n--boundary` was
+   saved by the hold-back at the end of `scanBody`, which looks for a prefix
+   of the name only.) A candidate further in is now undecided: the body
+   before it is delivered and it is looked at again from the start of the
+   buffer. `TestChunkInvariance_closeAtBufferEnd` (textproto) moves the
+   closing delimiter across the buffer's end a byte at a time.
+6. **Diagnostics of a transfer decoder ran ahead of its consumer**
+   (iterations 214 and 3553, `testdata/soak/qp-embedded-diagnostic-order.eml`,
+   `TestSoak_diagnosticOrder`; a sink stopping at the n-th diagnostic then
+   stopped elsewhere, 1706). A tolerant decoder decodes one block of its
+   input at a time and recorded every repair of the block before its
+   consumer had read the first decoded byte, so its diagnostics came before
+   or after those of the stages above it — the parse of an embedded message,
+   a charset monitor — depending on how much one read of the input returned.
+   A settled repair is now held with its position in the decoded output; a
+   `Read` never returns bytes past it, and the `Read` that begins there
+   records it. The carrier's body is also read in whole blocks for the
+   embedded parse, so that what its other stages report under the embedded
+   reader's buffer depends on the bytes alone. `chunk_invariance.go`;
+   `TestChunkInvariance_notesByPosition`.
+7. **A carrier whose message could not be read kept a rest that depended on
+   read-ahead** (iterations 480, 3722, 4606, 18589). What the failed header
+   read had buffered was gone, so `ReadTree` kept a leaf whose Size and
+   SHA256 changed with the chunking. The bytes the attempt took are given
+   back, and the carrier is a leaf with its whole body.
+   `TestChunkInvariance_carrierRestored`.
+8. **The end of a carrier's body was read after the walk had moved on**
+   (iteration 87148, and the corpus fixture forwarded-rfc822-attachment).
+   A walk left a carrier when its message ended; what was left of the
+   carrier's body was read by `Drain` after the whole walk, by which time the
+   multipart the carrier is a part of had discarded it. The decoder then
+   ended wherever its buffer had: `cte.base64_length_invalid`, and with it
+   the state `incomplete`, came and went with the read size, and a carrier
+   whose embedded multipart had ended counted as read only when a buffer had
+   fetched its last bytes. `Walk` now reads the rest of a carrier's body
+   before it goes on to the carrier's siblings (embedded-messages.md).
+   `TestChunkInvariance_carrierRead`,
+   `TestChunkInvariance_unreadableCarrierWalked`.
+9. **`ReadTree` took a multipart child's raw span too early** (iteration
+   7043, 25 more in 180,000). A part's span is known once its body was read
+   to its end; for a multipart child that is when the parent's iterator has
+   moved past it, and before that only if a buffer reached the delimiter
+   after it. Read whole, the signed part of a `multipart/signed` that is
+   itself a multipart had a span; read three bytes at a time it had none, and
+   the tree reported `signed.unverifiable`. The span of each child is now
+   taken after the iterator's next call. `TestSoak_signedSpan`.
 
 ### Open
 
-- **The root's closing delimiter is lost after a part framed on an inferred
-  boundary** (iteration 5509, `testdata/soak/root-close-lost-after-inferred-boundary.eml`,
-  `TestSoak_rootCloseLost`). The message ends with the root's closing
-  delimiter, and part [2] declares a boundary its body does not use, so it
-  is framed again on the one found in it. Read with a large buffer, the root
-  then records `multipart.close_not_found` and the parse ends `incomplete`;
-  read a few bytes at a time, it does not. The parts are the same. The
-  verdict a spam adapter reads depends on the transport's chunking. The cause
-  is probably in how the re-framed part's kept body and the root's reader
-  share the buffer (`multipart_heal.go`); not investigated further.
-- **Decoder diagnostics of an embedded message's carrier depend on
-  read-ahead** (iterations 214 and 3553,
-  `testdata/soak/qp-embedded-diagnostic-order.eml`,
-  `TestSoak_diagnosticOrder`). The embedded header reader buffers ahead
-  into the carrier's decoder, so the carrier's QP or base64 diagnostics
-  interleave with the embedded parse's in an order that depends on the
-  chunking. With a sink that stops at the n-th diagnostic, the stop then
-  lands elsewhere (1706). A walk leaves the carrier when its message ends,
-  and the rest of the carrier's raw part is skipped, so a diagnostic at the
-  end of the carrier (`cte.base64_padding_missing`) is found only when the
-  read-ahead reached it.
-- **A carrier whose message could not be read keeps a rest that depends on
-  read-ahead** (iterations 480, 3722, 4606, 18589). ReadTree with
-  `DescendMessages` keeps such a carrier as a leaf "with what is left of
-  it". What the failed header read buffered is gone, so its Size and SHA256
-  change with the chunking, and so does whether a spool's store is used for
-  it.
 - **Strict base64 depends on read size** (iterations 6478, 11189, 19668,
   `testdata/soak/strict-base64-padding-chunked.eml`,
   `TestSoak_strictBase64Chunked`). ProfileStrict keeps `encoding/base64`'s
   streaming decoder. It refuses data after padding that arrives in the same
   read, and accepts it when a read ended at the padding: `aGk=\naGk=` is
   "hi" plus an error read whole, and "hihi" read a byte at a time. This is
-  Strict's earlier behavior, left as it is.
+  Strict's earlier behavior, left as it is. The same shows on the corpus
+  fixtures base64-data-after-padding (another body, an error or none) and
+  base64-junk-and-missing-padding (the error's offset, 4 or 0), under
+  ProfileStrict only: `Read`, `ReadWithOptions`, `New` and the healing
+  profiles use the tolerant decoder and give one result
+  (`TestChunkInvariance_legacyBase64`, `TestChunkInvariance_fixtures`).
+- Not part of the promise: `Completion.InputBytes` and `InputEnded` say how
+  much of the input was fetched, and what follows a closing delimiter is not
+  read, so they depend on buffering; a budget is spent as bytes are read, so
+  a parse that runs into one may do so at another place.
 - Strict's second `Drain` still frames the epilogue (see fix 2), so the soak
   does not ask Strict for a second Drain.
 - `Drain` returns nil when its walk reached the end, even when the parse was
