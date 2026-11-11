@@ -96,9 +96,14 @@ is decoded (`CompatibilityPythonEmail` stops at the padding).
 | `DiscardDeliveredDiagnostics` | with a sink: the session keeps nothing it delivered |
 | `ReadOptions` | the older read options, such as `SkipTextAttachmentDecoding` |
 
-Pending: changes to charset-declaration healing (`charset.missing`,
-`charset.declaration_suspect`) are in progress in another change and are not
-described here.
+A declaration the bytes contradict is healed under the healing profiles and
+reported, from the first 4096 bytes after transfer decoding: a body declared
+in a legacy charset that is UTF-8 is delivered as UTF-8
+(`charset.declaration_suspect`, Recovered); with a `FallbackCharset`, a body
+that is mostly valid UTF-8 stays UTF-8 and only one that is not is decoded
+with the fallback; text with no charset and no fallback that is not UTF-8 is
+kept as read and observed (`charset.missing`, Info). The evidence rules and
+their known misses are in charset-plugin.md.
 
 ### The charset plugin
 
@@ -283,9 +288,14 @@ so no repair can be mapped to its nodes.
 | `Node.Report()` | section 7 |
 | `Node.RawSection(src)` | the node's span of your `io.ReaderAt` |
 
-Pending: RFC 3676 `format=flowed` unwrapping is being added in another change.
-Until then a flowed body is delivered as sent, with soft line breaks in
-place.
+A `format=flowed` body (RFC 3676) is delivered as sent, with its soft line
+breaks in place. `Node.FlowedText()` returns the unwrapped text of a
+`text/plain` node that declares it, honouring `delsp`; `mail.UnwrapFlowed` is
+the same for text of your own.
+
+A multipart node carries the bytes around its parts: `Node.Preamble` and
+`Node.Epilogue`, with `PreambleTruncated` and `EpilogueTruncated` when a
+budget cut them.
 
 ### Filenames
 
@@ -425,10 +435,12 @@ after any semantic read. Errors, matched with `errors.Is`: `ErrNoRawSource`
 (past what a recorded source kept). `MaxInputBytes` bounds the parse, not
 raw reads. See raw-source.md.
 
-Pending: a diagnostic for text after a multipart's closing delimiter is being
-added in another change. Until then such text records nothing under the
-default profile; `MultipartEpilogue` and `TrailingInputReader` are the ways to
-read it.
+Text after a multipart's closing delimiter is not a part and no client shows
+it. `ReadTree` reads it (`Node.Epilogue`) and records `multipart.trailing_junk`
+in `Tree.Diagnostics` when it holds anything but white space, saying how many
+bytes and whether they look like further delimiter lines, a header block,
+text or binary data. Without `ReadTree`, `MultipartEpilogue` and, for the
+message's own tail under `ProfileForensic`, `TrailingInputReader` read it.
 
 ## 7. Reports
 
@@ -587,18 +599,14 @@ multipart, instead of repairing it.
 | `header.mbox_envelope` | Info | S | (`RecognizeMboxEnvelope`) a leading `From_` line was kept apart |
 | `header.decoder_no_progress` | InvalidMetadata | S | a charset reader stalled on a parameter's encoded word; value kept raw |
 | `header.invalid_utf8` | Recovered (fallback applied); Unsupported (fallback failed); InvalidMetadata (U+FFFD) | H | raw 8-bit header text that is not UTF-8 |
-
-Pending: an observation for header lines longer than 998 octets is being
-added in another change.
+| `header.overlong_line` | Info | S | a header line longer than 998 octets; once per header block, naming the first such field |
 
 ### Body
 
 | Code | Severity | Where | For a classifier |
 | --- | --- | --- | --- |
 | `body.decoder_no_progress` | Fatal | S | a charset reader stalled; that body ended |
-
-Pending: an observation for NUL bytes in text bodies is being added in
-another change.
+| `body.nul` | Info | S | a text body under 7bit, 8bit or no transfer encoding holds NUL bytes; once per body |
 
 ### MIME types and parameters
 
@@ -640,9 +648,7 @@ These are recorded when the parse interprets a `Content-Type` or
 | `multipart.bare_lf` | Info | S | delimiter lines with LF endings |
 | `multipart.bare_cr` | Recovered† | S | delimiter lines with bare CR endings |
 | `multipart.mixed_line_endings` | Info; Recovered with a bare CR | S | delimiter lines mix line endings |
-
-Pending: an observation for text after the closing delimiter is being added
-in another change (see section 6).
+| `multipart.trailing_junk` | Info | T | (`ReadTree`) the epilogue holds more than white space: text no client shows |
 
 ### Transfer encodings
 
@@ -659,7 +665,8 @@ in another change (see section 6).
 | `cte.base64_length_invalid` | Incomplete | S | a single left-over character was dropped |
 | `cte.qp_invalid_hex` | Recovered | S | `=` not followed by two hex digits, kept as text |
 | `cte.qp_trailing_equals` | Recovered | S | the body ends with `=` |
-| `cte.qp_invalid_soft_break` | Recovered | S | soft break with white space after it, or a bare CR or LF |
+| `cte.qp_invalid_soft_break` | Recovered | S | a soft break ended by a bare CR; white space between `=` and the line ending is transport padding and records nothing |
+| `cte.base64_truncated` | Incomplete | S | a Base64 part ends inside a group because the input ended there: the attachment is cut |
 | `cte.qp_control_byte` | Info | S | unencoded control byte kept |
 | `cte.qp_overlong_line` | Info | S | an encoded line over 998 bytes |
 | `cte.uuencode_invalid` | Recovered | S | a line that is not a whole uuencoded line |
@@ -679,8 +686,9 @@ in another change (see section 6).
 | Code | Severity | Where | For a classifier |
 | --- | --- | --- | --- |
 | `charset.unknown` | Unsupported | S | no decoder for the body's charset; body undecoded; import the plugin |
-| `charset.missing` | Recovered | S | (`FallbackCharset`) undeclared non-UTF-8 body decoded with the fallback |
-| `charset.declaration_suspect` | Recovered | S, H | a body or word declared UTF-8 or US-ASCII holds other bytes; decoded with the fallback |
+| `charset.missing` | Recovered (decoded with `FallbackCharset`); Info (no fallback, kept as read) | S | text that declares no charset and is not UTF-8 |
+| `charset.declaration_suspect` | Recovered (healed: decoded with the fallback, or a legacy declaration over UTF-8 read as UTF-8); Info (US-ASCII declared, other bytes kept as read) | S, H | the declared charset is not what the bytes are |
+| `mime.parameter_fallback_charset` | Recovered | S | a raw 8-bit parameter value, a filename mostly, decoded with `FallbackCharset` |
 | `charset.invalid_sequence` | Info (body); Recovered (decoded word) | S, H | text declared UTF-8 is not valid UTF-8; the body keeps its bytes, a word gets U+FFFD |
 | `charset.bom_mismatch` | Recovered (decoded as the mark says); Info (declaration kept) | S | a byte order mark contradicts the declared charset |
 | `charset.empty` | Recovered | H | an encoded word names no charset |
@@ -761,12 +769,11 @@ The registry declares these and no producer records them:
 `multipart.boundary_invalid`, `multipart.boundary_too_long`,
 `multipart.invalid_delimiter_suffix`, `multipart.empty_part`,
 `multipart.part_header_missing`, `multipart.part_separator_missing`,
-`multipart.false_boundary_candidate`, `multipart.trailing_junk`,
+`multipart.false_boundary_candidate`,
 `cte.illegal_for_multipart`, `cte.illegal_for_message`,
-`cte.base64_truncated`, `charset.alias_recovered`,
+`charset.alias_recovered`,
 `charset.decode_truncated`, `address.comment_depth`. An input error and a
-cancellation are errors, not diagnostics. Pending: the changes named above
-may begin to emit some of these.
+cancellation are errors, not diagnostics.
 
 ### Issue codes of the optional packages
 

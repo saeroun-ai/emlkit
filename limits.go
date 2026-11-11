@@ -185,7 +185,15 @@ const (
 // DefaultLimits returns those values resolved, so a caller can read one, adjust
 // it, or compare against it without repeating a number from this table.
 //
-// Fifteen budgets are enforced, and only under Parse. MaxDiagnosticCount bounds
+// Three further budgets are enforced where their subject is asked for, and are
+// not among the fifteen described next: MaxPreambleBytes by a multipart
+// iterator that heals (every profile but ProfileStrict), MaxEpilogueBytes by
+// MultipartEpilogue, and MaxMessageDepth by Entity.EmbeddedMessage and a walk
+// under ParseOptions.WalkEmbeddedMessages. MaxMemorySpoolBytes and
+// MaxDiskSpoolBytes are validated and reported and bound nothing: mail.Spool
+// takes its quotas from mail.SpoolOptions.
+//
+// Fifteen budgets are enforced by the parse itself, and only under Parse. MaxDiagnosticCount bounds
 // the diagnostics a parse records and delivers, and by itself stops no parsing:
 // the request that reaches it is replaced by one terminal limit.diagnostic_count
 // diagnostic in the last slot and every later request is omitted; see the field.
@@ -417,12 +425,13 @@ type Limits struct {
 	// MaxMessageDepth bounds how deeply message/rfc822 and message/global
 	// entities nest, independently of MaxMIMEDepth.
 	//
-	// It is reserved and not enforced. This parser treats a message/* body as an
-	// opaque leaf rather than as a nested entity, so no nested-message
-	// transition exists to count; the budget and its limit.message_depth code
-	// are activated when that model does. A message/rfc822 part is meanwhile one
-	// ordinary part of MaxPartCount, and the multipart structure inside its
-	// opaque body is not descended into and costs neither budget.
+	// A message/* body stays an opaque leaf until it is asked for:
+	// Entity.EmbeddedMessage, and Walk under ParseOptions.WalkEmbeddedMessages,
+	// read the message it carries, and each such step counts one level here.
+	// A carrier past the budget is not read: it stays a leaf, and
+	// limit.message_depth is recorded for it (embedded.go). A message/rfc822
+	// part that is never descended into is one ordinary part of MaxPartCount
+	// and costs nothing here.
 	MaxMessageDepth int64
 
 	// MaxPartCount bounds the child parts of the whole tree.

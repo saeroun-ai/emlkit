@@ -110,7 +110,9 @@ ways of delivering it.
    read a byte at a time. The order is now by position in the body, here
    `charset.invalid_sequence` first, since a transfer decoder records a
    repair when its consumer has read up to it (transfer-encodings.md).
-3. **nested-reused-boundary-deep** — an inner multipart reuses the outer
+3. **nested-reused-boundary-deep** — closed: the outer multipart now reads on
+   past the shared closing delimiter (`multipart.close_shared`) and `a.pdf` is
+   kept (nested-boundaries.md). As recorded: an inner multipart reuses the outer
    boundary; the inner closing delimiter closes the outer one, and the outer
    multipart's attachment after it (`a.pdf`) is lost as epilogue with no
    diagnostic, state `complete`. Known (multipart-recovery.md), but it hides
