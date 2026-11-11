@@ -32,10 +32,11 @@ inside a bounded process group. On this Linux host use:
 rtk proxy python3 scripts/qa-bounded.py --seconds 180 -- go test -timeout 120s ./...
 rtk proxy python3 scripts/qa-bounded.py --seconds 600 -- go test -race -timeout 480s . ./mail/ ./charset/ ./utf7/ ./internal/...
 rtk proxy python3 scripts/qa-bounded.py --seconds 600 -- go test -race -timeout 480s ./textproto/
+rtk proxy python3 scripts/qa-bounded.py --seconds 400 -- go test -race -timeout 360s ./tnef/ ./smime/ ./pgpmime/ ./icalendar/ ./appledouble/ ./legacyenc/
 rtk proxy python3 scripts/qa-bounded.py --seconds 120 -- go test -run '^$' -fuzz '^TARGET$' -fuzztime 30s -parallel 2 .
 ```
 
-Run the race detector in those two groups, not as `./...`: building every
+Run the race detector in those three groups, not as `./...`: building every
 race test binary at once passes the 1.5 GiB limit and is OOM-killed during the
 build, before any test runs (seen 2026-11-11).
 
@@ -83,8 +84,11 @@ Models a message as **one-or-more text parts + zero-or-more attachments**, hidin
 ### `charset/` — optional charset plugin
 Importing `_ "github.com/saeroun-ai/emlkit/charset"` (side-effect only) sets `message.CharsetReader` to decode ~all common charsets via `golang.org/x/text`. Adds ~1 MiB to binaries, so it's opt-in. Without it, non-UTF-8 charsets produce `IsUnknownCharset` errors. The package also carries a quirks table for charsets `ianaindex` doesn't handle.
 
+### Optional modules
+`tnef/` (winmail.dat), `smime/` (S/MIME structure, opaque signed content, verification), `pgpmime/` (PGP/MIME structure, armor, packets), `icalendar/`, `appledouble/` and `legacyenc/` (BinHex, yEnc, inline uuencode) are standalone packages with their own `Issue` and `Limits` types. The core never imports them and never calls them on its own; a consumer feeds them the bytes of a part (`mail.Node.Data`, or the raw span for signatures). Each has a note under `docs/robustness-notes/`. Keep them free of imports from the core outside tests.
+
 ### Healing under `Parse`
-`Parse` (every profile but `ProfileStrict`) heals damaged mail and reports each repair as a `Diagnostic`; `Read`, `ReadWithOptions`, `New` and `ProfileStrict` keep the earlier strict behavior, so both paths must be kept working. What is healed, and the policy for each case, is written per area in `docs/robustness-notes/` — read the relevant note before changing header recovery (`textproto/recover.go`, `header_recover.go`), multipart recovery (`multipart_heal.go`), transfer decoding (`cte_tolerant.go`), RFC 2047 (`rfc2047.go`), MIME parameters (`mediatype_tolerant.go`, `rfc2231.go`), embedded messages (`embedded.go`), completion (`completion.go`) or the mail views (`mail/tree.go`, `mail/spool.go`, `mail/*_tolerant.go`). `docs/robustness-roadmap.md` is the ledger of items and their status; `docs/spam-adapter-contract.md` says what a consumer may rely on.
+`Parse` (every profile but `ProfileStrict`) heals damaged mail and reports each repair as a `Diagnostic`; `Read`, `ReadWithOptions`, `New` and `ProfileStrict` keep the earlier strict behavior, so both paths must be kept working. What is healed, and the policy for each case, is written per area in `docs/robustness-notes/` — read the relevant note before changing header recovery (`textproto/recover.go`, `header_recover.go`), multipart recovery (`multipart_heal.go`), transfer decoding (`cte_tolerant.go`), RFC 2047 (`rfc2047.go`), MIME parameters (`mediatype_tolerant.go`, `rfc2231.go`), embedded messages (`embedded.go`), completion (`completion.go`) or the mail views (`mail/tree.go`, `mail/spool.go`, `mail/*_tolerant.go`). Opt-in checks: `EMLKIT_SOAK=30s` (seeded soak, `mail/soak_test.go`), `EMLKIT_DIFFERENTIAL=1` (comparison with Python's `email`, `mail/differential_test.go`), `EMLKIT_UPDATE_CORPUS=1` (rewrites `testdata/corpus` expectations for review). `docs/robustness-roadmap.md` is the ledger of items and their status; `docs/spam-adapter-contract.md` says what a consumer may rely on.
 
 ## Conventions specific to this codebase
 

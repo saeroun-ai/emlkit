@@ -54,6 +54,9 @@ jobs:
       - name: race (textproto)
         timeout-minutes: 15
         run: go test -race -count=1 -timeout 800s ./textproto/
+      - name: race (optional modules)
+        timeout-minutes: 10
+        run: go test -race -count=1 -timeout 500s ./tnef/ ./smime/ ./pgpmime/ ./icalendar/ ./appledouble/ ./legacyenc/
 
   fuzz-smoke:
     runs-on: ubuntu-latest
