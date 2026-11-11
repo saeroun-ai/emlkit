@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sync"
 
@@ -111,7 +112,9 @@ func (s *Spool) Body(n *Node, r io.Reader) error {
 		s.mu.Unlock()
 		return errors.New("mail: spool is closed")
 	}
-	memRoom := max(s.opts.MemoryBytes-s.mem, 0)
+	// One byte short of the largest quota, so that the "one byte more" read
+	// below cannot overflow.
+	memRoom := min(max(s.opts.MemoryBytes-s.mem, 0), math.MaxInt64-1)
 	diskRoom := max(s.opts.DiskBytes-s.disk, 0)
 	s.mu.Unlock()
 

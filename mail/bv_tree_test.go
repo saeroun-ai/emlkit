@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"math"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -13,20 +12,11 @@ import (
 	"github.com/saeroun-ai/emlkit/mail"
 )
 
-// The two defects of the structure view and the spool that the bounds audit
-// found and did not fix, because mail/tree.go and mail/spool.go were not its
-// to change (ROB-120-001; docs/robustness-notes/bounds-audit-values.md, "Left
-// open"). Both subtests fail as the code stands, the first by a goroutine that
-// never ends, so they run only when asked for:
-//
-//	EMLKIT_BV_OPEN=1 go test -run TestBVOpen ./mail/
-//
-// Whoever fixes the two files removes the gate.
-func TestBVOpen_treeAndSpool(t *testing.T) {
-	if os.Getenv("EMLKIT_BV_OPEN") == "" {
-		t.Skip("known open defects of mail/tree.go and mail/spool.go; set EMLKIT_BV_OPEN=1 to run")
-	}
-
+// Two defects of the structure view and the spool that the bounds audit found
+// (ROB-120-001; docs/robustness-notes/bounds-audit-values.md): ReadTree asked a
+// multipart whose source had failed for its next part for ever, and a memory
+// quota of math.MaxInt64 kept every body as empty.
+func TestBV_treeAndSpool(t *testing.T) {
 	// A source that fails inside a multipart: its iterator then returns no
 	// part and a newly wrapped error on every call, which ReadTree does not
 	// recognize as the same one, and asks again for ever.

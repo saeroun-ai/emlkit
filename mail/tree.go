@@ -265,7 +265,7 @@ func ReadTree(e *message.Entity, opts *TreeOptions) (*Tree, error) {
 	root, err := b.read(e, nil, nil, nil)
 	t.Root = root
 	if root != nil {
-		b.classify(root)
+		b.classify(root, 0)
 		b.shape(root, t)
 		b.sgIntegrity(t, err)
 	}
@@ -280,6 +280,8 @@ type treeBuilder struct {
 	// sgByPath is each node by the MIME path the parse gave its entity,
 	// which the parse's diagnostics name; see tree_signed.go.
 	sgByPath map[string]*Node
+	// relRoots is the root part of each multipart/related, looked up once.
+	relRoots map[*Node]*Node
 }
 
 // read builds the node of e and everything under it. warn is the warning e
@@ -313,6 +315,7 @@ func (b *treeBuilder) read(e *message.Entity, path []int, parent *Node, warn err
 
 	if mr := e.MultipartReader(); mr != nil {
 		var last error
+		fails := 0
 		for i := 0; ; i++ {
 			p, err := mr.NextPart()
 			if err == io.EOF {
@@ -325,14 +328,24 @@ func (b *treeBuilder) read(e *message.Entity, path []int, parent *Node, warn err
 				// A part that was refused or could not be framed. The next
 				// call goes on with the one after it, unless the iterator
 				// has ended for good, which it says by repeating itself.
+				//
+				// An iterator whose source failed says so with a newly
+				// wrapped error each time, which is not the same value: it
+				// is known by the input having failed, and, should that not
+				// be known either, the run of parts refused in a row is
+				// bounded, so the loop ends whatever the iterator does.
 				n.Err = err
+				fails++
 				if last != nil && sameErr(last, err) {
+					break
+				}
+				if fails >= treeMaxFailedParts || (fails > 1 && b.inputFailed()) {
 					break
 				}
 				last = err
 				continue
 			}
-			last = nil
+			last, fails = nil, 0
 			child, cerr := b.read(p, appendPath(path, len(n.Children)), n, err)
 			n.Children = append(n.Children, child)
 			if cerr != nil {
@@ -460,19 +473,45 @@ func sameErr(a, b error) (same bool) {
 
 // classify sets the Role and Reason of n and of every node under it
 // (ROB-100-002).
-func (b *treeBuilder) classify(n *Node) {
-	n.Role, n.Reason = roleOf(n)
-	for _, c := range n.Children {
-		b.classify(c)
+// treeMaxFailedParts bounds how many parts in a row a multipart may refuse
+// before ReadTree stops asking it for the next: the default MaxPartCount.
+const treeMaxFailedParts = 10000
+
+// inputFailed reports whether the parse's input ended with an error of its
+// own, after which no iterator of it has anything more to return.
+func (b *treeBuilder) inputFailed() bool {
+	s := b.root.ParseSession()
+	return s != nil && s.Completion().InputErr != nil
+}
+
+// classify gives n, the idx-th child of its parent, and everything under it
+// their roles. The root part of each multipart/related is looked up once, so
+// a wide container costs its width and not the square of it.
+func (b *treeBuilder) classify(n *Node, idx int) {
+	n.Role, n.Reason = b.roleOf(n, idx)
+	for i, c := range n.Children {
+		b.classify(c, i)
 	}
 }
 
-func roleOf(n *Node) (Role, string) {
+// relatedRoot is rel.RelatedRoot(), remembered.
+func (b *treeBuilder) relatedRoot(rel *Node) *Node {
+	if root, ok := b.relRoots[rel]; ok {
+		return root
+	}
+	if b.relRoots == nil {
+		b.relRoots = make(map[*Node]*Node)
+	}
+	root := rel.RelatedRoot()
+	b.relRoots[rel] = root
+	return root
+}
+
+func (b *treeBuilder) roleOf(n *Node, idx int) (Role, string) {
 	if strings.HasPrefix(n.MediaType, "multipart/") && (len(n.Children) > 0 || n.Data == nil) {
 		return RoleContainer, "multipart entity"
 	}
 	if p := n.Parent; p != nil {
-		idx := indexOf(p, n)
 		switch p.MediaType {
 		case "multipart/signed":
 			if idx == 1 {
@@ -495,7 +534,7 @@ func roleOf(n *Node) (Role, string) {
 	if n.Disposition == "attachment" {
 		return RoleAttachment, "Content-Disposition: attachment"
 	}
-	if rel := relatedOf(n); rel != nil && !underRoot(rel, n) && (n.ContentID != "" || n.ContentLocation != "") {
+	if rel := relatedOf(n); rel != nil && !underRoot(b.relatedRoot(rel), rel, n) && (n.ContentID != "" || n.ContentLocation != "") {
 		return RoleRelated, "resource of multipart/related with a Content-ID or Content-Location"
 	}
 	if strings.HasPrefix(n.MediaType, "text/") && n.MediaType != "text/calendar" {
@@ -526,25 +565,15 @@ func carriesMessage(mediaType string) bool {
 	return false
 }
 
-// underRoot reports whether n is the root part of the multipart/related rel,
-// or a part of it.
-func underRoot(rel, n *Node) bool {
-	root := rel.RelatedRoot()
+// underRoot reports whether n is root, the root part of the multipart/related
+// rel, or a part of it.
+func underRoot(root, rel, n *Node) bool {
 	for c := n; c != nil && c != rel; c = c.Parent {
 		if c == root {
 			return true
 		}
 	}
 	return false
-}
-
-func indexOf(p, n *Node) int {
-	for i, c := range p.Children {
-		if c == n {
-			return i
-		}
-	}
-	return -1
 }
 
 // relatedOf returns the nearest multipart/related n is under, looking through
