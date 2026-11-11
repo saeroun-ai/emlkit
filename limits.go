@@ -450,14 +450,19 @@ type Limits struct {
 	// delimiter.
 	MaxPreambleBytes int64
 
-	// MaxEpilogueBytes bounds the text after a multipart closing delimiter.
+	// MaxEpilogueBytes bounds the text after a multipart closing delimiter
+	// that MultipartEpilogue keeps: it reads at most this many bytes and one
+	// more, and records limit.epilogue_bytes, SeverityLimitExceeded, when that
+	// one was there, leaving the rest unread. LimitDisabled keeps the 1 MiB
+	// default: an epilogue is never kept without a bound. Nothing else reads
+	// an epilogue for the parser.
 	//
-	// It is reserved and enforced by nothing yet. In particular it does not
-	// bound the input after the message that ParseSession.TrailingInputReader
-	// delivers under ProfileForensic: the parse does not read on for those
-	// bytes — its buffered readers may already hold some of them, fetched
-	// ahead as everywhere — the caller does, and they count towards
-	// MaxInputBytes as every read of the input does.
+	// It does not bound the input after the message that
+	// ParseSession.TrailingInputReader delivers under ProfileForensic: the
+	// parse does not read on for those bytes — its buffered readers may
+	// already hold some of them, fetched ahead as everywhere — the caller
+	// does, and they count towards MaxInputBytes as every read of the input
+	// does.
 	MaxEpilogueBytes int64
 
 	// MaxEncodedBodyBytes bounds the wire bytes of one leaf body, before any

@@ -300,7 +300,8 @@ type ParseOptions struct {
 // ProfileForensic — and no other profile — lets the caller read what follows:
 // once an iterator of the message's own body has returned io.EOF at that
 // delimiter, ParseSession.TrailingInputReader delivers those bytes verbatim,
-// once, when asked, held to MaxInputBytes and not to MaxEpilogueBytes; reading
+// once, when asked, held to MaxInputBytes and not to MaxEpilogueBytes, which
+// bounds what MultipartEpilogue keeps of any multipart's epilogue; reading
 // the root's Body or WriteTo instead consumes them as body, as it always did,
 // and is no inspection. ParseSession.TrailingInput reports where they
 // begin, how much was read, how it ended, and whether they begin like another

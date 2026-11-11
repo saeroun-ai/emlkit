@@ -37,7 +37,10 @@ import (
 // iterator, Walk, mail.Reader, Close or accessor peeks at or drains it for
 // this, and what the buffers do not already hold stays in the input, which
 // belongs to the caller. Every other profile records nothing, makes nothing
-// available and reads exactly what it always read.
+// available and reads exactly what it always read. MultipartEpilogue, asked of
+// the iterator that reached the delimiter, is the caller reading that reader:
+// it reads the epilogue through it, so the bytes it keeps are delivered here,
+// counted and looked at, and are not delivered again (multipart_epilogue.go).
 //
 // The reader delivers the bytes as the input holds them, every one of them,
 // once: what the multipart reader's buffer still holds, then what the
@@ -101,8 +104,9 @@ import (
 // got with what ended it, but which of the admitted bytes a stop finds still
 // undelivered in a buffer depends on how the input arrived, and no promise is
 // made that every byte up to the budget is delivered. Limits.MaxEpilogueBytes
-// is not applied: it is reserved for epilogues the parser itself reads (#30),
-// and this one the caller reads. With every budget disabled the reader still
+// is not applied to this reader, which the caller reads as far as it likes; it
+// bounds what MultipartEpilogue keeps, which reads through this reader and
+// stops one byte past that budget. With every budget disabled the reader still
 // holds no copy of what it delivers, and the classification below holds at
 // most one line of bounded length.
 //
@@ -429,10 +433,12 @@ func (r *multipartReader) noteTrailing() {
 	t := &trailingTail{session: s, src: rd, start: o.bodyOffset + off, status: TrailingOpen}
 	t.cls.lineCap = lineCap
 	// Looked at again: another iterator of the same body may have registered
-	// meanwhile, and the first stays.
+	// meanwhile, and the first stays. The iterator that registered it reads its
+	// epilogue through it; see MultipartEpilogue.
 	s.mu.Lock()
 	if s.trailing == nil {
 		s.trailing = t
+		r.epi.tail = t
 	}
 	s.mu.Unlock()
 }

@@ -73,6 +73,10 @@ type multipartReader struct {
 	// owner is the entity whose parts this iterates, counted as read to its
 	// end once an iterator of it ends; see ParseSession.Completion.
 	owner *Entity
+
+	// epi is what this iterator knows of its epilogue; see
+	// multipart_epilogue.go.
+	epi epiState
 }
 
 // NextPart implements MultipartReader. It is nextPart, counted for
@@ -206,6 +210,8 @@ func (r *multipartReader) nextPart() (*Entity, error) {
 				}
 			}
 			r.noteTrailing()
+			// MultipartEpilogue may read on from here.
+			r.epi.ended = true
 		}
 		return nil, err
 	}

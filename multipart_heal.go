@@ -38,7 +38,8 @@ import (
 // is cut there and ends nothing); MultipartPreamble returns them. They are
 // also what the inference above reads, so a body with no delimiter line that
 // is longer than that budget is returned as one part holding its first
-// MaxPreambleBytes bytes.
+// MaxPreambleBytes bytes. The bytes after the closing delimiter line are read
+// only when MultipartEpilogue asks for them; see multipart_epilogue.go.
 //
 // ProfileStrict, and Read, ReadWithOptions and New, frame as before.
 

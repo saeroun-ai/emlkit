@@ -48,9 +48,28 @@ found. The kept bytes are also what inference reads, so a body with no
 delimiter line that is longer than the budget is returned as one part holding
 its first `MaxPreambleBytes` bytes (`multipart.start_not_found`, Incomplete).
 
-The epilogue is unchanged: `textproto.MultipartReader.Epilogue` at the wire
-layer, and `ParseSession.TrailingInputReader` under `ProfileForensic` for the
-root. `MaxEpilogueBytes` is still not enforced.
+## Epilogue (ROB-060-001)
+
+Code: `multipart_epilogue.go`. Tests: `multipart_epilogue_test.go`.
+
+`message.MultipartEpilogue(mr)` returns the bytes after the closing delimiter
+line (its line ending excluded), whether they were cut, and ok. ok is false
+for an iterator that does not heal (not from `Parse`, `ProfileStrict`,
+`NewMultipart`) and until `NextPart` has returned `io.EOF` at a closing
+delimiter line: an unclosed multipart has no epilogue. Iteration never reads
+it; the first call does, at most `Limits.MaxEpilogueBytes` (1 MiB by default;
+`LimitDisabled` keeps the default, never unbounded) plus one byte. A longer
+epilogue is cut there, recorded as `limit.epilogue_bytes` (LimitExceeded), and
+the rest is left unread. Later calls return the same bytes without reading.
+
+- A nested multipart's epilogue ends where its enclosing part ends.
+- With an inferred boundary it is the rest of the kept body.
+- An input error or a parse stop ends it there with the bytes read; the error
+  stays the session's and adds no diagnostic.
+- For the message's own body under `ProfileForensic` it is read through
+  `ParseSession.TrailingInputReader`, so `TrailingInput`'s count and evidence
+  (and `input.trailing_messages`) account for it; those bytes are not
+  delivered again, and bytes that reader delivered first are not in it.
 
 ## Changed expectations
 
