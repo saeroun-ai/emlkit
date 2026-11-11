@@ -1,0 +1,125 @@
+To: Group:
+ a@example.com, b@example.com;
+Date: Fri, 13 Mar 2026 12:00:00 KST
+Received: from mx.example.org (mx.example.org [192.0.2.1]) by mail.example.com with ESMTP id abc; Fri, 13 Mar 2026 12:00:00 KST
+In-Reply-To: <>
+To: <<x@example.com>>
+Authentication-Results::mx.example.com; spf=pass smtp.mailfrom=example.org; dkim=fail header.d=example.org
+From: =?euc-kr?b?vsiz58fPvLy/5A==?= <kim@example.kr>
+this line has no colon
+Content-Type: message/rfc822
+Content-Transfer-Encoding: quoted-printable
+
+In-Reply-To: abc@example.com
+Date:=20
+Reply-To::@
+MIME-Version: 2.0
+List-Unsubscribe: <mailto:u@example.com?subject=3Dunsub>, <https://example.=
+com/u?id=3D1>
+MIME-Version: 1.0
+Authentication-Results: mx.example.com; spf=3Dpass smtp.mailfrom=3Dexample.=
+org; dkim=3Dfail--B
+ header.d=3Dexample.org
+Message-ID: <>
+Content-Type: multipart/related; boundary=3D"----=3D_Part_16411"; type=3D"t=
+ext/html"; start=3D"<root@x>"
+=20
+------=3D_Part_16411 junk
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: binary
+Content-Disposition: attachment; filename=3Da.txt; filename=3Db.txt
+
+lorem . From =85=96--=20
+=3D From =E6f5=1A=EE=8C=01=B5=F0=7Funsubscribe=20
+=85=96caf=E9 =93quoted=94 =80
+offer http://example.com/x?a=3D1 offer caf=E9 =93quoted=94 =80<html>=20
+--B
+-- lorem . <a href=3D"cid:logo@x"> free =85=96From lorem caf=E9 =93quoted=
+=94 =80
+-- caf=E9 =93quoted=94 =80ipsum =3D =3D20 =3D3D <a href=3D"cid:logo@x"> lor=
+em From lorem caf=E9 =93quoted=94 =80free http://example.com/x?a=3D1 caf=E9=
+ =93quoted=94 =80=85=96
+click ipsum lorem =85=96=AC=19=89=D5cQ=AF=BEbcaf=E9 =93quoted=94 =80R=04=BD=
+7=E9
+------=3D_Part_16411
+Content-Type:	multipart/alternative;
+	boundary*0=3D")BqiE9ZsycNf_?fGAx-30s_cm'?w"; boundary*1=3D"LbH?nk7,WADZ0FB=
+/SXG2C+GwrA?.x"
+Content-Type: multipart/mixed; boundary== 
+3D"'r'iR+A/Xw5TAysRnJQ+sf_r)9x"
+
+This is a multi-part message in MIME format.
+--)BqiE9ZsycNf_?fGAx-30s_cm'?wLbH?nk7,WADZ0FB/SXG2C+GwrA?.x
+Content-Type: text/plain/extra; charset=3Deuc-kr
+Content-Transfer-Encoding: 7bit
+Content-ID: <logo@x>
+
+<html> free=20
+click=20
+http://example.com/x?a=3D1 =B6=00O=E5=E8=05=D0Q=8E=127Fj3=BE=C8=B3=E7=C7=CF=
+=BC=BC=BF=E4http://example.com/x?a=3D1 =3D3D . =3D20 <html> =BE=C8=B3=E7=C7=
+=CF=BC=BC=BF=E4ipsum click =C7=D1=B1=DB-- offer =C7=D1=B1=DB=3D3D=20
+--)BqiE9ZsycNf_?fGAx-30s_cm'?wLbH?nk7,WADZ0FB/SXG2C+GwrA?.x=09
+Content-Type: multipart/signed; boundary=3D"B"; protocol=3D"application/pgp=
+-signature"; micalg=3Dpgp-sha256
+
+--ebTbMlt/Ggqf9/Gp,LzDGoEQW_uHFHADnI_sjV)909+vU85r vHZvx=09
+Content-Type: application/pkcs7-signature
+Content-Transfer-Encoding: x-foo
+Content-ID: <logo@x>
+Content-Location::http://example.com/a.gif
+
+=ED=95=9C=EA=B8=80 =EB=A9=94=EC=9D=BC=AF=A6=AA=F2=8C=E8=C3=19=1E=B9=0B<-- =
+=E6=97=A5=E6=9C=AC=E8=AA=9Ehttp://example.com/x?a=3D1 =3D20 click <a href=
+=3D"cid:logo@x"> -- =3D3D=20
+r=12=DB=B5=E3=84caf=C3=A9caf=C3=A9unsubscribe <a href=3D"cid:logo@x"> lorem=
+ <a href=3D"cid:logo@x"> caf=C3=A9ipsum=20
+--ebTbMlt/Ggqf9/Gp,LzDGoEQW_uHFHADnI_sjV)909+vU85r vHZvx
+Content-Type: text/html; charset=3DUTF-8
+Content-Transfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfeansfer-Encoding: quoted-printable
+Content-Disposition: attachment; filename=3D"report.pdf"
+
+
+=3D3D free free =3D3D =3DE2=3D9C=3D93 ok=3DED=3D95=3D9C=3DEA=3DB8=3D80 =3DE=
+B=3DA9=3D94=3DEC=3D9D=3DBC=3D3D=3D20
+offer -- =3D3D=3D20
+
+=3D3D20=3D20
+=3DED=3D95=3D9C=3DEA=3DB8=3D80 =3DEB=3DA9=3D94=3DEC=3D9D=3DB=3D=20
+C<a href=3D3D"cid:logo@x"> <a href=3D3D"cid=3D
+:logo@x"> free . unsubscribe -- <html> unsubscribe ipsum=4 unsubscribe lorem =
+=3D
+. begin unsubscribe offer =3D3D --=3D20
+
+--.+vVJ0zvEHx
+=3D3D20 click =3DEA=3DBF=3DD1	=3DDF|E7=3DB0=3DEF=3D01=3DED=3D95=3D9C=3DEA=
+=3DB8=3D8= 
+0 =3DEB=3DA9=3D94=3DEC=3D9D=3DBC=3D
+=3DBE=3DF26*g=3DD2=3DD8=3D02=3D90unsubscribe =3DE2=3D9C=3D93 ok. From =3D3D=
+20 =3D3D unsubscribe F=3D
+rom <html> <html> lorem G=3DDC=3DE2=3D9C=3D93 okoffer =3D3D caf=3DC3=3DA9be=
+gin =3DE2=3D9C=3D93 =3D
+okhttp://example.com/x?a=3D3D1=3D20
+--ebTbMlt/Ggqf9/Gp,LzDGoEQW_uHFHADnI_sjV)909+vU85r vHZvx-
+
+--)BqiE9ZsycNf_?fGAx-30s_cm'?wLbH?nk7,WADZ0FB/SXG2C+GwrA?.x=09
+Content-Type: application/x-unknown
+Content-Transfer-Encoding: Base64
+Content-ID: <logo@x>
+
+YmVnaW4gdW5zdWJzY3JpYmUgPTIwIO2VnOq4gCDrqZTsnbxodHRwOi8vZXhhbXBsZS5jb20veD9=
+hPTEgRnJvbSA8YSBocmVmPSJjaWQ6bG9nb0B4Ij4gY2Fmw6lprW72yVhjbGljayAK7JWI64WV7Z=
+WY7IS47JqU4pyTIG9rKXUOpIf1PTNEIHVuc3Vic2NyaWJlIC4gYmVnaW4gbG9yZW0gLS0gYmVna=
+W4gpytyC5Y9IAotLSBjbGljayBiZWdpbiAtLSA8aHRtbD4g7JWI64WV7ZWY7IS47JqULiDslYjr=
+hZXtlZjshLjsmpQ9ID0zRCA9IO2VnOq4gCDrqZTsnbw9M0QgCgrml6XmnKzoqp51bnN1YnNjcml=
+iZSA=3D
+--)BqiE9ZsycNf_?fGAx-30s_cm'?wLbH?nk7,WADZ0FB/SXG2C+GwrA?.x--
+
+------=3D_Part_16411=20
+Content-Type: text/calendar; charset=3Dwindows-1252
+Content-Transfer-Encoding: 8bit
+Content-Disposition: attachment
+Content-ID: <logo@x>
+
+caf=E9 =93quoted=94 =80<html>=20
+------=3D_Part_16411--epilogue

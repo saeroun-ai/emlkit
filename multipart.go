@@ -50,6 +50,10 @@ type multipartReader struct {
 	// of an input the reader can no longer place itself in.
 	fatal error
 
+	// skFailed is a failure of r no later call can get past, returned
+	// unchanged by every later call; see multipart_stuck.go.
+	skFailed error
+
 	// ends is the delimiter line endings of r already looked at; see
 	// delimiterEndings in line_endings.go.
 	ends textproto.LineEndings
@@ -90,7 +94,7 @@ func (r *multipartReader) NextPart() (*Entity, error) {
 	e, err := r.nextPart()
 	if s := r.parent.session; s != nil {
 		s.prog.touched.Store(true)
-		if e == nil && (err == io.EOF || r.fatal != nil || s.fatalErr() != nil) && r.owner != nil && !r.owner.partsEnded {
+		if e == nil && (err == io.EOF || r.fatal != nil || r.skFailed != nil || s.fatalErr() != nil) && r.owner != nil && !r.owner.partsEnded {
 			r.owner.partsEnded = true
 			s.prog.multipartsRead.Add(1)
 		}
@@ -113,6 +117,9 @@ func (r *multipartReader) nextPart() (*Entity, error) {
 	// parse than a defect of one part does.
 	if r.fatal != nil {
 		return nil, r.fatal
+	}
+	if r.skFailed != nil {
+		return nil, r.skFailed
 	}
 
 	if r.reused {
@@ -226,6 +233,9 @@ func (r *multipartReader) nextPart() (*Entity, error) {
 			r.noteTrailing()
 			// MultipartEpilogue may read on from here.
 			r.epi.ended = true
+		}
+		if err != io.EOF && r.skEndsForGood(err) {
+			r.skFailed = err
 		}
 		return nil, err
 	}

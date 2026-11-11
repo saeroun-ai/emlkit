@@ -254,7 +254,8 @@ func (s *ParseSession) Completion() Completion {
 
 // Drain reads everything of the entity that has not been read yet and
 // discards it: every body to its end, every multipart to its close, and,
-// under ParseOptions.WalkEmbeddedMessages, every embedded message. It is how
+// under ParseOptions.WalkEmbeddedMessages, every embedded message and what it
+// left of its carrier's body, all of that body when it could not be read. It is how
 // a caller that wants the parse's whole verdict — ParseSession.Completion and
 // every diagnostic — gets it without wanting the bytes.
 //
@@ -264,8 +265,13 @@ func (s *ParseSession) Completion() Completion {
 // has its diagnostic. Drain may be called again, and after a partial read; it
 // reads what is left.
 func (e *Entity) Drain() error {
-	return e.Walk(func(_ []int, p *Entity, _ error) error {
-		if p.MultipartReader() != nil || p.walkEmbedded() != nil {
+	var carriers []*Entity
+	err := e.Walk(func(_ []int, p *Entity, _ error) error {
+		if p.MultipartReader() != nil {
+			return nil
+		}
+		if p.walkEmbedded() != nil {
+			carriers = append(carriers, p)
 			return nil
 		}
 		if p.Body != nil {
@@ -273,4 +279,13 @@ func (e *Entity) Drain() error {
 		}
 		return nil
 	})
+	// What an embedded message left of its carrier's body, and all of it
+	// when the message could not be read, is read too; otherwise the
+	// carrier's body stays unread and the parse in progress (ROB-130-007).
+	for _, c := range carriers {
+		if c.Body != nil {
+			io.Copy(io.Discard, c.Body)
+		}
+	}
+	return err
 }

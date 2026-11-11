@@ -868,6 +868,11 @@ func (e *Entity) MultipartReader() MultipartReader {
 	if mb, ok := e.Body.(*multipartBody); ok {
 		return mb
 	}
+	// Parts already read to their end are not framed again; see
+	// multipart_stuck.go.
+	if e.skPartsRead() {
+		return skEndedParts{e}
+	}
 
 	parent := e.parse
 	src := e.Body

@@ -900,6 +900,9 @@ type MultipartReader struct {
 	preamble     []byte
 	preambleMax  int64
 	preambleOver bool
+
+	// skFailed is the last failure of a framing read; see multipart_stuck.go.
+	skFailed skFramingFailure
 }
 
 // defaultPreambleMax is how much of a preamble a recovering reader keeps when
@@ -1301,7 +1304,7 @@ func (r *MultipartReader) nextPart() (*Part, error) {
 				r.unclosed = true
 				return nil, io.EOF
 			}
-			return nil, fmt.Errorf("multipart: NextPart: %w", err)
+			return nil, r.skFailed.wrap(err, start)
 		}
 		if !ok && r.partsRead == 0 && r.limits.Recover {
 			r.keepPreamble(line, end)
