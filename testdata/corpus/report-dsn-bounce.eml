@@ -1,0 +1,56 @@
+Return-Path: <>
+From: Mail Delivery System <MAILER-DAEMON@mx.example.com>
+To: sender@example.org
+Subject: Undelivered Mail Returned to Sender
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-Id: <20261111000000.0A1B2C3D4E@mx.example.com>
+Auto-Submitted: auto-replied
+MIME-Version: 1.0
+Content-Type: multipart/report; report-type=delivery-status;
+	boundary="0A1B2C3D4E.1700000000/mx.example.com"
+
+This is a MIME-encapsulated message.
+
+--0A1B2C3D4E.1700000000/mx.example.com
+Content-Description: Notification
+Content-Type: text/plain; charset=us-ascii
+
+This is the mail system at host mx.example.com.
+
+I'm sorry to have to inform you that your message could not
+be delivered to one or more recipients.
+
+<nobody@example.com>: host mx.example.com[192.0.2.25] said: 550 5.1.1
+    <nobody@example.com>: Recipient address rejected: User unknown
+
+--0A1B2C3D4E.1700000000/mx.example.com
+Content-Description: Delivery report
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns; mx.example.com
+X-Postfix-Queue-ID: 0A1B2C3D4E
+Arrival-Date: Wed, 11 Nov 2026 09:00:00 +0900
+
+Final-Recipient: rfc822; nobody@example.com
+Original-Recipient: rfc822;nobody@example.com
+Action: failed
+Status: 5.1.1
+Remote-MTA: dns; mx.example.com
+Diagnostic-Code: smtp; 550 5.1.1 <nobody@example.com>: Recipient address
+    rejected: User unknown
+
+--0A1B2C3D4E.1700000000/mx.example.com
+Content-Description: Undelivered Message
+Content-Type: message/rfc822
+
+From: sender@example.org
+To: nobody@example.com
+Subject: Hello
+Message-ID: <hello-0001@example.org>
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Original body.
+
+--0A1B2C3D4E.1700000000/mx.example.com--

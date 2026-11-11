@@ -1,0 +1,15 @@
+From - Wed Nov 11 09:00:00 2026
+X-Mozilla-Status: 0001
+X-Mozilla-Status2: 00000000
+Return-Path: <sender@example.com>
+From: Test Sender <sender@example.com>
+To: recipient@example.org
+Subject: Saved from a mailbox
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <mbox-0001@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+
+The line below was escaped when the message was stored:
+>From the archive, with thanks.

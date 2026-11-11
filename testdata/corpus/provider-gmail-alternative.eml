@@ -1,0 +1,33 @@
+MIME-Version: 1.0
+Received: by 2001:db8::1 with SMTP id a0b1c2d3e4f5;
+        Wed, 11 Nov 2026 09:00:00 +0900
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <CAExample0000000000000000000000001@mail.example.com>
+Subject: =?UTF-8?B?7KO86rCEIOuztOqzoOyEnCDqs7XsnKDrk5zrpr3ri4jri6Q=?=
+From: =?UTF-8?B?7ZmN6ri464+Z?= <gildong.hong@example.com>
+To: Test Recipient <recipient@example.org>
+Content-Type: multipart/alternative; boundary="000000000000a1b2c3d4e5f60718"
+
+--000000000000a1b2c3d4e5f60718
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: base64
+
+7JWI64WV7ZWY7IS47JqULA0KDQrsnbTrsogg7KO8IOyjvOqwhCDrs7Tqs6DshJzrpbwg6rO17Jyg
+65Oc66a964uI64ukLiDslYTrnpgg66eB7YGs7JeQ7IScIO2ZleyduO2VtCDso7zshLjsmpQuDQpo
+dHRwczovL2RvY3MuZXhhbXBsZS5jb20vZC93ZWVrbHktcmVwb3J0DQoNCuqwkOyCrO2VqeuLiOuL
+pC4NCu2Zjeq4uOuPmQ0K
+
+--000000000000a1b2c3d4e5f60718
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<div dir=3D"ltr">=EC=95=88=EB=85=95=ED=95=98=EC=84=B8=EC=9A=94,<div><br></d=
+iv><div>=EC=9D=B4=EB=B2=88 =EC=A3=BC =EC=A3=BC=EA=B0=84 =EB=B3=B4=EA=B3=A0=
+=EC=84=9C=EB=A5=BC =EA=B3=B5=EC=9C=A0=EB=93=9C=EB=A6=BD=EB=8B=88=EB=8B=A4. =
+=EC=95=84=EB=9E=98 =EB=A7=81=ED=81=AC=EC=97=90=EC=84=9C =ED=99=95=EC=9D=B8=
+=ED=95=B4 =EC=A3=BC=EC=84=B8=EC=9A=94.</div><div><a href=3D"https://docs.ex=
+ample.com/d/weekly-report">https://docs.example.com/d/weekly-report</a></di=
+v><div><br></div><div>=EA=B0=90=EC=82=AC=ED=95=A9=EB=8B=88=EB=8B=A4.</div><=
+div>=ED=99=8D=EA=B8=B8=EB=8F=99</div></div>
+
+--000000000000a1b2c3d4e5f60718--

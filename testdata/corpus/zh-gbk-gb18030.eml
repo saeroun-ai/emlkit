@@ -1,0 +1,21 @@
+From: events@example.com
+To: team@example.com
+Subject: =?gb2312?B?hrTUsL/GvLwg0MKy+sa3t6KyvLvhzajWqg==?=
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <zh-gb-0001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="zh-alt-0001"
+
+--zh-alt-0001
+Content-Type: text/plain; charset=gb2312
+Content-Transfer-Encoding: base64
+
+uPfOu82sysKjug0KhrTUsL/GvLzQwrL6xre3orK8u+G9q9Paz8LW3M7lz8LO58j9teO+2dDQoaMN
+CrXYteOjutfcsr/I/cKlu+HS6crSDQo=
+--zh-alt-0001
+Content-Type: text/html; charset=GB18030
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGJvZHk+PHA+hrTUsL/GvLzQwrL6xre3orK8u+E8L3A+PHA+vM3E7sa3o7qVMoI2INfW
+0fm71dXCIJQ5/DY8L3A+PC9ib2R5PjwvaHRtbD4NCg==
+--zh-alt-0001--

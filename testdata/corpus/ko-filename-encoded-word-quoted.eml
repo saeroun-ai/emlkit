@@ -1,0 +1,41 @@
+From: =?euc-kr?B?yKux5rW/?= <gildong.hong@example.co.kr>
+To: chulsoo.kim@example.co.kr
+Subject: =?euc-kr?B?sN/A+7ytILnXILjFw+Igx/bIsiC827rO?=
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <ewname-0001@webmail.example.co.kr>
+MIME-Version: 1.0
+Content-Type: multipart/mixed;
+	boundary="----=_NextPart_000_0001_01DB0000.00000000"
+
+This is a multi-part message in MIME format.
+
+------=_NextPart_000_0001_01DB0000.00000000
+Content-Type: text/plain;
+	charset="euc-kr"
+Content-Transfer-Encoding: base64
+
+sN/A+7ytv80guMXD4iDH9siyIMbEwM/AuyDDt7rOx9W0z7TZLg0KyK7AziC6zsW5teW4s7TPtNku
+DQo=
+
+------=_NextPart_000_0001_01DB0000.00000000
+Content-Type: application/pdf;
+	name="=?euc-kr?B?sN/A+7ytXzIwMjaz4jExv/kucGRm?="
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment;
+	filename="=?euc-kr?B?sN/A+7ytXzIwMjaz4jExv/kucGRm?="
+
+JVBERi0xLjQKJSBwbGFjZWhvbGRlciwgbm90IGEgZG9jdW1lbnQKJSVFT0YK
+
+------=_NextPart_000_0001_01DB0000.00000000
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;
+	name="=?UTF-8?B?66ek7LacX+2YhO2ZqV8=?=
+	=?UTF-8?B?NOu2hOq4sC54bHN4?="
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment;
+	filename="=?UTF-8?B?66ek7LacX+2YhO2ZqV8=?=
+	=?UTF-8?B?NOu2hOq4sC54bHN4?="
+
+UEsDBHBsYWNlaG9sZGVyIGFyY2hpdmUgYnl0ZXMsIG5vdCBhbiBhcmNoaXZlAAAAAAAAAAAAAAAA
+AAAAAA==
+
+------=_NextPart_000_0001_01DB0000.00000000--

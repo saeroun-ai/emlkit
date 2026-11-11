@@ -1,0 +1,23 @@
+From: billing@invoices.example.net
+To: recipient@example.com
+Subject: Your invoice
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <0004.bulk@invoices.example.net>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Type: multipart/mixed; boundary="dup-0001"
+
+--dup-0001
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGJvZHk+PHA+SW52b2ljZSBhdHRhY2hlZC4gVG90YWw6IOKCrCA5OS4wMDwvcD48L2Jv
+ZHk+PC9odG1sPg0K
+--dup-0001
+Content-Type: application/zip; name="invoice.zip"
+Content-Disposition: attachment; filename="invoice.zip"
+Content-Transfer-Encoding: base64
+
+UEsDBHBsYWNlaG9sZGVyIGFyY2hpdmUgYnl0ZXMsIG5vdCBhbiBhcmNoaXZlAAAAAAAAAAAAAAAA
+AAAAAA==
+--dup-0001--

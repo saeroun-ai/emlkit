@@ -1,0 +1,24 @@
+From: Alice Example <alice@example.org>
+To: example-users@lists.example.org
+Subject: [example-users] Release candidate available
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <rc-0001@example.org>
+List-Id: Example users <example-users.lists.example.org>
+List-Unsubscribe: <mailto:example-users-leave@lists.example.org>
+List-Post: <mailto:example-users@lists.example.org>
+Precedence: list
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="list-alt-0001"
+
+--list-alt-0001
+Content-Type: text/plain; charset=us-ascii
+
+The first release candidate is available for testing.
+--list-alt-0001
+Content-Type: text/html; charset=us-ascii
+
+<p>The first release candidate is available for testing.</p>
+--list-alt-0001--
+_______________________________________________
+example-users mailing list -- example-users@lists.example.org
+To unsubscribe send an email to example-users-leave@lists.example.org

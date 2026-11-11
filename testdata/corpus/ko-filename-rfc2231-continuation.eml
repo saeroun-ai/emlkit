@@ -1,0 +1,36 @@
+From: Test Sender <sender@example.com>
+To: recipient@example.co.kr
+Subject: Proposal and schedule
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <rfc2231-0001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="------------rfc2231-0001"
+
+This is a multi-part message in MIME format.
+--------------rfc2231-0001
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+
+Two files are attached.
+
+--------------rfc2231-0001
+Content-Type: application/x-hwp; name*=euc-kr''%C1%A6%BE%C8%BC%AD_%C3%D6%C1%BE.hwp
+Content-Disposition: attachment;
+ filename*0*=euc-kr''%C1%A6%BE%C8;
+ filename*1*=%BC%AD_%C3;
+ filename*2*=%D6%C1%BE.hwp
+Content-Transfer-Encoding: base64
+
+UEsDBHBsYWNlaG9sZGVyIGFyY2hpdmUgYnl0ZXMsIG5vdCBhbiBhcmNoaXZlAAAAAAAAAAAAAAAA
+AAAAAA==
+
+--------------rfc2231-0001
+Content-Type: application/pdf; name="=?UTF-8?B?7Jew6rCEIOydvOygle2RnC5wZGY=?="
+Content-Disposition: attachment;
+ filename*0*=UTF-8''%EC%97%B0%EA%B0%84%20%EC%9D;
+ filename*1*=%BC%EC%A0%95%ED%91%9C.pdf
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJSBwbGFjZWhvbGRlciwgbm90IGEgZG9jdW1lbnQKJSVFT0YK
+
+--------------rfc2231-0001--

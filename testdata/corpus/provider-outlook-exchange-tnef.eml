@@ -1,0 +1,80 @@
+Received: from EX0PR00MB0000.example.com (2001:db8::10) by
+ EX0PR00MB0001.example.com (2001:db8::11) with Microsoft SMTP Server
+ id 15.20.0000.000; Wed, 11 Nov 2026 09:00:00 +0900
+From: Test Sender <sender@corp.example.com>
+To: Test Team <team@corp.example.com>
+Subject: Quarterly figures
+Thread-Topic: Quarterly figures
+Thread-Index: AdtEeHAmcGxhY2Vob2xkZXIgdGhyZWFkIGluZGV4AA==
+Date: Wed, 11 Nov 2026 00:00:00 +0000
+Message-ID: <EX0PR00MB0000EXAMPLE0000000000@EX0PR00MB0000.example.com>
+Accept-Language: ko-KR, en-US
+Content-Language: en-US
+X-MS-Has-Attach: yes
+X-MS-Exchange-Organization-SCL: -1
+X-MS-TNEF-Correlator: <EX0PR00MB0000EXAMPLE0000000000@EX0PR00MB0000.example.com>
+X-MS-Exchange-Organization-AuthAs: Internal
+X-MS-Office365-Filtering-Correlation-Id: 00000000-0000-0000-0000-000000000000
+Content-Type: multipart/mixed;
+	boundary="_004_EX0PR00MB0000EXAMPLE_"
+MIME-Version: 1.0
+
+--_004_EX0PR00MB0000EXAMPLE_
+Content-Type: multipart/alternative;
+	boundary="_000_EX0PR00MB0000EXAMPLE_"
+
+--_000_EX0PR00MB0000EXAMPLE_
+Content-Type: text/plain; charset="us-ascii"
+Content-Transfer-Encoding: quoted-printable
+
+Hello team,
+
+Please find the quarterly figures attached.
+
+Regards,
+Test Sender
+
+--_000_EX0PR00MB0000EXAMPLE_
+Content-Type: multipart/related;
+	boundary="_005_EX0PR00MB0000EXAMPLE_";
+	type="text/html"
+
+--_005_EX0PR00MB0000EXAMPLE_
+Content-Type: text/html; charset="us-ascii"
+Content-Transfer-Encoding: quoted-printable
+
+<html xmlns:v=3D"urn:schemas-microsoft-com:vml" xmlns:o=3D"urn:schemas-micr=
+osoft-com:office:office"><head><meta http-equiv=3D"Content-Type" content=3D=
+"text/html; charset=3Dus-ascii"></head><body lang=3D"EN-US"><div class=3D"W=
+ordSection1"><p class=3D"MsoNormal">Hello team,<o:p></o:p></p><p class=3D"M=
+soNormal">Please find the quarterly figures attached.<o:p></o:p></p><p clas=
+s=3D"MsoNormal"><img width=3D"16" height=3D"16" id=3D"Picture_x0020_1" src=
+=3D"cid:image001.png@01DB0000.00000000"></p></div></body></html>
+
+--_005_EX0PR00MB0000EXAMPLE_
+Content-Type: image/png; name="image001.png"
+Content-Description: image001.png
+Content-Disposition: inline; filename="image001.png"; size=54;
+	creation-date="Wed, 11 Nov 2026 00:00:00 GMT";
+	modification-date="Wed, 11 Nov 2026 00:00:00 GMT"
+Content-ID: <image001.png@01DB0000.00000000>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgpwbGFjZWhvbGRlciBpbWFnZSBieXRlcywgbm90IGEgcGljdHVyZQAAAAAAAAAA
+
+--_005_EX0PR00MB0000EXAMPLE_--
+
+--_000_EX0PR00MB0000EXAMPLE_--
+
+--_004_EX0PR00MB0000EXAMPLE_
+Content-Type: application/ms-tnef; name="winmail.dat"
+Content-Description: winmail.dat
+Content-Disposition: attachment; filename="winmail.dat"; size=61;
+	creation-date="Wed, 11 Nov 2026 00:00:00 GMT";
+	modification-date="Wed, 11 Nov 2026 00:00:00 GMT"
+Content-Transfer-Encoding: base64
+
+eJ8+IgEAcGxhY2Vob2xkZXIgVE5FRiBzdHJlYW0sIG5vdCBhIHJlYWwgd2lubWFpbC5kYXQAAAAA
+AAAAAA==
+
+--_004_EX0PR00MB0000EXAMPLE_--

@@ -1,0 +1,27 @@
+From: orders@shop.example.net
+To: recipient@example.com
+Subject: Your order has shipped
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <0003.bulk@shop.example.net>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="sloppy-0001"
+
+--sloppy-0001
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+Dear customer, your order has shipped and will arrive within three busin=   
+ess days. Track it at http://track.example.com/?id=3D0001.
+Caf=c3=a9 latte coupon: 2 for 1.
+The total is =E2=82=AC 12=
+.50 including tax.
+Split escape: =E2=8=
+2=AC end.
+--sloppy-0001
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGJvZHk+PHA+WW91ciBvcmRlciBoYXMg c2hpcHBlZC48L3A+PHA+VHJhY2sgaXQgYXQgPGEg  aHJlZj0iaHR0cDovL3RyYWNrLmV4YW1wbGUuY29t
+Lz9pZD0wMDAxIj50cmFjay5leGFtcGxlLmNvbTwvYT4uPC9wPjxwPkNhZsOpIGxhdHRlIGNvdXBvbjogMiBmb3IgMS4gVG90YWwg4oKsMTIuNTAgaW5jbHVk	
+aW5nIHRheC48L3A+PC9ib2R5PjwvaHRtbD4NCg==
+--sloppy-0001--

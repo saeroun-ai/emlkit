@@ -1,0 +1,27 @@
+From: Test Sender <sender@example.com>
+To: recipient@example.org
+Subject: Signed message
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <smime-0001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/signed; protocol="application/pkcs7-signature"; micalg=sha-256;
+	boundary="----SMIMEBOUNDARY0000000000000001"
+
+This is an S/MIME signed message
+
+------SMIMEBOUNDARY0000000000000001
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+This text is covered by the signature below.
+
+------SMIMEBOUNDARY0000000000000001
+Content-Type: application/pkcs7-signature; name="smime.p7s"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="smime.p7s"
+Content-Description: S/MIME Cryptographic Signature
+
+MIIBAAYJcGxhY2Vob2xkZXIgc2lnbmF0dXJlIGJ5dGVzLCBub3QgYSBDTVMgc3RydWN0dXJlAAAA
+AAAAAAA=
+
+------SMIMEBOUNDARY0000000000000001--

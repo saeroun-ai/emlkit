@@ -1,0 +1,35 @@
+From: promo@bulk.example.net
+To: recipient@example.com
+Subject: Your coupon
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <0002.bulk@bulk.example.net>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----=_Part_0001_0002.0003""
+
+------=_Part_0001_0002.0003
+Content-Type: multipart/alternative; boundary="----=_Alt_0001 "
+
+------=_Alt_0001
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted_printable
+
+Your coupon is attached. Value: =E2=82=AC5.
+------=_Alt_0001
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: base-64
+
+PHA+WW91ciBjb3Vwb24gaXMgYXR0YWNoZWQuIFZhbHVlOiDigqw1LjwvcD4NCg==
+------=_Alt_0001--
+
+------=_Part_0001_0002.0003
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bits
+
+Terms: one coupon per café visit.
+------=_Part_0001_0002.0003
+Content-Type: application/pdf; name="coupon.pdf"
+Content-Disposition: attachment; filename="coupon.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJSBwbGFjZWhvbGRlciwgbm90IGEgZG9jdW1lbnQKJSVFT0YK
+------=_Part_0001_0002.0003--

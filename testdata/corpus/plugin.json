@@ -1,0 +1,235 @@
+{
+  "configuration": "github.com/saeroun-ai/emlkit/charset imported; ParseOptions{WalkEmbeddedMessages: true, FallbackCharset: \"euc-kr\"}; HeaderTextOptions{FallbackCharset: \"euc-kr\"}. Only fixtures whose outcome differs from manifest.json are listed.",
+  "fixtures": [
+    {
+      "name": "utf8-declared-not-utf8",
+      "state": "complete",
+      "diagnostics": [
+        "recovered charset.declaration_suspect []"
+      ],
+      "leaves": [
+        "[] text/plain 16"
+      ],
+      "text": [
+        "[] \"caf� au lait\""
+      ]
+    },
+    {
+      "name": "ko-euc-kr-8bit",
+      "state": "complete",
+      "leaves": [
+        "[] text/plain 227"
+      ],
+      "headers": [
+        "Subject 35 \"[공지] 11월 정기 점검 안내\"",
+        "From 38 \"홍길동 <gildong.hong@example.co.kr>\""
+      ],
+      "text": [
+        "[] \"안녕하세요, 홍길동입니다. 11월 정기 점검 일정을 안내드립니다. 점검 시간: 11월 14일(토) 02:00\"…"
+      ]
+    },
+    {
+      "name": "ko-ks-c-5601-outlook",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 154",
+        "[1] text/html 299"
+      ],
+      "headers": [
+        "Subject 42 \"[회의] 11월 정기 회의 안건 공유\"",
+        "From 38 \"홍길동 <gildong.hong@example.co.kr>\""
+      ],
+      "text": [
+        "[0] \"김철수 님께, 다음 주 정기 회의 안건을 공유드립니다. 1. 4분기 실적 검토 2. 신규 프로젝트 일정 홍길\"…",
+        "[1] \"<html><head><meta http-equiv=\\\"Content-Type\\\" content=\\\"text/ht\"…"
+      ]
+    },
+    {
+      "name": "ko-raw-8bit-subject-filename",
+      "state": "complete",
+      "diagnostics": [
+        "unsupported mime.parameter_unknown_charset [1]",
+        "unsupported mime.parameter_unknown_charset [1]",
+        "recovered mime.parameter_unknown_charset [2]",
+        "recovered mime.parameter_unknown_charset [2]"
+      ],
+      "leaves": [
+        "[0] text/plain 54",
+        "[1] application/octet-stream 42",
+        "[2] application/haansofthwp 61"
+      ],
+      "headers": [
+        "Subject 31 \"견적서 송부의 건 (11월)\" (recovered header.invalid_utf8)",
+        "From 38 \"홍길동 <gildong.hong@example.co.kr>\""
+      ],
+      "text": [
+        "[0] \"견적서와 계약서 초안을 보내드립니다.\""
+      ],
+      "names": [
+        "[1] \"\\xb0\\xdf\\xc0\\xfb\\xbc\\xad_11\\xbf\\xf9.xls\" undecoded",
+        "[2] \"계약서_초안.hwp\""
+      ]
+    },
+    {
+      "name": "ko-cp949-under-euc-kr",
+      "state": "complete",
+      "leaves": [
+        "[] text/plain 126"
+      ],
+      "headers": [
+        "Subject 43 \"똠방각하 햏자 이벤트 당첨 안내\"",
+        "From 25 \"events@shop.example.co.kr\""
+      ],
+      "text": [
+        "[] \"축하합니다! 햏자 이벤트에 당첨되셨습니다. 경품: 똠얌꿍 밀키트 1세트 뷁 쿠폰 코드: EX-0000\""
+      ]
+    },
+    {
+      "name": "ko-filename-encoded-word-quoted",
+      "state": "complete",
+      "diagnostics": [
+        "info mime.parameter_rfc2047 [1]",
+        "info mime.parameter_rfc2047 [1]",
+        "info mime.parameter_rfc2047 [2]",
+        "info mime.parameter_rfc2047 [2]"
+      ],
+      "leaves": [
+        "[0] text/plain 83",
+        "[1] application/pdf 45",
+        "[2] application/vnd.openxmlformats-officedocument.spreadsheetml.sheet 61"
+      ],
+      "headers": [
+        "Subject 34 \"견적서 및 매출 현황 송부\"",
+        "From 38 \"홍길동 <gildong.hong@example.co.kr>\""
+      ],
+      "text": [
+        "[0] \"견적서와 매출 현황 파일을 첨부합니다. 확인 부탁드립니다.\""
+      ],
+      "names": [
+        "[1] \"견적서_2026년11월.pdf\"",
+        "[2] \"매출_현황_4분기.xlsx\""
+      ]
+    },
+    {
+      "name": "ko-filename-rfc2231-continuation",
+      "state": "complete",
+      "diagnostics": [
+        "info mime.parameter_rfc2047 [2]"
+      ],
+      "leaves": [
+        "[0] text/plain 25",
+        "[1] application/x-hwp 61",
+        "[2] application/pdf 45"
+      ],
+      "headers": [
+        "Subject 21 \"Proposal and schedule\"",
+        "From 32 \"Test Sender <sender@example.com>\""
+      ],
+      "text": [
+        "[0] \"Two files are attached.\""
+      ],
+      "names": [
+        "[1] \"제안서_최종.hwp\"",
+        "[2] \"연간 일정표.pdf\""
+      ]
+    },
+    {
+      "name": "ko-undeclared-euc-kr",
+      "state": "complete",
+      "diagnostics": [
+        "recovered charset.missing []"
+      ],
+      "leaves": [
+        "[] text/plain 134"
+      ],
+      "headers": [
+        "Subject 14 \"Account notice\"",
+        "From 22 \"security@example.co.kr\""
+      ],
+      "text": [
+        "[] \"회원님의 계정 보안 점검 안내 아래 링크에서 비밀번호를 변경해 주세요. http://www.example.c\"…"
+      ]
+    },
+    {
+      "name": "ko-utf8-labelled-euc-kr",
+      "state": "complete",
+      "leaves": [
+        "[] text/html 260"
+      ],
+      "headers": [
+        "Subject 22 \"[광고] 연말 특가\"",
+        "From 23 \"shop@shop.example.co.kr\""
+      ],
+      "text": [
+        "[] \"<html><head><meta charset=\\\"utf-8\\\"></head><body><p>[愿묎퀬] �곕쭚 �\"…"
+      ]
+    },
+    {
+      "name": "ja-iso-2022-jp-shift-jis",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 162",
+        "[1] text/html 225"
+      ],
+      "headers": [
+        "Subject 32 \"会議のお知らせ（11月）\"",
+        "From 37 \"山田太郎 <taro.yamada@example.jp>\""
+      ],
+      "text": [
+        "[0] \"各位 お世話になっております。山田です。 来週水曜日の会議は午後二時からです。 よろしくお願いいたします。\"",
+        "[1] \"<html><head><meta http-equiv=\\\"Content-Type\\\" content=\\\"text/ht\"…"
+      ]
+    },
+    {
+      "name": "zh-gbk-gb18030",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 117",
+        "[1] text/html 106"
+      ],
+      "headers": [
+        "Subject 37 \"喆园科技 新产品发布会通知\"",
+        "From 18 \"events@example.com\""
+      ],
+      "text": [
+        "[0] \"各位同事： 喆园科技新产品发布会将于下周五下午三点举行。 地点：总部三楼会议室\"",
+        "[1] \"<html><body><p>喆园科技新产品发布会</p><p>纪念品：𠀀 字样徽章 😀</p></body></htm\"…"
+      ]
+    },
+    {
+      "name": "zh-big5",
+      "state": "complete",
+      "leaves": [
+        "[] text/plain 96"
+      ],
+      "headers": [
+        "Subject 36 \"會議通知：本週五下午三點\"",
+        "From 18 \"office@example.org\""
+      ],
+      "text": [
+        "[] \"各位同仁： 本週五下午三點於三樓會議室開會，請準時出席。 謝謝。\""
+      ]
+    },
+    {
+      "name": "bulk-sloppy-encodings",
+      "state": "complete",
+      "diagnostics": [
+        "recovered cte.qp_invalid_soft_break [0]",
+        "recovered cte.qp_invalid_hex [0]",
+        "recovered charset.declaration_suspect [0]"
+      ],
+      "leaves": [
+        "[0] text/plain 231",
+        "[1] text/html 208"
+      ],
+      "headers": [
+        "Subject 22 \"Your order has shipped\"",
+        "From 23 \"orders@shop.example.net\""
+      ],
+      "text": [
+        "[0] \"Dear customer, your order has shipped and will arrive within\"…",
+        "[1] \"<html><body><p>Your order has shipped.</p><p>Track it at <a h\"…"
+      ]
+    }
+  ]
+}

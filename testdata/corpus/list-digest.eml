@@ -1,0 +1,51 @@
+From: example-users-request@lists.example.org
+To: example-users@lists.example.org
+Subject: example-users Digest, Vol 12, Issue 3
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <digest-0001@lists.example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============0000000000000000001=="
+
+--===============0000000000000000001==
+Content-Type: text/plain; charset="us-ascii"
+Content-Description: example-users Digest, Vol 12, Issue 3
+
+Today's Topics:
+
+   1. First topic (Alice Example)
+   2. Second topic (Bob Example)
+
+--===============0000000000000000001==
+Content-Type: multipart/digest; boundary="===============0000000000000000002=="
+
+--===============0000000000000000002==
+Content-Type: message/rfc822
+MIME-Version: 1.0
+
+Message: 1
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+From: Alice Example <alice@example.org>
+Subject: First topic
+Content-Type: text/plain; charset="us-ascii"
+
+Body of the first message.
+
+--===============0000000000000000002==
+
+Message: 2
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+From: Bob Example <bob@example.org>
+Subject: Second topic
+
+Body of the second message.
+
+--===============0000000000000000002==--
+
+--===============0000000000000000001==
+Content-Type: text/plain; charset="us-ascii"
+Content-Description: Digest Footer
+
+_______________________________________________
+example-users mailing list
+
+--===============0000000000000000001==--

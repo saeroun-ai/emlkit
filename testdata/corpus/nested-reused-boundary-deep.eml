@@ -1,0 +1,28 @@
+From: sender@example.com
+To: recipient@example.org
+Subject: Reused boundary
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <reused-0001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="same-0001"
+
+--same-0001
+Content-Type: multipart/alternative; boundary="same-0001"
+
+--same-0001
+Content-Type: text/plain; charset=us-ascii
+
+plain text
+--same-0001
+Content-Type: text/html; charset=us-ascii
+
+<p>html text</p>
+--same-0001--
+
+--same-0001
+Content-Type: application/pdf; name="a.pdf"
+Content-Disposition: attachment; filename="a.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJSBwbGFjZWhvbGRlciwgbm90IGEgZG9jdW1lbnQKJSVFT0YK
+--same-0001--

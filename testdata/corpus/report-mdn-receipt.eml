@@ -1,0 +1,32 @@
+From: chulsoo.kim@example.co.kr
+To: gildong.hong@example.co.kr
+Subject: =?UTF-8?B?7J297J2MIO2ZleyduDog7ZqM7J2YIOyekOujjA==?=
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <mdn-0001@example.co.kr>
+MIME-Version: 1.0
+Content-Type: multipart/report; report-type=disposition-notification; boundary="mdn-0001"
+
+--mdn-0001
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+보내신 메일을 2026년 11월 11일 오전 9시에 읽었습니다.
+
+--mdn-0001
+Content-Type: message/disposition-notification
+
+Reporting-UA: mail.example.co.kr; ExampleMail
+Final-Recipient: rfc822;chulsoo.kim@example.co.kr
+Original-Message-ID: <meeting-0001@example.co.kr>
+Disposition: manual-action/MDN-sent-manually; displayed
+
+--mdn-0001
+Content-Type: text/rfc822-headers
+
+From: gildong.hong@example.co.kr
+To: chulsoo.kim@example.co.kr
+Subject: =?UTF-8?B?7ZqM7J2YIOyekOujjA==?=
+Message-ID: <meeting-0001@example.co.kr>
+Disposition-Notification-To: gildong.hong@example.co.kr
+
+--mdn-0001--

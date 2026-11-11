@@ -1,0 +1,38 @@
+From: Test Sender <sender@example.com>
+To: recipient@example.org
+Subject: Fwd: report
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <fwd-0001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="fwd-outer-0001"
+
+--fwd-outer-0001
+Content-Type: text/plain; charset=utf-8
+
+Forwarding the message below.
+--fwd-outer-0001
+Content-Type: message/rfc822; name="original.eml"
+Content-Disposition: attachment; filename="original.eml"
+
+From: =?UTF-8?B?6rmA7LKg7IiY?= <chulsoo.kim@example.co.kr>
+To: sender@example.com
+Subject: =?UTF-8?B?7JuU6rCEIOuztOqzoOyEnA==?=
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <report-0001@example.co.kr>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="fwd-inner-0001"
+
+--fwd-inner-0001
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: base64
+
+7JuU6rCEIOuztOqzoOyEnOulvCDssqjrtoDtlanri4jri6QuDQo=
+--fwd-inner-0001
+Content-Type: application/pdf; name="report.pdf"
+Content-Disposition: attachment; filename="report.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJSBwbGFjZWhvbGRlciwgbm90IGEgZG9jdW1lbnQKJSVFT0YK
+--fwd-inner-0001--
+
+--fwd-outer-0001--

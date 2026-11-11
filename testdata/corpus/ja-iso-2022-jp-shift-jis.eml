@@ -1,0 +1,26 @@
+From: =?ISO-2022-JP?B?GyRCOzNFREJATzobKEI=?= <taro.yamada@example.jp>
+To: team@example.jp
+Subject: =?ISO-2022-JP?B?GyRCMnE1RCROJCpDTiRpJDshShsoQjExGyRCN24hSxsoQg==?=
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <jp-0001@example.jp>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="jp-alt-0001"
+
+--jp-alt-0001
+Content-Type: text/plain; charset=ISO-2022-JP
+Content-Transfer-Encoding: 7bit
+
+$B3F0L(B
+
+$B$*@$OC$K$J$C$F$*$j$^$9!#;3ED$G$9!#(B
+$BMh=5?eMKF|$N2q5D$O8a8eFs;~$+$i$G$9!#(B
+
+$B$h$m$7$/$*4j$$$$$?$7$^$9!#(B
+
+--jp-alt-0001
+Content-Type: text/html; charset=Shift_JIS
+Content-Transfer-Encoding: 8bit
+
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"></head><body><p>各位</p><p>来週水曜日の会議は午後二時からです。</p><p>ｾﾐﾅｰ ｺｰﾄﾞ: EX-01</p></body></html>
+
+--jp-alt-0001--

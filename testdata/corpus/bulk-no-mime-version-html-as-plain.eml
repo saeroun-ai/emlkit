@@ -1,0 +1,21 @@
+Received: from bulk.example.net (bulk.example.net [198.51.100.7])
+	by mx.example.com with ESMTP id 0001; Wed, 11 Nov 2026 09:00:00 +0900
+From: "Example Deals" <deals@bulk.example.net>
+To: recipient@example.com
+Subject: Weekend deals just for you
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <0001.bulk@bulk.example.net>
+X-Mailer: ExampleBulkMailer 2.0
+Content-Type: multipart/alternative; boundary="bulk-0001"
+
+--bulk-0001
+Content-Type: text/plain; charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+
+Weekend deals: up to 70% off. Visit http://deals.example.net/
+--bulk-0001
+Content-Type: text/plain; charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+
+<html><body><table width="600"><tr><td><a href="http://deals.example.net/track?id=0001"><img src="http://deals.example.net/banner.png" alt="Weekend deals"></a></td></tr><tr><td><a href="http://deals.example.net/unsubscribe">Unsubscribe</a></td></tr></table></body></html>
+--bulk-0001--

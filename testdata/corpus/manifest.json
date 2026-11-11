@@ -3,24 +3,44 @@
   "fixtures": [
     {
       "name": "clean-single",
+      "category": "conformant",
       "description": "A conformant single-part message.",
       "state": "complete",
       "leaves": [
         "[] text/plain 13"
+      ],
+      "headers": [
+        "Subject 5 \"hello\"",
+        "From 13 \"a@example.com\""
+      ],
+      "text": [
+        "[] \"hello world\""
       ]
     },
     {
       "name": "clean-multipart",
+      "category": "conformant",
       "description": "A conformant multipart/alternative inside multipart/mixed with an attachment.",
       "state": "complete",
       "leaves": [
         "[0 0] text/plain 5",
         "[0 1] text/html 11",
         "[1] application/pdf 8"
+      ],
+      "headers": [
+        "Subject 1 \"s\""
+      ],
+      "text": [
+        "[0 0] \"plain\"",
+        "[0 1] \"<p>html</p>\""
+      ],
+      "names": [
+        "[1] \"a.pdf\""
       ]
     },
     {
       "name": "header-missing-separator",
+      "category": "malformed",
       "description": "The empty line between header and body is missing.",
       "state": "complete",
       "diagnostics": [
@@ -28,10 +48,17 @@
       ],
       "leaves": [
         "[] text/plain 61"
+      ],
+      "headers": [
+        "Subject 1 \"s\""
+      ],
+      "text": [
+        "[] \"Dear Bob, the body starts without a blank line. Regards\""
       ]
     },
     {
       "name": "header-colonless-line",
+      "category": "malformed",
       "description": "A line with no colon in the middle of the header.",
       "state": "complete",
       "diagnostics": [
@@ -39,10 +66,17 @@
       ],
       "leaves": [
         "[] text/plain 6"
+      ],
+      "headers": [
+        "Subject 1 \"s\""
+      ],
+      "text": [
+        "[] \"body\""
       ]
     },
     {
       "name": "header-unindented-boundary",
+      "category": "malformed",
       "description": "The boundary parameter is on a continuation line that lost its indentation.",
       "state": "complete",
       "diagnostics": [
@@ -50,10 +84,17 @@
       ],
       "leaves": [
         "[0] text/plain 3"
+      ],
+      "headers": [
+        "Subject 1 \"s\""
+      ],
+      "text": [
+        "[0] \"one\""
       ]
     },
     {
       "name": "header-whitespace-separator",
+      "category": "malformed",
       "description": "Header and body are separated by a line of white space only.",
       "state": "complete",
       "diagnostics": [
@@ -61,10 +102,17 @@
       ],
       "leaves": [
         "[] text/plain 11"
+      ],
+      "headers": [
+        "Subject 1 \"s\""
+      ],
+      "text": [
+        "[] \"body text\""
       ]
     },
     {
       "name": "header-duplicate-content-type",
+      "category": "malformed",
       "description": "Two conflicting Content-Type fields.",
       "state": "complete",
       "diagnostics": [
@@ -72,10 +120,17 @@
       ],
       "leaves": [
         "[] text/html 10"
+      ],
+      "headers": [
+        "Subject 1 \"s\""
+      ],
+      "text": [
+        "[] \"<b>x</b>\""
       ]
     },
     {
       "name": "header-bare-lf",
+      "category": "malformed",
       "description": "Line endings are bare LF throughout.",
       "state": "complete",
       "diagnostics": [
@@ -84,10 +139,17 @@
       ],
       "leaves": [
         "[0] text/plain 3"
+      ],
+      "headers": [
+        "Subject 1 \"s\""
+      ],
+      "text": [
+        "[0] \"one\""
       ]
     },
     {
       "name": "multipart-missing-close",
+      "category": "truncated",
       "description": "The closing delimiter is missing.",
       "state": "incomplete",
       "diagnostics": [
@@ -96,10 +158,15 @@
       "leaves": [
         "[0] text/plain 3",
         "[1] text/html 5"
+      ],
+      "text": [
+        "[0] \"one\"",
+        "[1] \"two\""
       ]
     },
     {
       "name": "multipart-truncated-close",
+      "category": "truncated",
       "description": "The closing delimiter is cut one byte short.",
       "state": "complete",
       "diagnostics": [
@@ -107,10 +174,14 @@
       ],
       "leaves": [
         "[0] text/plain 3"
+      ],
+      "text": [
+        "[0] \"one\""
       ]
     },
     {
       "name": "multipart-no-boundary-param",
+      "category": "malformed",
       "description": "multipart with no boundary parameter; the body uses one.",
       "state": "complete",
       "diagnostics": [
@@ -119,10 +190,15 @@
       "leaves": [
         "[0] text/plain 3",
         "[1] text/html 3"
+      ],
+      "text": [
+        "[0] \"one\"",
+        "[1] \"two\""
       ]
     },
     {
       "name": "multipart-boundary-mismatch",
+      "category": "malformed",
       "description": "The declared boundary appears nowhere; the body uses another.",
       "state": "complete",
       "diagnostics": [
@@ -130,10 +206,14 @@
       ],
       "leaves": [
         "[0] text/plain 3"
+      ],
+      "text": [
+        "[0] \"one\""
       ]
     },
     {
       "name": "multipart-no-delimiter",
+      "category": "malformed",
       "description": "A multipart body with no delimiter line at all.",
       "state": "complete",
       "diagnostics": [
@@ -141,18 +221,26 @@
       ],
       "leaves": [
         "[0] text/plain 23"
+      ],
+      "text": [
+        "[0] \"Just a plain message.\""
       ]
     },
     {
       "name": "multipart-empty",
+      "category": "malformed",
       "description": "A multipart with an empty body.",
       "state": "complete",
       "diagnostics": [
         "info multipart.empty []"
+      ],
+      "headers": [
+        "Subject 1 \"s\""
       ]
     },
     {
       "name": "multipart-part-without-separator",
+      "category": "malformed",
       "description": "A part whose header runs into its body.",
       "state": "complete",
       "diagnostics": [
@@ -161,10 +249,15 @@
       "leaves": [
         "[0] text/plain 23",
         "[1] text/plain 6"
+      ],
+      "text": [
+        "[0] \"the body, no blank line\"",
+        "[1] \"second\""
       ]
     },
     {
       "name": "multipart-inner-unclosed",
+      "category": "malformed",
       "description": "An inner multipart never closes; the outer one continues.",
       "state": "incomplete",
       "diagnostics": [
@@ -173,10 +266,15 @@
       "leaves": [
         "[0 0] text/plain 5",
         "[1] text/plain 5"
+      ],
+      "text": [
+        "[0 0] \"inner\"",
+        "[1] \"outer\""
       ]
     },
     {
       "name": "multipart-reused-boundary",
+      "category": "adversarial",
       "description": "An inner multipart reuses the outer boundary.",
       "state": "complete",
       "diagnostics": [
@@ -185,10 +283,14 @@
       ],
       "leaves": [
         "[1] text/plain 5"
+      ],
+      "text": [
+        "[1] \"inner\""
       ]
     },
     {
       "name": "multipart-illegal-cte",
+      "category": "malformed",
       "description": "A multipart that declares base64.",
       "state": "complete",
       "diagnostics": [
@@ -196,10 +298,14 @@
       ],
       "leaves": [
         "[0] text/plain 3"
+      ],
+      "text": [
+        "[0] \"one\""
       ]
     },
     {
       "name": "base64-junk-and-missing-padding",
+      "category": "malformed",
       "description": "Base64 with stray bytes and no padding.",
       "state": "complete",
       "diagnostics": [
@@ -212,6 +318,7 @@
     },
     {
       "name": "base64-data-after-padding",
+      "category": "malformed",
       "description": "Two padded Base64 segments in one body.",
       "state": "complete",
       "diagnostics": [
@@ -219,10 +326,14 @@
       ],
       "leaves": [
         "[] text/plain 4"
+      ],
+      "text": [
+        "[] \"hihi\""
       ]
     },
     {
       "name": "qp-damaged",
+      "category": "malformed",
       "description": "Quoted-printable with a bad escape, a CR-only soft break and a trailing equals.",
       "state": "complete",
       "diagnostics": [
@@ -232,10 +343,14 @@
       ],
       "leaves": [
         "[] text/plain 22"
+      ],
+      "text": [
+        "[] \"a=ZZb softbreak end=\""
       ]
     },
     {
       "name": "cte-token-with-junk",
+      "category": "malformed",
       "description": "A transfer encoding value with quotes and a trailing parameter.",
       "state": "complete",
       "diagnostics": [
@@ -243,10 +358,14 @@
       ],
       "leaves": [
         "[] text/plain 2"
+      ],
+      "text": [
+        "[] \"hi\""
       ]
     },
     {
       "name": "cte-unknown",
+      "category": "malformed",
       "description": "An unknown transfer encoding.",
       "state": "complete",
       "diagnostics": [
@@ -254,10 +373,14 @@
       ],
       "leaves": [
         "[] text/plain 7"
+      ],
+      "text": [
+        "[] \"uryyb\""
       ]
     },
     {
       "name": "uuencode-missing-end",
+      "category": "truncated",
       "description": "A uuencoded body with no end line.",
       "state": "incomplete",
       "diagnostics": [
@@ -265,10 +388,14 @@
       ],
       "leaves": [
         "[] text/plain 3"
+      ],
+      "text": [
+        "[] \"Cat\""
       ]
     },
     {
       "name": "embedded-message-base64",
+      "category": "malformed",
       "description": "A message/rfc822 part that is Base64 encoded.",
       "state": "complete",
       "diagnostics": [
@@ -276,19 +403,28 @@
       ],
       "leaves": [
         "[0 0] text/plain 10"
+      ],
+      "text": [
+        "[0 0] \"inner body\""
       ]
     },
     {
       "name": "digest",
+      "category": "conformant",
       "description": "A multipart/digest whose parts declare no type.",
       "state": "complete",
       "leaves": [
         "[0 0] text/plain 3",
         "[1 0] text/plain 3"
+      ],
+      "text": [
+        "[0 0] \"one\"",
+        "[1 0] \"two\""
       ]
     },
     {
       "name": "utf8-declared-not-utf8",
+      "category": "malformed",
       "description": "A body declared UTF-8 that holds Latin-1 bytes.",
       "state": "complete",
       "diagnostics": [
@@ -296,10 +432,14 @@
       ],
       "leaves": [
         "[] text/plain 14"
+      ],
+      "text": [
+        "[] \"caf\\xe9 au lait\""
       ]
     },
     {
       "name": "content-type-missing-subtype",
+      "category": "malformed",
       "description": "Content-Type: text, with a charset.",
       "state": "complete",
       "diagnostics": [
@@ -307,18 +447,29 @@
       ],
       "leaves": [
         "[] text/plain 6"
+      ],
+      "text": [
+        "[] \"body\""
       ]
     },
     {
       "name": "filename-conflict",
+      "category": "adversarial",
       "description": "Different names in Content-Disposition and Content-Type.",
       "state": "complete",
+      "diagnostics": [
+        "info mime.filename_conflict []"
+      ],
       "leaves": [
         "[] application/pdf 3"
+      ],
+      "names": [
+        "[] \"invoice.exe\""
       ]
     },
     {
       "name": "seven-bit-violation",
+      "category": "malformed",
       "description": "A body declared 7bit that holds 8-bit bytes.",
       "state": "complete",
       "diagnostics": [
@@ -326,6 +477,784 @@
       ],
       "leaves": [
         "[] text/plain 7"
+      ],
+      "text": [
+        "[] \"café\""
+      ]
+    },
+    {
+      "name": "provider-gmail-alternative",
+      "category": "provider-style",
+      "description": "Gmail-style multipart/alternative: base64 UTF-8 text/plain and quoted-printable UTF-8 text/html, Korean Subject and From as UTF-8 B words.",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 186",
+        "[1] text/html 324"
+      ],
+      "headers": [
+        "Subject 35 \"주간 보고서 공유드립니다\"",
+        "From 36 \"홍길동 <gildong.hong@example.com>\""
+      ],
+      "text": [
+        "[0] \"안녕하세요, 이번 주 주간 보고서를 공유드립니다. 아래 링크에서 확인해 주세요. https://docs.ex\"…",
+        "[1] \"<div dir=\\\"ltr\\\">안녕하세요,<div><br></div><div>이번 주 주간 보고서를 공유드립니다\"…"
+      ]
+    },
+    {
+      "name": "provider-outlook-exchange-tnef",
+      "category": "provider-style",
+      "description": "Outlook/Exchange-style mixed > alternative > related, with Thread-Index, X-MS-* fields, an inline image by Content-ID and a winmail.dat application/ms-tnef part holding placeholder bytes.",
+      "state": "complete",
+      "leaves": [
+        "[0 0] text/plain 85",
+        "[0 1 0] text/html 487",
+        "[0 1 1] image/png 54",
+        "[1] application/ms-tnef 61"
+      ],
+      "headers": [
+        "Subject 17 \"Quarterly figures\"",
+        "From 37 \"Test Sender <sender@corp.example.com>\""
+      ],
+      "text": [
+        "[0 0] \"Hello team, Please find the quarterly figures attached. Rega\"…",
+        "[0 1 0] \"<html xmlns:v=\\\"urn:schemas-microsoft-com:vml\\\" xmlns:o=\\\"urn:s\"…"
+      ],
+      "names": [
+        "[0 1 1] \"image001.png\"",
+        "[1] \"winmail.dat\""
+      ]
+    },
+    {
+      "name": "provider-apple-mail-nested-html",
+      "category": "provider-style",
+      "description": "Apple Mail-style alternative whose HTML branch is a nested multipart/mixed: HTML, an inline JPEG with a filename, then more HTML.",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 39",
+        "[1 0] text/html 166",
+        "[1 1] image/jpeg 44",
+        "[1 2] text/html 163"
+      ],
+      "headers": [
+        "Subject 20 \"Photos from the trip\"",
+        "From 32 \"Test Sender <sender@example.com>\""
+      ],
+      "text": [
+        "[0] \"Here is the photo. Best, Sender\"",
+        "[1 0] \"<html><head><meta http-equiv=\\\"Content-Type\\\" content=\\\"text/ht\"…",
+        "[1 2] \"<html><head><meta http-equiv=\\\"Content-Type\\\" content=\\\"text/ht\"…"
+      ],
+      "names": [
+        "[1 1] \"photo.jpg\""
+      ]
+    },
+    {
+      "name": "provider-mobile-format-flowed",
+      "category": "provider-style",
+      "description": "A mobile client's text/plain; format=flowed; delsp=yes in 8-bit UTF-8: lines broken inside a word and between words, a quoted flowed paragraph and the '-- ' signature line.",
+      "state": "complete",
+      "leaves": [
+        "[] text/plain 228"
+      ],
+      "headers": [
+        "Subject 17 \"Re: 점심 약속\"",
+        "From 38 \"이영희 <younghee.lee@example.co.kr>\""
+      ],
+      "text": [
+        "[] \"오늘 점심은 12시 반에 회사 앞 식당에서 만나 요. 늦으면 미리 연락 주세요. > 내일 점심 같이 하실래요\"…"
+      ]
+    },
+    {
+      "name": "ko-euc-kr-8bit",
+      "category": "conformant",
+      "description": "A Korean text/plain body in 8-bit EUC-KR; Subject as an euc-kr B word, From as an EUC-KR Q word.",
+      "state": "complete",
+      "diagnostics": [
+        "unsupported charset.unknown []"
+      ],
+      "leaves": [
+        "[] text/plain 170"
+      ],
+      "headers": [
+        "Subject 49 \"=?euc-kr?B?W7D4wfZdIDExv/kgwaSx4iDBobDLIL7Is7s=?=\" (unsupported rfc2047.unknown_charset)",
+        "From 60 \"=?EUC-KR?Q?=C8=AB=B1=E6=B5=BF?= <gildong.hong@example.co.kr>\" (unsupported rfc2047.unknown_charset)"
+      ],
+      "text": [
+        "[] \"\\xbeȳ\\xe7\\xc7ϼ\\xbc\\xbf\\xe4, ȫ\\xb1浿\\xc0Դϴ\\xd9. 11\\xbf\\xf9 \\xc1\\xa4\\xb1\\xe2 \\xc1\\xa1\\xb0\\xcb \\xc0\\xcf\\xc1\\xa4\\xc0\\xbb \\xbeȳ\\xbb\\xb5帳\\xb4ϴ\\xd9. \\xc1\\xa1\\xb0\\xcb \\xbdð\\xa3:\"…"
+      ]
+    },
+    {
+      "name": "ko-ks-c-5601-outlook",
+      "category": "provider-style",
+      "description": "Korean Outlook-style alternative labelled ks_c_5601-1987: base64 text/plain and quoted-printable text/html; Subject as two folded ks_c_5601-1987 Q words, From as a B word.",
+      "state": "complete",
+      "diagnostics": [
+        "unsupported charset.unknown [0]",
+        "unsupported charset.unknown [1]"
+      ],
+      "leaves": [
+        "[0] text/plain 114",
+        "[1] text/html 259"
+      ],
+      "headers": [
+        "Subject 118 \"=?ks_c_5601-1987?Q?[=C8=B8=C0=C7]_11=BF=F9_=C1=A4=B1=E2?= =?\"… (unsupported rfc2047.unknown_charset)",
+        "From 58 \"=?ks_c_5601-1987?B?yKux5rW/?= <gildong.hong@example.co.kr>\" (unsupported rfc2047.unknown_charset)"
+      ],
+      "text": [
+        "[0] \"\\xb1\\xe8ö\\xbc\\xf6 \\xb4Բ\\xb2, \\xb4\\xd9\\xc0\\xbd \\xc1\\xd6 \\xc1\\xa4\\xb1\\xe2 ȸ\\xc0\\xc7 \\xbeȰ\\xc7\\xc0\\xbb \\xb0\\xf8\\xc0\\xaf\\xb5帳\\xb4ϴ\\xd9. 1. 4\\xbaб\\xe2 \\xbd\\xc7\\xc0\\xfb \\xb0\\xcb\"…",
+        "[1] \"<html><head><meta http-equiv=\\\"Content-Type\\\" content=\\\"text/ht\"…"
+      ]
+    },
+    {
+      "name": "ko-raw-8bit-subject-filename",
+      "category": "malformed",
+      "description": "Raw 8-bit EUC-KR bytes, with no encoding at all, in Subject and in the filename and name parameters of two attachments; only the second attachment's Content-Type carries charset=euc-kr.",
+      "state": "complete",
+      "diagnostics": [
+        "unsupported charset.unknown [0]",
+        "unsupported mime.parameter_unknown_charset [1]",
+        "unsupported mime.parameter_unknown_charset [1]",
+        "unsupported mime.parameter_unknown_charset [2]",
+        "unsupported mime.parameter_unknown_charset [2]"
+      ],
+      "leaves": [
+        "[0] text/plain 38",
+        "[1] application/octet-stream 42",
+        "[2] application/haansofthwp 61"
+      ],
+      "headers": [
+        "Subject 51 \"������ �ۺ��� �� (11��)\" (invalid_metadata header.invalid_utf8)",
+        "From 50 \"=?euc-kr?B?yKux5rW/?= <gildong.hong@example.co.kr>\" (unsupported rfc2047.unknown_charset)"
+      ],
+      "text": [
+        "[0] \"\\xb0\\xdf\\xc0\\xfb\\xbc\\xad\\xbf\\xcd \\xb0\\xe8\\xbe༭ \\xc3ʾ\\xc8\\xc0\\xbb \\xba\\xb8\\xb3\\xbb\\xb5帳\\xb4ϴ\\xd9.\""
+      ],
+      "names": [
+        "[1] \"\\xb0\\xdf\\xc0\\xfb\\xbc\\xad_11\\xbf\\xf9.xls\" undecoded",
+        "[2] \"\\xb0\\xe8\\xbe༭_\\xc3ʾ\\xc8.hwp\" undecoded"
+      ]
+    },
+    {
+      "name": "ko-cp949-under-euc-kr",
+      "category": "malformed",
+      "description": "CP949 extension syllables outside KS X 1001 (똠, 햏, 뷁) in a base64 body and an encoded-word Subject that are both labelled euc-kr.",
+      "state": "complete",
+      "diagnostics": [
+        "unsupported charset.unknown []"
+      ],
+      "leaves": [
+        "[] text/plain 93"
+      ],
+      "headers": [
+        "Subject 53 \"=?euc-kr?B?jGO55rCix88gwWTA2iDAzLqlxq4gtOfDtyC+yLO7?=\" (unsupported rfc2047.unknown_charset)",
+        "From 25 \"events@shop.example.co.kr\""
+      ],
+      "text": [
+        "[] \"\\xc3\\xe0\\xc7\\xcf\\xc7մϴ\\xd9! \\xc1d\\xc0\\xda \\xc0̺\\xa5Ʈ\\xbf\\xa1 \\xb4\\xe7÷\\xb5Ǽ̽\\xc0\\xb4ϴ\\xd9. \\xb0\\xe6ǰ: \\x8cc\\xbe\\xe4\\xb2\\xe1 \\xb9\\xd0ŰƮ 1\\xbc\\xbcƮ \\x94\\xee \\xc4\"…"
+      ]
+    },
+    {
+      "name": "ko-filename-encoded-word-quoted",
+      "category": "provider-style",
+      "description": "Attachment names as RFC 2047 words inside quoted name and filename parameters (the Outlook and Korean webmail habit): one euc-kr word, and one UTF-8 name folded into two words.",
+      "state": "complete",
+      "diagnostics": [
+        "unsupported charset.unknown [0]",
+        "info mime.parameter_rfc2047 [2]",
+        "info mime.parameter_rfc2047 [2]"
+      ],
+      "leaves": [
+        "[0] text/plain 59",
+        "[1] application/pdf 45",
+        "[2] application/vnd.openxmlformats-officedocument.spreadsheetml.sheet 61"
+      ],
+      "headers": [
+        "Subject 45 \"=?euc-kr?B?sN/A+7ytILnXILjFw+Igx/bIsiC827rO?=\" (unsupported rfc2047.unknown_charset)",
+        "From 50 \"=?euc-kr?B?yKux5rW/?= <gildong.hong@example.co.kr>\" (unsupported rfc2047.unknown_charset)"
+      ],
+      "text": [
+        "[0] \"\\xb0\\xdf\\xc0\\xfb\\xbc\\xad\\xbf\\xcd \\xb8\\xc5\\xc3\\xe2 \\xc7\\xf6Ȳ \\xc6\\xc4\\xc0\\xcf\\xc0\\xbb ÷\\xba\\xce\\xc7մϴ\\xd9. Ȯ\\xc0\\xce \\xba\\xceŹ\\xb5帳\\xb4ϴ\\xd9.\""
+      ],
+      "names": [
+        "[1] \"=?euc-kr?B?sN/A+7ytXzIwMjaz4jExv/kucGRm?=\"",
+        "[2] \"매출_현황_4분기.xlsx\""
+      ]
+    },
+    {
+      "name": "ko-filename-rfc2231-continuation",
+      "category": "conformant",
+      "description": "Korean filenames in RFC 2231 continuations: an euc-kr name whose segments split a double-byte character, and a Thunderbird-style UTF-8 name with an RFC 2047 name parameter beside it.",
+      "state": "complete",
+      "diagnostics": [
+        "unsupported mime.parameter_unknown_charset [1]",
+        "unsupported mime.parameter_unknown_charset [1]",
+        "info mime.parameter_rfc2047 [2]"
+      ],
+      "leaves": [
+        "[0] text/plain 25",
+        "[1] application/x-hwp 61",
+        "[2] application/pdf 45"
+      ],
+      "headers": [
+        "Subject 21 \"Proposal and schedule\"",
+        "From 32 \"Test Sender <sender@example.com>\""
+      ],
+      "text": [
+        "[0] \"Two files are attached.\""
+      ],
+      "names": [
+        "[1] \"\\xc1\\xa6\\xbeȼ\\xad_\\xc3\\xd6\\xc1\\xbe.hwp\" undecoded",
+        "[2] \"연간 일정표.pdf\""
+      ]
+    },
+    {
+      "name": "ko-undeclared-euc-kr",
+      "category": "malformed",
+      "description": "A text/plain body in 8-bit EUC-KR whose Content-Type declares no charset.",
+      "state": "complete",
+      "leaves": [
+        "[] text/plain 105"
+      ],
+      "headers": [
+        "Subject 14 \"Account notice\"",
+        "From 22 \"security@example.co.kr\""
+      ],
+      "text": [
+        "[] \"ȸ\\xbf\\xf8\\xb4\\xd4\\xc0\\xc7 \\xb0\\xe8\\xc1\\xa4 \\xba\\xb8\\xbe\\xc8 \\xc1\\xa1\\xb0\\xcb \\xbeȳ\\xbb \\xbeƷ\\xa1 \\xb8\\xb5ũ\\xbf\\xa1\\xbc\\xad \\xba\\xf1\\xb9й\\xf8ȣ\\xb8\\xa6 \\xba\\xaf\\xb0\\xe6\\xc7\\xd8 \\xc1ּ\\xbc\\xbf\\xe4\"…"
+      ]
+    },
+    {
+      "name": "ko-utf8-labelled-euc-kr",
+      "category": "malformed",
+      "description": "A base64 text/html body that is UTF-8 (its own meta tag says so) under charset=euc-kr.",
+      "state": "complete",
+      "diagnostics": [
+        "unsupported charset.unknown []"
+      ],
+      "leaves": [
+        "[] text/html 215"
+      ],
+      "headers": [
+        "Subject 22 \"[광고] 연말 특가\"",
+        "From 23 \"shop@shop.example.co.kr\""
+      ],
+      "text": [
+        "[] \"<html><head><meta charset=\\\"utf-8\\\"></head><body><p>[광고] 연말 특가\"…"
+      ]
+    },
+    {
+      "name": "ja-iso-2022-jp-shift-jis",
+      "category": "conformant",
+      "description": "Japanese alternative: ISO-2022-JP Subject, From and 7bit text/plain, and an 8-bit Shift_JIS text/html with half-width katakana.",
+      "state": "complete",
+      "diagnostics": [
+        "unsupported charset.unknown [0]",
+        "unsupported charset.unknown [1]"
+      ],
+      "leaves": [
+        "[0] text/plain 136",
+        "[1] text/html 189"
+      ],
+      "headers": [
+        "Subject 66 \"=?ISO-2022-JP?B?GyRCMnE1RCROJCpDTiRpJDshShsoQjExGyRCN24hSxso\"… (unsupported rfc2047.unknown_charset)",
+        "From 63 \"=?ISO-2022-JP?B?GyRCOzNFREJATzobKEI=?= <taro.yamada@example.\"… (unsupported rfc2047.unknown_charset)"
+      ],
+      "text": [
+        "[0] \"\\x1b$B3F0L\\x1b(B \\x1b$B$*@$OC$K$J$C$F$*$j$^$9!#;3ED$G$9!#\\x1b(B \\x1b$BMh=5?\"…",
+        "[1] \"<html><head><meta http-equiv=\\\"Content-Type\\\" content=\\\"text/ht\"…"
+      ]
+    },
+    {
+      "name": "zh-gbk-gb18030",
+      "category": "malformed",
+      "description": "Chinese alternative: a base64 text/plain labelled gb2312 holding a GBK-only character (喆), and a GB18030 text/html with four-byte sequences; Subject is a gb2312 B word with the same character.",
+      "state": "complete",
+      "diagnostics": [
+        "unsupported charset.unknown [0]",
+        "unsupported charset.unknown [1]"
+      ],
+      "leaves": [
+        "[0] text/plain 80",
+        "[1] text/html 88"
+      ],
+      "headers": [
+        "Subject 49 \"=?gb2312?B?hrTUsL/GvLwg0MKy+sa3t6KyvLvhzajWqg==?=\" (unsupported rfc2047.unknown_charset)",
+        "From 18 \"events@example.com\""
+      ],
+      "text": [
+        "[0] \"\\xb8\\xf7λͬ\\xca£\\xba \\x86\\xb4\\u0530\\xbfƼ\\xbc\\xd0²\\xfaƷ\\xb7\\xa2\\xb2\\xbc\\xbbὫ\\xd3\\xda\\xcf\\xc2\\xd6\\xdc\\xce\\xe5\\xcf\\xc2\\xce\\xe7\\xc8\\xfd\\xb5\\xe3\\xbe\\xd9\\xd0С\\xa3 \\xb5ص㣺\\xd7ܲ\\xbf\\xc8\\xfd¥\\xbb\\xe1\\xd2\\xe9\\xca\"…",
+        "[1] \"<html><body><p>\\x86\\xb4\\u0530\\xbfƼ\\xbc\\xd0²\\xfaƷ\\xb7\\xa2\\xb2\\xbc\\xbb\\xe1</p><p>\\xbc\\xcd\\xc4\\xeeƷ\\xa3\\xba\\x952\\x826 \\xd7\\xd6\\xd1\\xf9\\xbb\\xd5\\xd5\\xc2 \\x94\"…"
+      ]
+    },
+    {
+      "name": "zh-big5",
+      "category": "conformant",
+      "description": "Traditional Chinese: Subject as a big5 Q word and a quoted-printable Big5 text/plain body.",
+      "state": "complete",
+      "diagnostics": [
+        "unsupported charset.unknown []"
+      ],
+      "leaves": [
+        "[] text/plain 66"
+      ],
+      "headers": [
+        "Subject 69 \"=?big5?Q?=B7|=C4=B3=B3q=AA=BE=A1G=A5=BB=B6g=A4=AD=A4U=A4=C8=\"… (unsupported rfc2047.unknown_charset)",
+        "From 18 \"office@example.org\""
+      ],
+      "text": [
+        "[] \"\\xa6U\\xa6\\xec\\xa6P\\xa4\\xaf\\xa1G \\xa5\\xbb\\xb6g\\xa4\\xad\\xa4U\\xa4ȤT\\xc2I\\xa9\\xf3\\xa4T\\xbcӷ|ĳ\\xabǶ}\\xb7|\\xa1A\\xbdзǮɥX\\xaeu\\xa1C \\xc1\\xc2\\xc1¡C\""
+      ]
+    },
+    {
+      "name": "bulk-no-mime-version-html-as-plain",
+      "category": "malformed",
+      "description": "A bulk mailer's alternative with no MIME-Version field whose second part is HTML declared text/plain.",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 61",
+        "[1] text/plain 271"
+      ],
+      "headers": [
+        "Subject 26 \"Weekend deals just for you\"",
+        "From 40 \"\\\"Example Deals\\\" <deals@bulk.example.net>\""
+      ],
+      "text": [
+        "[0] \"Weekend deals: up to 70% off. Visit http://deals.example.net\"…",
+        "[1] \"<html><body><table width=\\\"600\\\"><tr><td><a href=\\\"http://deals\"…"
+      ]
+    },
+    {
+      "name": "bulk-sloppy-encodings",
+      "category": "malformed",
+      "description": "A bulk mailer's alternative: quoted-printable text with padding after a soft break, lower-case hex, a bare-LF soft break and an escape cut by a soft break; base64 HTML in 120-column lines with embedded spaces and a trailing tab.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered cte.qp_invalid_soft_break [0]",
+        "recovered cte.qp_invalid_hex [0]",
+        "info charset.invalid_sequence [0]"
+      ],
+      "leaves": [
+        "[0] text/plain 223",
+        "[1] text/html 208"
+      ],
+      "headers": [
+        "Subject 22 \"Your order has shipped\"",
+        "From 23 \"orders@shop.example.net\""
+      ],
+      "text": [
+        "[0] \"Dear customer, your order has shipped and will arrive within\"…",
+        "[1] \"<html><body><p>Your order has shipped.</p><p>Track it at <a h\"…"
+      ],
+      "byteAtATime": {
+        "state": "complete",
+        "diagnostics": [
+          "recovered cte.qp_invalid_soft_break [0]",
+          "info charset.invalid_sequence [0]",
+          "recovered cte.qp_invalid_hex [0]"
+        ],
+        "leaves": [
+          "[0] text/plain 223",
+          "[1] text/html 208"
+        ],
+        "headers": [
+          "Subject 22 \"Your order has shipped\"",
+          "From 23 \"orders@shop.example.net\""
+        ],
+        "text": [
+          "[0] \"Dear customer, your order has shipped and will arrive within\"…",
+          "[1] \"<html><body><p>Your order has shipped.</p><p>Track it at <a h\"…"
+        ]
+      }
+    },
+    {
+      "name": "bulk-cr-only-no-space",
+      "category": "malformed",
+      "description": "An old client's message with CR-only line endings throughout and no space after any header colon.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered header.bare_cr []"
+      ],
+      "leaves": [
+        "[] text/plain 68"
+      ],
+      "headers": [
+        "Subject 15 \"Old client test\"",
+        "From 18 \"sender@example.com\""
+      ],
+      "text": [
+        "[] \"Line one of a message written with carriage returns only. Li\"…"
+      ]
+    },
+    {
+      "name": "mbox-from-line",
+      "category": "malformed",
+      "description": "A Thunderbird-saved message that still begins with its mbox 'From - ' line and X-Mozilla-Status fields, with a '>From ' escaped line in the body.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered header.invalid_name []"
+      ],
+      "leaves": [
+        "[] text/plain 90"
+      ],
+      "headers": [
+        "Subject 20 \"Saved from a mailbox\"",
+        "From 32 \"Test Sender <sender@example.com>\""
+      ],
+      "text": [
+        "[] \"The line below was escaped when the message was stored: >Fro\"…"
+      ]
+    },
+    {
+      "name": "list-footer-after-close",
+      "category": "provider-style",
+      "description": "A mailing-list message whose list manager appended its footer after the closing boundary.",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 53",
+        "[1] text/html 60"
+      ],
+      "headers": [
+        "Subject 43 \"[example-users] Release candidate available\"",
+        "From 33 \"Alice Example <alice@example.org>\""
+      ],
+      "text": [
+        "[0] \"The first release candidate is available for testing.\"",
+        "[1] \"<p>The first release candidate is available for testing.</p>\""
+      ]
+    },
+    {
+      "name": "report-dsn-bounce",
+      "category": "conformant",
+      "description": "A Postfix-style delivery status notification: multipart/report; report-type=delivery-status with the notice, message/delivery-status and the returned message/rfc822.",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 294",
+        "[1] message/delivery-status 375",
+        "[2 0] text/plain 16"
+      ],
+      "headers": [
+        "Subject 35 \"Undelivered Mail Returned to Sender\"",
+        "From 51 \"Mail Delivery System <MAILER-DAEMON@mx.example.com>\""
+      ],
+      "text": [
+        "[0] \"This is the mail system at host mx.example.com. I'm sorry to\"…",
+        "[1] \"Reporting-MTA: dns; mx.example.com X-Postfix-Queue-ID: 0A1B2\"…",
+        "[2 0] \"Original body.\""
+      ]
+    },
+    {
+      "name": "report-mdn-receipt",
+      "category": "conformant",
+      "description": "A read receipt: multipart/report; report-type=disposition-notification with a UTF-8 Korean notice, message/disposition-notification and the original header as text/rfc822-headers.",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 73",
+        "[1] message/disposition-notification 206",
+        "[2 0] text/plain 0"
+      ],
+      "headers": [
+        "Subject 28 \"읽음 확인: 회의 자료\"",
+        "From 25 \"chulsoo.kim@example.co.kr\""
+      ],
+      "text": [
+        "[0] \"보내신 메일을 2026년 11월 11일 오전 9시에 읽었습니다.\"",
+        "[1] \"Reporting-UA: mail.example.co.kr; ExampleMail Final-Recipien\"…",
+        "[2 0] \"\""
+      ]
+    },
+    {
+      "name": "calendar-invite",
+      "category": "provider-style",
+      "description": "A calendar invitation: mixed > alternative of quoted-printable text and HTML and an 8-bit text/calendar; method=REQUEST, plus the same event as a base64 application/ics attachment.",
+      "state": "complete",
+      "leaves": [
+        "[0 0] text/plain 137",
+        "[0 1] text/html 172",
+        "[0 2] text/calendar 566",
+        "[1] application/ics 566"
+      ],
+      "headers": [
+        "Subject 43 \"초대: 주간 회의 - 2026년 11월 18일\"",
+        "From 36 \"홍길동 <gildong.hong@example.com>\""
+      ],
+      "text": [
+        "[0 0] \"홍길동 님이 회의에 초대했습니다. 주간 회의 2026년 11월 18일 (수) 오후 2시 ~ 3시 (KST) 장\"…",
+        "[0 1] \"<div><p>홍길동 님이 회의에 초대했습니다.</p><h3>주간 회의</h3><p>2026년 11월 18일\"…",
+        "[0 2] \"BEGIN:VCALENDAR PRODID:-//Example Corp//Example Calendar 1.0\"…"
+      ],
+      "names": [
+        "[1] \"invite.ics\""
+      ]
+    },
+    {
+      "name": "signed-smime-detached",
+      "category": "conformant",
+      "description": "An S/MIME detached signature: multipart/signed; protocol=application/pkcs7-signature over text/plain, with a base64 smime.p7s holding placeholder bytes.",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 46",
+        "[1] application/pkcs7-signature 62"
+      ],
+      "headers": [
+        "Subject 14 \"Signed message\"",
+        "From 32 \"Test Sender <sender@example.com>\""
+      ],
+      "text": [
+        "[0] \"This text is covered by the signature below.\""
+      ],
+      "names": [
+        "[1] \"smime.p7s\""
+      ]
+    },
+    {
+      "name": "signed-pgp-mime",
+      "category": "conformant",
+      "description": "A PGP/MIME signed message: multipart/signed; protocol=application/pgp-signature over a multipart/mixed of text and a patch attachment, with a placeholder ASCII-armoured signature.",
+      "state": "complete",
+      "leaves": [
+        "[0 0] text/plain 24",
+        "[0 1] text/x-patch 58",
+        "[1] application/pgp-signature 139"
+      ],
+      "headers": [
+        "Subject 16 \"Patch for review\"",
+        "From 32 \"Test Sender <sender@example.com>\""
+      ],
+      "text": [
+        "[0 0] \"The patch is attached.\"",
+        "[0 1] \"--- a/README +++ b/README @@ -1 +1 @@ -old line +new line\""
+      ],
+      "names": [
+        "[0 1] \"fix.patch\"",
+        "[1] \"OpenPGP_signature.asc\""
+      ]
+    },
+    {
+      "name": "forwarded-rfc822-attachment",
+      "category": "conformant",
+      "description": "A forward as attachment: multipart/mixed with a note and a message/rfc822 whose own multipart/mixed has a base64 UTF-8 Korean body and a PDF attachment.",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 29",
+        "[1 0 0] text/plain 38",
+        "[1 0 1] application/pdf 45"
+      ],
+      "headers": [
+        "Subject 11 \"Fwd: report\"",
+        "From 32 \"Test Sender <sender@example.com>\""
+      ],
+      "text": [
+        "[0] \"Forwarding the message below.\"",
+        "[1 0 0] \"월간 보고서를 첨부합니다.\""
+      ],
+      "names": [
+        "[1 0 1] \"report.pdf\""
+      ],
+      "byteAtATime": {
+        "state": "in-progress",
+        "leaves": [
+          "[0] text/plain 29",
+          "[1 0 0] text/plain 38",
+          "[1 0 1] application/pdf 45"
+        ],
+        "headers": [
+          "Subject 11 \"Fwd: report\"",
+          "From 32 \"Test Sender <sender@example.com>\""
+        ],
+        "text": [
+          "[0] \"Forwarding the message below.\"",
+          "[1 0 0] \"월간 보고서를 첨부합니다.\""
+        ],
+        "names": [
+          "[1 0 1] \"report.pdf\""
+        ]
+      }
+    },
+    {
+      "name": "list-digest",
+      "category": "provider-style",
+      "description": "A Mailman-style MIME digest: a table of contents, a multipart/digest of two messages (one with an explicit message/rfc822 type, one relying on the digest default) and a footer part.",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 88",
+        "[1 0 0] text/plain 28",
+        "[1 1 0] text/plain 29",
+        "[2] text/plain 77"
+      ],
+      "headers": [
+        "Subject 37 \"example-users Digest, Vol 12, Issue 3\"",
+        "From 39 \"example-users-request@lists.example.org\""
+      ],
+      "text": [
+        "[0] \"Today's Topics: 1. First topic (Alice Example) 2. Second top\"…",
+        "[1 0 0] \"Body of the first message.\"",
+        "[1 1 0] \"Body of the second message.\"",
+        "[2] \"_______________________________________________ example-user\"…"
+      ]
+    },
+    {
+      "name": "cut-in-base64-attachment",
+      "category": "truncated",
+      "description": "A message cut in the middle of a base64 attachment: mid-line, inside a four-character group, with no closing delimiter and no final line break.",
+      "state": "incomplete",
+      "diagnostics": [
+        "recovered cte.base64_padding_missing [1]",
+        "incomplete multipart.close_not_found []"
+      ],
+      "leaves": [
+        "[0] text/plain 17",
+        "[1] application/zip 79"
+      ],
+      "headers": [
+        "Subject 7 \"Invoice\"",
+        "From 18 \"sender@example.com\""
+      ],
+      "text": [
+        "[0] \"Invoice attached.\""
+      ],
+      "names": [
+        "[1] \"invoice.zip\""
+      ]
+    },
+    {
+      "name": "cut-inside-header",
+      "category": "truncated",
+      "description": "A message cut inside its Subject field: no line ending, no empty line, no body.",
+      "state": "incomplete",
+      "diagnostics": [
+        "incomplete header.truncated_line []"
+      ],
+      "leaves": [
+        "[] text/plain 0"
+      ],
+      "headers": [
+        "Subject 13 \"Quarterly rep\"",
+        "From 32 \"Test Sender <sender@example.com>\""
+      ],
+      "text": [
+        "[] \"\""
+      ]
+    },
+    {
+      "name": "nul-in-text",
+      "category": "adversarial",
+      "description": "NUL bytes inside an 8-bit UTF-8 text/plain body, hiding text from C-string consumers.",
+      "state": "complete",
+      "leaves": [
+        "[] text/plain 74"
+      ],
+      "headers": [
+        "Subject 12 \"Visible text\"",
+        "From 18 \"sender@example.com\""
+      ],
+      "text": [
+        "[] \"Visible text.\\x00\\x00\\x00Hidden after three NULs. Second line with a N\"…"
+      ]
+    },
+    {
+      "name": "subject-5000",
+      "category": "adversarial",
+      "description": "A 5000-character Subject on one unfolded line, five times the 998-octet line limit.",
+      "state": "complete",
+      "leaves": [
+        "[] text/plain 33"
+      ],
+      "headers": [
+        "Subject 5000 \"LIMITED OFFER LIMITED OFFER LIMITED OFFER LIMITED OFFER LIMI\"…",
+        "From 23 \"offers@bulk.example.net\""
+      ],
+      "text": [
+        "[] \"Body after a very long subject.\""
+      ]
+    },
+    {
+      "name": "delimiter-lookalike",
+      "category": "adversarial",
+      "description": "A part body holding lines that only begin like the delimiter (suffixes, a leading space, a closing delimiter followed by text) before the real next part.",
+      "state": "complete",
+      "leaves": [
+        "[0] text/plain 158",
+        "[1] text/plain 9"
+      ],
+      "headers": [
+        "Subject 20 \"Lookalike delimiters\"",
+        "From 18 \"sender@example.com\""
+      ],
+      "text": [
+        "[0] \"The lines below only look like delimiters: --part-boundary-n\"…",
+        "[1] \"Part two.\""
+      ]
+    },
+    {
+      "name": "nested-reused-boundary-deep",
+      "category": "adversarial",
+      "description": "A multipart/alternative inside multipart/mixed that reuses the outer boundary, followed by an attachment of the outer multipart.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered multipart.nested_boundary_reused [0]",
+        "info multipart.empty [0]"
+      ],
+      "leaves": [
+        "[1] text/plain 10",
+        "[2] text/html 16"
+      ],
+      "headers": [
+        "Subject 15 \"Reused boundary\"",
+        "From 18 \"sender@example.com\""
+      ],
+      "text": [
+        "[1] \"plain text\"",
+        "[2] \"<p>html text</p>\""
+      ]
+    },
+    {
+      "name": "bulk-boundary-and-cte-typos",
+      "category": "malformed",
+      "description": "Boundary parameters damaged by a bulk mailer (the outer one ends in a stray extra quote, the inner one has a trailing space inside its quotes that the delimiter lines lack) around parts that misspell Content-Transfer-Encoding as quoted_printable, base-64 and 8bits.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered mime.parameter_invalid_escape []",
+        "recovered multipart.boundary_mismatch [0]",
+        "recovered cte.invalid_token [0 0]",
+        "recovered cte.invalid_token [0 1]",
+        "recovered cte.invalid_token [1]"
+      ],
+      "leaves": [
+        "[0 0] text/plain 37",
+        "[0 1] text/html 46",
+        "[1] text/plain 34",
+        "[2] application/pdf 45"
+      ],
+      "headers": [
+        "Subject 11 \"Your coupon\"",
+        "From 22 \"promo@bulk.example.net\""
+      ],
+      "text": [
+        "[0 0] \"Your coupon is attached. Value: €5.\"",
+        "[0 1] \"<p>Your coupon is attached. Value: €5.</p>\"",
+        "[1] \"Terms: one coupon per café visit.\""
+      ],
+      "names": [
+        "[2] \"coupon.pdf\""
+      ]
+    },
+    {
+      "name": "bulk-duplicate-content-type-multipart",
+      "category": "malformed",
+      "description": "Two Content-Type fields, a default text/plain and then the multipart/mixed the body really is, as a bulk mailer that prepends its own default writes them; the parts themselves are well-formed.",
+      "state": "complete",
+      "diagnostics": [
+        "recovered header.duplicate_singleton []"
+      ],
+      "leaves": [
+        "[] text/plain 444"
+      ],
+      "headers": [
+        "Subject 12 \"Your invoice\"",
+        "From 28 \"billing@invoices.example.net\""
+      ],
+      "text": [
+        "[] \"--dup-0001 Content-Type: text/html; charset=utf-8 Content-Tr\"…"
       ]
     }
   ]

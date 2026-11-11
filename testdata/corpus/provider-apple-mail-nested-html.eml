@@ -1,0 +1,51 @@
+From: Test Sender <sender@example.com>
+Content-Type: multipart/alternative;
+	boundary="Apple-Mail=_00000000-0000-4000-8000-000000000001"
+Mime-Version: 1.0 (Mac OS X Mail 16.0 \(3774.0.0.0\))
+Subject: Photos from the trip
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-Id: <00000000-0000-4000-8000-0000000000AA@example.com>
+To: Test Recipient <recipient@example.org>
+X-Mailer: Apple Mail (2.3774.0.0.0)
+
+
+--Apple-Mail=_00000000-0000-4000-8000-000000000001
+Content-Transfer-Encoding: 7bit
+Content-Type: text/plain;
+	charset=us-ascii
+
+Here is the photo.
+
+
+Best,
+Sender
+
+--Apple-Mail=_00000000-0000-4000-8000-000000000001
+Content-Type: multipart/mixed;
+	boundary="Apple-Mail=_00000000-0000-4000-8000-000000000002"
+
+
+--Apple-Mail=_00000000-0000-4000-8000-000000000002
+Content-Transfer-Encoding: 7bit
+Content-Type: text/html;
+	charset=us-ascii
+
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=us-ascii"></head><body style="word-wrap: break-word;">Here is the photo.<br><br></body></html>
+--Apple-Mail=_00000000-0000-4000-8000-000000000002
+Content-Disposition: inline;
+	filename=photo.jpg
+Content-Type: image/jpeg;
+	x-unix-mode=0644;
+	name="photo.jpg"
+Content-Transfer-Encoding: base64
+
+/9j/4HBsYWNlaG9sZGVyIGltYWdlIGJ5dGVzLCBub3QgYSBwaWN0dXJl/9k=
+--Apple-Mail=_00000000-0000-4000-8000-000000000002
+Content-Transfer-Encoding: 7bit
+Content-Type: text/html;
+	charset=us-ascii
+
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=us-ascii"></head><body style="word-wrap: break-word;"><br><br>Best,<br>Sender</body></html>
+--Apple-Mail=_00000000-0000-4000-8000-000000000002--
+
+--Apple-Mail=_00000000-0000-4000-8000-000000000001--

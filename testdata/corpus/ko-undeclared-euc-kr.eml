@@ -1,0 +1,12 @@
+From: security@example.co.kr
+To: recipient@example.co.kr
+Subject: Account notice
+Date: Wed, 11 Nov 2026 09:00:00 +0900
+Message-ID: <undeclared-0001@example.co.kr>
+MIME-Version: 1.0
+Content-Type: text/plain
+Content-Transfer-Encoding: 8bit
+
+회원님의 계정 보안 점검 안내
+아래 링크에서 비밀번호를 변경해 주세요.
+http://www.example.co.kr/account
