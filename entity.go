@@ -379,7 +379,10 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 				// The stage's input is counted for the body guard, which must see
 				// a CharsetReader's reader take bytes a transfer decoder already
 				// holds; see bodyGuard.progress.
-				converted, charsetErr := charsetReader(charset, leaf.countCharsetInput(body))
+				// Under Parse the input is held for a look at its first bytes;
+				// see charset_bom.go.
+				in, hold := ctx.holdBOM(leaf, body)
+				converted, charsetErr := charsetReader(charset, in)
 				// A CharsetReader may read its input while it builds a decoder,
 				// and a stop of the parse it ran into — a cancellation, or the
 				// input stalling or overrunning its budget under it — makes it
@@ -433,12 +436,21 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 					if lc := strings.ToLower(charset); (lc == "utf-8" || lc == "us-ascii") && ctx.session.fallbackCharset() != "" {
 						body = ctx.sniffFallback(lc, converted)
 					}
+					// A byte order mark the charset contradicts (ROB-080-004).
+					body = hold.body(charset, body)
 				}
 			}
-		} else if fatal == nil && local == nil && !wide && ctx.session.fallbackCharset() != "" &&
+		} else if fatal == nil && local == nil && !wide && ctx.session != nil &&
+			(ctx.session.fallbackCharset() != "" || !skipTextAttachmentDecoding) &&
 			!(skipTextAttachmentDecoding && disposition.isAttachment()) {
-			// No charset declared: the same, on the same evidence.
-			body = ctx.sniffFallback("", leaf.countCharsetInput(body))
+			// No charset declared: the same, on the same evidence, and a byte
+			// order mark is looked for (ROB-080-004).
+			in, hold := ctx.holdBOM(leaf, body)
+			body = in
+			if ctx.session.fallbackCharset() != "" {
+				body = ctx.sniffFallback("", in)
+			}
+			body = hold.body("", body)
 		}
 	}
 

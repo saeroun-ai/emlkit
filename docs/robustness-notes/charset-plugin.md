@@ -17,7 +17,7 @@ Text that conforms to its charset decodes exactly as before.
 | ROB-080-005 | Implemented | fixtures per family in `registry_test.go`; `iso2022.go` and `iso2022_test.go` |
 | ROB-080-006 | Implemented | `utf7_test.go` (`isNotIMAPModifiedUTF7`), `utf7/separation_test.go` |
 | ROB-080-008 | Implemented, plugin side | `decode_test.go` (replacement, floods, expansion, stall), `utf7_test.go` (long runs) |
-| ROB-080-004 | Partial, plugin side only | `decode_test.go` (`utf16ByteOrder`); conflict *reporting* needs the root, see Limitations |
+| ROB-080-004 | Implemented | `decode_test.go` (`utf16ByteOrder`); conflicts: `charset_bom.go`, `charset/bom_conflict_test.go`, `charset_bom_test.go`; see "BOM and declaration conflicts" |
 | ROB-080-002, -003, -007 | Not touched | |
 
 The acceptance column of the roadmap asks ROB-080-001 for a provider corpus.
@@ -198,10 +198,9 @@ Standard UTF-7 decoder changes:
   sequence. `Lookup` exposes the label-level part; replaced sequences are only
   visible as U+FFFD. `message` cannot import `charset` (the import runs the
   other way), so surfacing this as diagnostics needs a root-side hook.
-- **BOM/declaration conflicts are not detected** (`utf-16be` text starting with
-  a little-endian mark, a UTF-8 mark under a legacy label): that is
-  ROB-080-004 proper and needs the diagnostics channel. The plugin never
-  overrides an explicit byte order.
+- **BOM/declaration conflicts** are detected and healed by `message`, not by
+  the plugin; see "BOM and declaration conflicts" below. The plugin itself
+  still never overrides an explicit byte order.
 - **Unmarked UTF-16 can be guessed wrong** when it is a few characters of one
   non-Latin script with no ASCII, or one or two characters whose low byte is
   zero: the label default applies. Nothing is delivered until 128 bytes or the
@@ -232,3 +231,95 @@ under `unicode`/`ucs-2` (was always little-endian with the mark kept);
 charset, was one U+FFFD); broken framing in ISO-2022-JP and HZ; non-UTF-8
 octets and runs over 256 characters in UTF-7; a stalled input ends. Error texts
 for unknown labels changed (`unknown charset` / `unsupported charset`).
+
+## BOM and declaration conflicts (ROB-080-004)
+
+Where: the root, `charset_bom.go`, not the plugin. The hook returns only a
+reader and `message` cannot import `charset`, but the decision needs nothing
+the plugin knows: the declared label and the body's first bytes, which the
+root sees before the hook does. Under `Parse` the input of every text body's
+charset stage — a declared charset the `CharsetReader` accepted, us-ascii,
+utf-8, or no charset at all — is held for one look when the declared decoder
+first reads it. The root keeps the plugin's spellings of the UTF-8, UTF-16
+and UTF-32 labels (`bomClassLabels`); every other label is a charset without
+a mark of its own. The plugin is unchanged.
+
+What happened before (base `e58d480`, plugin imported, `Parse`, text
+`Hi 안녕` behind each mark) and what happens now under ProfileTolerant and
+ProfileForensic:
+
+| Declared | Body begins with | Before | Now | `charset.bom_mismatch` |
+|---|---|---|---|---|
+| utf-16le / utf-16be | the other UTF-16 mark | U+FFFE and byte-swapped text, silent | UTF-16 in the mark's order, mark consumed | Recovered |
+| utf-16le / utf-16be / utf-32le / utf-32be | its own mark | U+FEFF kept as text | unchanged | none |
+| utf-16 (`unicode`, `ucs-2`, ...) | either UTF-16 mark, or none | the mark decides and is consumed; unmarked text is sniffed | unchanged | none |
+| utf-16 / utf-16le | UTF-32LE mark, valid UTF-32 after it | U+0000 between the characters, silent | UTF-32 | Recovered |
+| utf-32le / utf-32be | the other UTF-32 mark | all U+FFFD, silent | UTF-32 in the mark's order | Recovered |
+| utf-32 | either UTF-32 mark, or none | the mark decides; unmarked is big-endian | unchanged | none |
+| utf-32 | a UTF-16 mark | garbage, silent | UTF-16 | Recovered |
+| utf-16, utf-16le, utf-32 | UTF-8 mark | mojibake (U+EFBB ...) or U+FFFD, silent | UTF-8, mark kept | Recovered |
+| euc-kr, iso-8859-1, windows-1252, shift_jis | UTF-8 mark | mojibake (`ï»¿Hi ì•ˆë…•`), silent | UTF-8, mark kept | Recovered |
+| the same | a UTF-16 mark | `ÿþH\0i\0...` or U+FFFD, silent | UTF-16 | Recovered |
+| utf-8 | UTF-8 mark | U+FEFF kept | unchanged | none |
+| utf-8 | a UTF-16 or UTF-32 mark | bytes kept; `bom_mismatch` (info) and `invalid_sequence` | UTF-16 / UTF-32 | Recovered |
+| utf8 (a spelling the plugin decodes) | a UTF-16 mark | U+FFFD for each invalid byte, silent | UTF-16 | Recovered |
+| us-ascii, or no charset | UTF-8 mark | the bytes as read, which is UTF-8, silent | unchanged | Info |
+| us-ascii, or no charset | a UTF-16 or UTF-32 mark | the raw UTF-16/32 bytes, silent | UTF-16 / UTF-32 | Recovered |
+
+Policy:
+
+- **The declaration is never silently replaced.** The header is not changed,
+  `Entity.WriteTo` still copies the original bytes, and every conflict is
+  reported once, at the body, with `Field: "Content-Type"`, a message naming
+  the declared charset (quoted, or "declares no charset, so US-ASCII") and
+  the mark (`UTF-8`, `UTF-16LE`, ...), and an Action that says how the body
+  was decoded.
+- **Heal only on evidence.** The body is decoded as its mark says — UTF-8 by
+  the parser itself as for a body declared utf-8 (mark kept, watched for
+  invalid sequences), UTF-16 and UTF-32 by the `CharsetReader` under the
+  labels `utf-16` and `utf-32` (mark decides the order and is consumed) — only
+  when the up to 1024 bytes after the mark are valid in the mark's encoding
+  (no stray surrogate, no code point above U+10FFFF or in the surrogate
+  range, valid UTF-8; a unit cut at the end of the look does not count), the
+  profile is not ProfileStrict, and there is a decoder. That is
+  SeverityRecovered. `FF FE 00 00` is a UTF-32LE mark only when what follows
+  is valid UTF-32LE; otherwise it is a UTF-16LE mark followed by U+0000.
+- **Otherwise keep the declaration**, mark included, at SeverityInfo, with the
+  reason in the Action: the bytes after the mark are not in its encoding (for
+  example EUC-KR after a UTF-8 mark), there is no decoder (no plugin), or
+  ProfileStrict. A UTF-8 mark under us-ascii or no charset is SeverityInfo
+  too: such a body is delivered as read, which already is UTF-8.
+- **ProfileStrict, `Read`, `ReadWithOptions`, `New`** decode exactly as
+  before. ProfileStrict reports a conflict at SeverityInfo (before, only a
+  UTF-16/32 mark under the exact label utf-8 was reported); the other entry
+  points have no session and report nothing.
+- **What the look costs.** It reads when the declared decoder first reads its
+  input, as much as that read asks for and at least four bytes; only after a
+  mark the declaration does not accept does it read ahead, up to 1028 bytes,
+  before anything is delivered. A decoder that reads nothing makes the look
+  read nothing, so the no-progress counts of the body guard are unchanged,
+  and an empty read of the source is passed on as one. Whole input and one
+  byte at a time give the same body and diagnostics (tested for every mark
+  under ten labels).
+
+The UTF-8 monitor (`charset_monitor.go`) no longer reports the mark itself;
+its earlier `charset.bom_mismatch` (message "a body declared UTF-8 begins
+with a UTF-16 or UTF-32 byte order mark") is now this one.
+
+Limitations:
+
+- A label the `CharsetReader` refuses (unknown charset) is not examined: the
+  body stays raw with `charset.unknown`, whatever its mark says.
+- A single-byte text that really begins with `ÿþ` or `þÿ` (or `ï»¿`) and
+  whose next bytes happen to be valid UTF-16 (UTF-8) would be decoded as the
+  mark says; real text does not begin that way, and the diagnostic says what
+  was done.
+- A `CharsetReader` that reads its input while it builds its decoder gets the
+  input unexamined, and nothing is reported.
+- Under `ReadOptions.SkipTextAttachmentDecoding` a text body without a charset
+  is examined only when `ParseOptions.FallbackCharset` is set, so that its
+  Content-Disposition is not interpreted for this alone.
+- The label table in the root has to follow the plugin's aliases for the
+  Unicode encodings; a new spelling added to `charset/aliases.go` reads as a
+  charset without a mark until it is added there too.
+- The UTF-7 (`+/v8`) and GB18030 (`84 31 95 33`) marks are not recognized.
