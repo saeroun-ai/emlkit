@@ -228,7 +228,13 @@ func TestReadTree_shapes(t *testing.T) {
 		"external body":              {"Content-Type: message/external-body; access-type=URL; URL=\"http://example.com/x\"\r\n\r\nContent-Type: image/png\r\n\r\n", message.CodeFeatureUnsupportedMediaType},
 	} {
 		tree, _ := readTree(t, tc.text, nil)
-		if len(tree.Diagnostics) != 1 || tree.Diagnostics[0].Code != tc.code {
+		// A signed shape defect also leaves the signature unverifiable, which
+		// is noted after it (ROB-120-006, tree_signed_test.go).
+		diags := tree.Diagnostics
+		if n := len(diags); n > 1 && tc.code == message.CodeSignedStructureInvalid && diags[n-1].Code == mail.CodeSignedUnverifiable {
+			diags = diags[:n-1]
+		}
+		if len(diags) != 1 || diags[0].Code != tc.code {
 			t.Errorf("%s: diagnostics %v, want %s", name, tree.Diagnostics, tc.code)
 		}
 	}

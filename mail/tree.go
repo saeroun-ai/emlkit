@@ -134,6 +134,36 @@ type Node struct {
 	// message.Entity.RawSpan.
 	HasSpan            bool
 	SpanStart, SpanEnd int64
+
+	// Signed is the multipart/signed node whose signed content this node is
+	// in: set on its first part and on every node under that part, to the
+	// innermost such container when signed entities nest, and nil outside any
+	// signed content. A container and its signature part are not its own
+	// signed content: they have the Signed of whatever they are in. See
+	// tree_signed.go (ROB-120-006).
+	Signed *Node
+
+	// Repaired reports that the parse did not read this entity's bytes as they
+	// stand: a diagnostic recorded against it repaired, guessed, cut, refused
+	// or lost something — any severity but SeverityInfo and
+	// SeverityUnsupported — or its reading ended with Err. RepairCodes are the
+	// codes of those diagnostics, each once, in the order the parse found
+	// them. The decoded view of a Repaired node is not what its raw bytes say.
+	Repaired    bool
+	RepairCodes []message.Code
+
+	// Unverifiable is set on a multipart/signed node when its signature cannot
+	// be checked against what the tree shows, and UnverifiableReason says why:
+	// something within the signed content or the signature part was repaired,
+	// the signed part has no raw span, the container's own framing or header
+	// was repaired, its protocol or micalg is missing or disagrees with the
+	// signature part, or what the parse reported is not whole. A signature is
+	// verified over the raw span of Children[0], never over Data; and a
+	// signature over a node that is Unverifiable, even one that checks out
+	// over the raw bytes, does not vouch for the decoded view: treat the
+	// content as unverified, never as verified with repairs.
+	Unverifiable       bool
+	UnverifiableReason string
 }
 
 // TreeOptions configures ReadTree. The zero value, and nil, are the defaults.
@@ -164,9 +194,38 @@ type Tree struct {
 	// Root is the message itself.
 	Root *Node
 	// Diagnostics are what reading the structure found about the shape of
-	// signed, encrypted, report and unsupported entities. They are apart from
-	// the parse's own diagnostics, which its ParseSession holds.
+	// signed, encrypted, report and unsupported entities, and the
+	// signed.unverifiable and dkim.view_repaired notes of tree_signed.go. They
+	// are apart from the parse's own diagnostics, which its ParseSession holds.
 	Diagnostics []message.Diagnostic
+
+	// HeaderRepaired reports that the message's own header block was not read
+	// as it stands: a diagnostic recorded against the root changed which lines
+	// form its fields, where it ends or how a field's value was read, or the
+	// block repeats a field allowed once, which the parser reads from its
+	// first occurrence and a DKIM verifier from its last (RFC 6376 section
+	// 5.4.2). HeaderRepairFields are the fields those diagnostics name, each
+	// once; a repair that names none adds nothing to it.
+	//
+	// BodyRepaired reports the same of the message's body: its framing or
+	// decoding was repaired at the root, or anything was repaired in an entity
+	// under it, or the tree was not read to its end.
+	//
+	// Either one means that a DKIM or ARC result computed from the parsed
+	// view — header fields picked from Header, a body put back together from
+	// the nodes — cannot be trusted, and that a result computed over the raw
+	// input does not vouch for what the tree shows. DKIM is verified over the
+	// input as it was received.
+	HeaderRepaired     bool
+	HeaderRepairFields []string
+	BodyRepaired       bool
+
+	// RepairsUnknown reports that the parse produced diagnostics it did not
+	// keep — a DiagnosticSink with DiscardDeliveredDiagnostics, or the
+	// Limits.MaxDiagnosticCount budget — among which a repair could be. Nothing
+	// can then be ruled out: HeaderRepaired and BodyRepaired are set, and
+	// every multipart/signed is Unverifiable.
+	RepairsUnknown bool
 }
 
 const (
@@ -182,6 +241,14 @@ const (
 // Warning or Err and the siblings are read. ReadTree returns an error only
 // when the parse was stopped (message.Entity.ParseStop), or TreeOptions.Body
 // returned one; the tree read so far is returned with it.
+//
+// The parse's diagnostics, read through e.ParseSession, are mapped to the
+// nodes they were recorded against: Node.Repaired, Node.Signed and, for each
+// multipart/signed, Node.Unverifiable; for the message, Tree.HeaderRepaired
+// and Tree.BodyRepaired. A signature is verified over the raw bytes — the
+// span of a signed part, the input for DKIM — and a repaired signed view is
+// unverified, never verified with repairs. An entity of Read, ReadWithOptions
+// or New has no session, heals nothing and reports only Err.
 func ReadTree(e *message.Entity, opts *TreeOptions) (*Tree, error) {
 	var o TreeOptions
 	if opts != nil {
@@ -200,6 +267,7 @@ func ReadTree(e *message.Entity, opts *TreeOptions) (*Tree, error) {
 	if root != nil {
 		b.classify(root)
 		b.shape(root, t)
+		b.sgIntegrity(t, err)
 	}
 	return t, err
 }
@@ -209,12 +277,16 @@ type treeBuilder struct {
 	root  *message.Entity
 	total int64
 	seen  map[[sha256.Size]byte]*Node
+	// sgByPath is each node by the MIME path the parse gave its entity,
+	// which the parse's diagnostics name; see tree_signed.go.
+	sgByPath map[string]*Node
 }
 
 // read builds the node of e and everything under it. warn is the warning e
 // came with.
 func (b *treeBuilder) read(e *message.Entity, path []int, parent *Node, warn error) (*Node, error) {
 	n := &Node{Path: path, Parent: parent, Header: e.Header, Warning: warn}
+	b.sgRegister(e, n)
 	n.MediaType, n.Params, _ = e.EffectiveContentType()
 	if n.MediaType == "" {
 		n.MediaType = "text/plain"

@@ -1,7 +1,8 @@
-# Structure view (ROB-100-001 to -005, ROB-090-004 to -006, -008, ROB-110-005, ROB-120-005)
+# Structure view (ROB-100-001 to -005, ROB-090-004 to -006, -008, ROB-110-005, ROB-120-005, -006)
 
-Issues #38, #39, #40, #42, #51. Code: `mail/tree.go`, `origin_public.go`.
-Tests: `mail/tree_test.go`.
+Issues #38, #39, #40, #42, #51. Code: `mail/tree.go`, `mail/tree_signed.go`,
+`origin_public.go`, `entity_session.go`. Tests: `mail/tree_test.go`,
+`mail/tree_signed_test.go`.
 
 ## API
 
@@ -88,3 +89,75 @@ when the part count or declared protocol/report-type does not fit, and
   them. Neither is a safe path: use `message.SafeFilename`.
 - No signature is verified and nothing is decrypted (ROB-140).
 - Content-Base is not consulted for relative references.
+
+## Signed content and repairs (ROB-120-006)
+
+A signature covers bytes as sent; the tree is the parser's healed reading of
+them. `ReadTree` now reads the parse's diagnostics through the new
+`Entity.ParseSession()` and maps each to the node of the entity it names by
+`Path` (a refused part's to its container). A diagnostic **repaired** the view
+when its severity is Recovered, Incomplete, InvalidMetadata, LimitExceeded or
+Fatal (or unknown). Info and Unsupported are observations: the bytes were read
+as they stand, or passed through raw. `limit.diagnostic_count` is not mapped.
+
+Per node:
+
+- `Repaired`, `RepairCodes`: the node's own repairs, each code once; also set
+  when its reading ended with `Err`.
+- `Signed`: the innermost `multipart/signed` whose first part this node is or
+  is under. A container and its signature part carry the `Signed` of what they
+  are in, not their own.
+
+Per `multipart/signed`: `Unverifiable` and `UnverifiableReason` (all reasons,
+`; `-joined), and one `signed.unverifiable` (Info) in `Tree.Diagnostics`, when
+
+- a node at or under the signed part, or under the signature part, is
+  `Repaired` (the reason names the first one and its codes);
+- the signed part has no raw span;
+- the container itself is `Repaired` — its framing or its own header (for a
+  root container that is the message header, which declares the boundary);
+- it does not have exactly two parts;
+- `protocol` is missing or is not the signature part's media type, or
+  `micalg` is missing, or is not `pgp-*` for `application/pgp-signature`, or
+  is `pgp-*` for `application/pkcs7-signature` / `x-pkcs7-signature`;
+- the tree was not read to its end (a stop, or the `Body` hook failed), or
+  `RepairsUnknown`.
+
+Verify over `Children[0]`'s raw span, never over `Data`. A signature that
+checks out over the raw bytes does not vouch for an `Unverifiable` view: treat
+it as unverified, never as verified with repairs. Opaque S/MIME
+(`application/pkcs7-mime`) is a leaf; its own `Repaired` says whether its
+decoded DER was healed.
+
+Per message (DKIM, ARC), on `Tree`:
+
+- `HeaderRepaired`: a repair recorded against the root that is a `header.*`,
+  `input.bom`, `input.empty` or header-budget code or lies before the root's
+  body, or a `header.duplicate_singleton` at any severity (the parser reads the
+  first occurrence, a DKIM verifier the last). `HeaderRepairFields` are the
+  fields those diagnostics name; most header repairs name none.
+- `BodyRepaired`: any other repair, at the root's body or anywhere below, an
+  `Err`, or a tree not read to its end.
+- `RepairsUnknown`: the session counted (`Completion.Diagnostics`) more
+  repairs than it kept — a sink with `DiscardDeliveredDiagnostics`, or the
+  diagnostic budget. Both flags are then set and every signed container is
+  unverifiable.
+- one `dkim.view_repaired` (Info, `Field` the signature field) when either flag
+  is set and the root header has `DKIM-Signature` or `ARC-Message-Signature`.
+
+A DKIM result computed from the parsed view cannot be trusted when either flag
+is set; verify DKIM over the input as received.
+
+The pass is one walk in document order plus a binary search per signed
+container, so nested signed entities cost no more than the tree.
+
+Changed expectation: `TestReadTree_shapes` — the two `multipart/signed` shape
+defects are now followed by `signed.unverifiable`; the test drops that note
+before counting.
+
+Open: `Read`/`ReadWithOptions`/`New` entities have no session, so only `Err`
+is known (they heal nothing that is reported). A repair outside a signed
+container — in an enclosing multipart's framing — is not counted against it
+when the container's own framing and span are intact. `multipart/encrypted`
+payloads are not marked. A header repair that names no field cannot be tied
+to one: `HeaderRepairFields` does not map locations to fields.
