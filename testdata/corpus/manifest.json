@@ -829,8 +829,8 @@
       "description": "A bulk mailer's alternative: quoted-printable text with padding after a soft break, lower-case hex, a bare-LF soft break and an escape cut by a soft break; base64 HTML in 120-column lines with embedded spaces and a trailing tab.",
       "state": "complete",
       "diagnostics": [
-        "recovered cte.qp_invalid_hex [0]",
-        "info charset.invalid_sequence [0]"
+        "info charset.invalid_sequence [0]",
+        "recovered cte.qp_invalid_hex [0]"
       ],
       "leaves": [
         "[0] text/plain 223",
@@ -843,26 +843,7 @@
       "text": [
         "[0] \"Dear customer, your order has shipped and will arrive within\"…",
         "[1] \"<html><body><p>Your order has shipped.</p><p>Track it at <a h\"…"
-      ],
-      "byteAtATime": {
-        "state": "complete",
-        "diagnostics": [
-          "info charset.invalid_sequence [0]",
-          "recovered cte.qp_invalid_hex [0]"
-        ],
-        "leaves": [
-          "[0] text/plain 223",
-          "[1] text/html 208"
-        ],
-        "headers": [
-          "Subject 22 \"Your order has shipped\"",
-          "From 23 \"orders@shop.example.net\""
-        ],
-        "text": [
-          "[0] \"Dear customer, your order has shipped and will arrive within\"…",
-          "[1] \"<html><body><p>Your order has shipped.</p><p>Track it at <a h\"…"
-        ]
-      }
+      ]
     },
     {
       "name": "bulk-cr-only-no-space",
@@ -1047,26 +1028,7 @@
       ],
       "names": [
         "[1 0 1] \"report.pdf\""
-      ],
-      "byteAtATime": {
-        "state": "in-progress",
-        "leaves": [
-          "[0] text/plain 29",
-          "[1 0 0] text/plain 38",
-          "[1 0 1] application/pdf 45"
-        ],
-        "headers": [
-          "Subject 11 \"Fwd: report\"",
-          "From 32 \"Test Sender <sender@example.com>\""
-        ],
-        "text": [
-          "[0] \"Forwarding the message below.\"",
-          "[1 0 0] \"월간 보고서를 첨부합니다.\""
-        ],
-        "names": [
-          "[1 0 1] \"report.pdf\""
-        ]
-      }
+      ]
     },
     {
       "name": "list-digest",

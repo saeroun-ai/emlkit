@@ -157,6 +157,14 @@ func Check[T ~string | ~[]byte](t *testing.T, small, large T, work func(input T)
 		pending = 0
 		return total
 	}
+	if best1 < minRun {
+		// Even repeated maxReps times the smaller run is below what the
+		// process's accounting resolves, so a ratio of it says nothing: on
+		// a loaded host it has read ten times too low (seen 2026-11-11).
+		// The counted costs above are what holds such a case.
+		t.Logf("%d bytes took %v in %d runs: too short to time, processor time not asserted", len(small), best1, reps)
+		return
+	}
 	best4 := timed(reps, large)
 	for attempt := 1; ; attempt++ {
 		if best1 > 0 && float64(best4) <= limit*float64(best1) {
