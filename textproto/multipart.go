@@ -153,6 +153,9 @@ func (r *stickyErrorReader) Read(p []byte) (n int, _ error) {
 		return 0, r.err
 	}
 	n, r.err = r.r.Read(p)
+	// A count outside 0 to len(p) is a broken reader; the buffered reader
+	// above indexes with it, so it is held to what io.Reader allows.
+	n = max(0, min(n, len(p)))
 	r.n += int64(n)
 	return n, r.err
 }

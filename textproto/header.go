@@ -259,12 +259,21 @@ func (h *Header) Del(k string) {
 	h.ends = nil
 	delete(h.m, k)
 
-	// Delete existing keys
-	for i := len(h.l) - 1; i >= 0; i-- {
-		if h.l[i].k == k {
-			h.l = append(h.l[:i], h.l[i+1:]...)
+	// Delete existing keys, in one pass: removing them one at a time moved
+	// every field after each, the square of a header of many fields.
+	// The slots given up, up to where the last field kept stood, are left
+	// holding that field, as removing one at a time left them: a Header value
+	// copied before the call shares this array.
+	kept, last := h.l[:0], -1
+	for i, f := range h.l {
+		if f.k != k {
+			kept, last = append(kept, f), i
 		}
 	}
+	for i := len(kept); i <= last; i++ {
+		h.l[i] = kept[len(kept)-1]
+	}
+	h.l = kept
 }
 
 // Has checks whether the header has a field with the specified key.

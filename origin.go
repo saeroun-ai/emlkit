@@ -143,6 +143,7 @@ type countingReader struct {
 
 func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
+	n = baClampCount(n, len(p))
 	c.n += int64(n)
 	return n, err
 }

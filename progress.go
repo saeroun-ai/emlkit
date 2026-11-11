@@ -69,8 +69,10 @@ import (
 // reader that returns (0, nil) for ever still spins wherever it did. A reader
 // that blocks, or loops inside one call without returning — a source, a
 // CharsetReader or the reader it returned — cannot be interrupted. A count
-// below zero or above len(p) breaks io.Reader and is outside this item
-// (ROB-120-001): it is passed on, neither counted nor reset.
+// below zero or above len(p) breaks io.Reader. The input's is held to that
+// range where it enters the parse (ROB-120-001; see baClampCount): below zero
+// is no bytes, which with no error is an empty read, and above len(p) is
+// len(p). A CharsetReader's reader's is passed on, neither counted nor reset.
 
 // maxConsecutiveEmptyReads is how many consecutive (0, nil) reads are a stall,
 // the same number bufio gives up after.
@@ -123,6 +125,7 @@ func (g *progressReader) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	n, err := g.r.Read(p)
+	n = baClampCount(n, len(p))
 	if err != nil {
 		g.srcErr = err
 	}

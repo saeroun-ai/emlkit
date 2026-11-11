@@ -895,7 +895,7 @@ func (e *Entity) MultipartReader() MultipartReader {
 
 	r := textproto.NewMultipartReader(src, boundary)
 	if l, ok := parent.limits(); ok && limits.Recover {
-		r.SetPreambleLimit(l.MaxPreambleBytes)
+		r.SetPreambleLimit(baPreambleLimit(l.MaxPreambleBytes))
 	}
 
 	// Every entity's header block is budgeted, and each gets the whole of every
