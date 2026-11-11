@@ -328,7 +328,7 @@ func (p *msgIDParser) result() MsgIDListResult {
 	case usable == 0 && len(p.bare) > 0:
 		// No identifier in angle brackets: the words that look like one are
 		// the identifiers.
-		p.entries = append(p.entries, p.bare...)
+		p.entries = append(p.entries, p.bvBareWithin()...)
 		p.d.recovered(message.CodeMessageIDInvalid,
 			"mail: message identifier "+quoteForMessage(p.bare[0].Raw)+" has no angle brackets",
 			"read the words holding \"@\" ("+strconv.Itoa(len(p.bare))+") as identifiers")

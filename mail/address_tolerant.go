@@ -324,6 +324,9 @@ type addrListParser struct {
 	// These repairs concern the list rather than one entry and are reported
 	// once however often they occur.
 	reportedSemicolon, reportedMissingComma, reportedNestedGroup, reportedStray bool
+
+	// bvLimited is set once the entry bound was reached and reported.
+	bvLimited bool
 }
 
 func (p *addrListParser) text(t addrTok) string { return p.s[t.start:t.end] }
@@ -349,9 +352,7 @@ func (p *addrListParser) parse() {
 			continue
 		}
 		if len(p.res.Entries) >= maxTolerantEntries {
-			p.diags.add(message.CodeAddressPartialList, message.SeverityLimitExceeded,
-				"mail: address list holds more than "+strconv.Itoa(maxTolerantEntries)+" entries",
-				"kept the first "+strconv.Itoa(maxTolerantEntries)+" entries; the rest of the value was not parsed")
+			p.bvEntryLimit()
 			break
 		}
 		next, split := p.parseEntry(i)
@@ -727,6 +728,13 @@ func (p *addrListParser) interpretBare(toks []addrTok, raw string, rep *addrRepa
 		spec, ok := p.joinSpec(local, domain)
 		if !ok {
 			continue
+		}
+		if len(p.res.Entries)+len(list) >= maxTolerantEntries {
+			// The entry bound holds inside a run no comma separates as well
+			// (ROB-120-001): what follows is not parsed.
+			p.bvEntryLimit()
+			toks = toks[:pending]
+			break
 		}
 		name, nameRepairs := p.phrase(toks[pending : k-1])
 		nameRepairs.noteTo(rep)

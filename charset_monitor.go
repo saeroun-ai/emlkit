@@ -87,7 +87,9 @@ func (m *utf8Monitor) validate(b []byte) {
 		m.carryLen++
 		b = b[1:]
 		if utf8.FullRune(m.carry[:m.carryLen]) {
-			if r, _ := utf8.DecodeRune(m.carry[:m.carryLen]); r == utf8.RuneError {
+			// A width of one is what tells a sequence that is not UTF-8 from an
+			// encoded U+FFFD, which is text (ROB-120-001).
+			if r, size := utf8.DecodeRune(m.carry[:m.carryLen]); r == utf8.RuneError && size <= 1 {
 				m.noteInvalid()
 				return
 			}
