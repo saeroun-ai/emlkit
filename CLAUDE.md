@@ -21,7 +21,7 @@ gofmt -l .                                                 # list unformatted fi
 gofmt -w .                                                 # format in place
 ```
 
-A CI workflow exists in `.github/workflows/ci.yml` (gofmt, build, vet, test, race, fuzz smoke) but has never run on GitHub as of 2026-11-11, so verification is still manual. Before committing, run `go build ./...`, `go test ./...`, and `gofmt -l .` (its output must be empty: `test -z $(gofmt -l .)`). `go vet` is clean only with `-composites=false -stdmethods=false`.
+A CI workflow exists in `.github/workflows/ci.yml` (gofmt, build, vet, test, race, fuzz smoke) and runs on every push and pull request; its first run, on 2026-11-11, was green. It does not replace local verification: before committing, run `go build ./...`, `go test ./...`, and `gofmt -l .` (its output must be empty: `test -z $(gofmt -l .)`). `go vet` is clean only with `-composites=false -stdmethods=false`.
 
 ## Host-safe verification
 
