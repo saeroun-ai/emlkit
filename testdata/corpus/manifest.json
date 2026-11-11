@@ -1192,11 +1192,13 @@
       "state": "complete",
       "diagnostics": [
         "recovered multipart.nested_boundary_reused [0]",
-        "info multipart.empty [0]"
+        "info multipart.empty [0]",
+        "recovered multipart.close_shared []"
       ],
       "leaves": [
         "[1] text/plain 10",
-        "[2] text/html 16"
+        "[2] text/html 16",
+        "[3] application/pdf 45"
       ],
       "headers": [
         "Subject 15 \"Reused boundary\"",
@@ -1205,6 +1207,9 @@
       "text": [
         "[1] \"plain text\"",
         "[2] \"<p>html text</p>\""
+      ],
+      "names": [
+        "[3] \"a.pdf\""
       ]
     },
     {
