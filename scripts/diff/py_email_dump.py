@@ -21,9 +21,15 @@ import hashlib
 import json
 import os
 import platform
+import re
 import sys
 
-SCHEMA = "emlkit-differential/1"
+SCHEMA = "emlkit-differential/2"
+
+# A raw 8-bit byte the parser could not decode is a surrogate escape, one per
+# byte. The schema carries strings as UTF-8, so each becomes U+FFFD, as the
+# emlkit driver writes each byte that is not valid UTF-8.
+SURROGATE_ESCAPE = re.compile("[\udc80-\udcff]")
 
 # Bounds on what one input may cost: its size, the depth of the part tree
 # walked, and the number of parts recorded. Past them the record says so
@@ -94,12 +100,40 @@ def date_utc(msg, compat32):
     return dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def message_id(msg):
+    """The identifier of the first Message-ID field: what its first pair of
+    angle brackets encloses, white space removed, or the trimmed value when it
+    has none; None without the field or an identifier."""
+    value = msg.get("message-id")
+    if value is None:
+        return None
+    text = str(value)
+    lt = text.find("<")
+    gt = text.find(">", lt + 1) if lt >= 0 else -1
+    if gt > lt >= 0:
+        text = "".join(text[lt + 1:gt].split())
+    else:
+        text = text.strip()
+    return text or None
+
+
 def content_id(part):
     value = part.get("content-id")
     if value is None:
         return None
     value = str(value).strip().strip("<>").strip()
     return value or None
+
+
+def clean(value):
+    """value with every string in it as the schema carries strings."""
+    if isinstance(value, str):
+        return SURROGATE_ESCAPE.sub("�", value)
+    if isinstance(value, list):
+        return [clean(v) for v in value]
+    if isinstance(value, dict):
+        return {k: clean(v) for k, v in value.items()}
+    return value
 
 
 def text_sha256(part, data, compat32):
@@ -210,13 +244,16 @@ def dump(path, policy, policy_name, max_bytes):
         out["subject"] = header_text(msg, "subject", compat32)
         out["from"] = addresses(msg, "from", compat32)
         out["to"] = addresses(msg, "to", compat32)
+        out["cc"] = addresses(msg, "cc", compat32)
+        out["reply_to"] = addresses(msg, "reply-to", compat32)
+        out["message_id"] = message_id(msg)
         out["date"] = date_utc(msg, compat32)
         out["root"] = root
     except RecursionError:
         out["error"] = "parse: RecursionError"
     except Exception as exc:
         out["error"] = "parse: " + type(exc).__name__
-    return out
+    return clean(out)
 
 
 def main():

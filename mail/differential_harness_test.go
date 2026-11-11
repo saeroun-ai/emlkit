@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/saeroun-ai/emlkit"
+	"github.com/saeroun-ai/emlkit/mail"
 )
 
 // TestDifferentialHarness checks the differential harness itself, with no
@@ -21,6 +24,9 @@ func TestDifferentialHarness(t *testing.T) {
 	}
 
 	const raw = "From: A <a@example.com>\r\n" +
+		"Cc: =?euc-kr?B?yKux5rW/?= <h@example.kr>, g: x@example.com;\r\n" +
+		"Reply-To: r@example.com\r\n" +
+		"Message-ID: <m@example.com> (comment)\r\n" +
 		"Subject: =?utf-8?q?hi_there?=\r\n" +
 		"Date: Tue, 1 Jul 2003 10:52:37 +0200\r\n" +
 		"Content-Type: multipart/mixed; boundary=B\r\n\r\n" +
@@ -28,8 +34,16 @@ func TestDifferentialHarness(t *testing.T) {
 		"--B\r\nContent-Type: application/octet-stream\r\n" +
 		"Content-Disposition: attachment; filename=x.bin\r\n" +
 		"Content-ID: <c@x>\r\nContent-Transfer-Encoding: Base64\r\n\r\naGk=\r\n" +
+		"--B\r\nContent-Type: text/plain; charset=euc-kr\r\n" +
+		"Content-Transfer-Encoding: base64\r\n\r\nvsiz5w==\r\n" +
 		"--B--\r\n"
+	// The dump installs the charset plugin for its own parse and puts back
+	// what was there: in this test binary, no CharsetReader.
+	hadReader := message.CharsetReader != nil
 	m := dfDumpEmlkit("self", []byte(raw))
+	if (message.CharsetReader != nil) != hadReader {
+		t.Fatalf("dfDumpEmlkit left message.CharsetReader changed (set before: %v)", hadReader)
+	}
 	if m.Error != "" || m.Root == nil {
 		t.Fatalf("dump: error %q, root %v", m.Error, m.Root)
 	}
@@ -42,16 +56,45 @@ func TestDifferentialHarness(t *testing.T) {
 	if m.To != nil {
 		t.Errorf("to %v, want null for an absent field", m.To)
 	}
+	// An encoded word in a legacy charset is decoded through the plugin, and
+	// a group is flattened.
+	if want := []dfAddress{{Name: "홍길동", Address: "h@example.kr"}, {Address: "x@example.com"}}; !reflect.DeepEqual(m.Cc, want) {
+		t.Errorf("cc %v, want %v", m.Cc, want)
+	}
+	if want := []dfAddress{{Address: "r@example.com"}}; !reflect.DeepEqual(m.ReplyTo, want) {
+		t.Errorf("reply-to %v, want %v", m.ReplyTo, want)
+	}
+	if m.MessageID == nil || *m.MessageID != "m@example.com" {
+		t.Errorf("message-id %v", dfJSON(m.MessageID))
+	}
 	if m.Date == nil || *m.Date != "2003-07-01T08:52:37Z" {
 		t.Errorf("date %v", dfJSON(m.Date))
 	}
 	root := m.Root
-	if root.MediaType != "multipart/mixed" || len(root.Children) != 2 || root.BodyLength != nil {
+	if root.MediaType != "multipart/mixed" || len(root.Children) != 3 || root.BodyLength != nil {
 		t.Fatalf("root %s", dfJSON(root))
 	}
 	sum := func(s string) string {
 		h := sha256.Sum256([]byte(s))
 		return hex.EncodeToString(h[:])
+	}
+	// A legacy-charset body: its bytes before charset decoding, its text
+	// after.
+	korean := root.Children[2]
+	if korean.BodyLength == nil || *korean.BodyLength != 4 || korean.BodySHA256 == nil || *korean.BodySHA256 != sum("\xbe\xc8\xb3\xe7") ||
+		korean.TextSHA256 == nil || *korean.TextSHA256 != sum("안녕") {
+		t.Errorf("euc-kr part %s", dfJSON(korean))
+	}
+	// The parse with the plugin and the one without it must frame a message
+	// alike; where they do not, the dump says so.
+	bld := &dfBuild{raw: map[string]*mail.Node{"[]": {MediaType: "text/plain"}}, nodes: map[string]*dfPart{}}
+	bld.part(&mail.Node{MediaType: "text/html"}, 0)
+	if bld.mismatchN != 1 || len(bld.mismatch) != 1 {
+		t.Errorf("a part of another type with the plugin: %d mismatches %q", bld.mismatchN, bld.mismatch)
+	}
+	// An undecoded byte is U+FFFD, one per byte, as JSON makes it.
+	if got := dfText("a\xb0\xdfb\xe2\x82"); got != "a��b��" {
+		t.Errorf("dfText %q", got)
 	}
 	text := root.Children[0]
 	if text.charset() != "utf-8" || text.BodyLength == nil || *text.BodyLength != 5 ||

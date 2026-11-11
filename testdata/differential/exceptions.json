@@ -10,6 +10,27 @@
     },
     {
       "parser": "python-email",
+      "fixture": "bulk-boundary-and-cte-typos",
+      "path": "[0 0]",
+      "field": "body_*",
+      "rationale": "emlkit reads the misspelled Content-Transfer-Encoding 'quoted_printable' as quoted-printable (cte.invalid_token) and decodes '=E2=82=AC' to the euro sign, 37 bytes; Python does not recognize the value and delivers the 43 encoded bytes, which no mail client shows."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "bulk-boundary-and-cte-typos",
+      "path": "[0 1]",
+      "field": "body_*",
+      "rationale": "emlkit reads 'base-64' as base64 (cte.invalid_token): its body is the 46 bytes of HTML the text decodes to. Python does not recognize the value and delivers the 64 bytes of base64 text."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "bulk-sloppy-encodings",
+      "path": "[0]",
+      "field": "body_*",
+      "rationale": "The bytes differ in one place, 'busin=   \\r\\ness': emlkit deletes the spaces after the '=' at the end of the line as transport padding (RFC 2045 section 6.7, rule 3), which leaves a soft line break, and gives \"business\", 223 bytes (cte.qp_invalid_soft_break); Python's binascii.a2b_qp keeps '=   \\r\\n' as text, 229 bytes. The rest of the damage, a soft break ended by a bare LF and the escape '=E2=8=' split by a soft break, decodes the same on both sides."
+    },
+    {
+      "parser": "python-email",
       "fixture": "cte-token-with-junk",
       "path": "[]",
       "field": "body_*",
@@ -50,6 +71,49 @@
       "field": "subject",
       "open": true,
       "rationale": "Both read the white-space-only line as a fold of the Subject. emlkit's header value replaces each fold and the white space around it with one space and drops an empty continuation, giving \"s\"; RFC 5322 section 3.2.2 unfolding removes only the CRLF, which Python follows, giving \"s \\t\". See Open differences in docs/robustness-notes/differential.md."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "ko-cp949-under-euc-kr",
+      "path": "[]",
+      "field": "subject",
+      "rationale": "With the charset plugin emlkit decodes 'euc-kr' as code page 949 (UHC), the superset Windows, Outlook and Korean webmail write under that label, so 똠 and 햏 decode; Python's euc_kr codec is KS X 1001 alone and turns each into U+FFFD and a stray letter. emlkit reads the mail as it was meant; the plugin does not report the widening (charset-plugin.md, Limitations)."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "ko-cp949-under-euc-kr",
+      "path": "[]",
+      "field": "text_sha256",
+      "rationale": "The bytes agree; the same codec difference in the body: CP949 gives 똠, 햏 and 뷁, Python's KS X 1001 euc_kr four U+FFFD in their place. emlkit's text is the right one."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "ko-filename-rfc2231-continuation",
+      "path": "[1]",
+      "field": "filename",
+      "rationale": "The RFC 2231 continuation splits the EUC-KR character 최 (C3 D6) between filename*1* and filename*2*. emlkit joins the segments' bytes and decodes them once, with the plugin, giving \"제안서_최종.hwp\"; Python decodes each segment on its own, so the split character and the next are U+FFFD and a stray ideograph. The charset of the first segment is the charset of the whole value; emlkit is right."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "ko-raw-8bit-subject-filename",
+      "path": "[2]",
+      "field": "filename",
+      "rationale": "A raw EUC-KR filename in a quoted parameter, on a part whose Content-Type declares charset=euc-kr. emlkit decodes it with that charset through the plugin (mime.parameter_unknown_charset, Recovered): \"계약서_초안.hwp\"; Python reads raw header bytes as UTF-8 (RFC 6532), which they are not, and gives U+FFFD with accidental letters (༭ from the bytes E0 BC AD). The declared charset is the better reading of such webmail. Part [1], which declares no charset, both leave undecoded, and they agree."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "ko-undeclared-euc-kr",
+      "path": "[]",
+      "field": "text_sha256",
+      "rationale": "The bytes agree. The body declares no charset and is EUC-KR: emlkit delivers it as read, which is not UTF-8, and Python decodes it as US-ASCII with U+FFFD for each 8-bit byte. Neither reads the Korean; emlkit does with ParseOptions.FallbackCharset (charset.missing). That emlkit reports nothing without a fallback is finding 10 of corpus.md."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "ko-utf8-labelled-euc-kr",
+      "path": "[]",
+      "field": "text_sha256",
+      "open": true,
+      "rationale": "The bytes agree: valid UTF-8 HTML, whose own meta tag says utf-8, under charset=euc-kr. Both parsers follow the label and neither text is right: emlkit's plugin decodes it as CP949 into mojibake, with no diagnostic, and Python's KS X 1001 euc_kr into other mojibake with 43 U+FFFD. The right text is the UTF-8, with charset.declaration_suspect (finding 6 of corpus.md). See Open differences in docs/robustness-notes/differential.md."
     },
     {
       "parser": "python-email",
@@ -102,10 +166,45 @@
     },
     {
       "parser": "python-email",
+      "fixture": "nested-reused-boundary-deep",
+      "path": "[]",
+      "field": "children",
+      "rationale": "The inner multipart/alternative reuses the outer boundary. emlkit reads the inner parts as parts of the outer multipart, and, finding the inner closing delimiter shared, reads the outer one on past it (multipart.close_shared), so a.pdf is its fourth part; Python ends the outer multipart there and drops a.pdf as epilogue. emlkit keeps the attachment a scanner must see."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "nested-reused-boundary-deep",
+      "path": "[0]",
+      "field": "children",
+      "rationale": "As in multipart-reused-boundary: emlkit keeps the inner multipart as a container with no part (multipart.nested_boundary_reused, multipart.empty), Python as a leaf of zero bytes (StartBoundaryNotFoundDefect)."
+    },
+    {
+      "parser": "python-email",
       "fixture": "qp-damaged",
       "path": "[]",
       "field": "body_*",
       "rationale": "emlkit keeps '=ZZ' as text (cte.qp_invalid_hex), reads '=' and a bare CR as a soft line break (cte.qp_invalid_soft_break) and keeps a final '=' (cte.qp_trailing_equals); Python's binascii.a2b_qp drops the text after the bare-CR soft break up to the next line, losing \"break\\r\\n\", and drops the final '='."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "report-dsn-bounce",
+      "path": "[1]",
+      "field": "children",
+      "rationale": "Python parses a message/delivery-status as one child per field group, each a header with an empty text/plain body; emlkit keeps the part a leaf of role report, whose field groups Node.ReportFields reads (reports.md)."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "report-mdn-receipt",
+      "path": "[1]",
+      "field": "children",
+      "rationale": "Python parses every message/* type but delivery-status as an embedded message, so the message/disposition-notification fields become the header of a message with an empty body; emlkit keeps the part a leaf of role report, read with Node.ReportFields (reports.md)."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "report-mdn-receipt",
+      "path": "[2]",
+      "field": "children",
+      "rationale": "With DescendMessages emlkit reads a text/rfc822-headers part as the header block of an embedded message, its one child with an empty body, so the returned message's fields are header fields again (embedded-messages.md); Python keeps it a text leaf."
     },
     {
       "parser": "python-email",
@@ -120,6 +219,20 @@
       "path": "[]",
       "field": "text_sha256",
       "rationale": "The bytes agree. emlkit delivers a body declared UTF-8 that is not UTF-8 as it was read and reports charset.invalid_sequence, so a consumer must validate the text; Python replaces the invalid byte with U+FFFD. emlkit re-decodes such a body only with ParseOptions.FallbackCharset."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "zh-gbk-gb18030",
+      "path": "[]",
+      "field": "subject",
+      "rationale": "With the plugin emlkit decodes 'gb2312' as GBK, as WHATWG and mail clients do, so 喆 decodes; Python's gb2312 codec is GB 2312-80 alone: it replaces 喆 with U+FFFD, loses its place and turns the three characters after it (园科技) into others (丛翱萍) and one more U+FFFD. emlkit reads the mail correctly."
+    },
+    {
+      "parser": "python-email",
+      "fixture": "zh-gbk-gb18030",
+      "path": "[0]",
+      "field": "text_sha256",
+      "rationale": "The bytes agree; the same codec difference in the gb2312 body: GBK decodes it whole, Python's GB 2312 gives two U+FFFD and garbles the characters after 喆. emlkit's text is the right one; the GB18030 part [1] agrees."
     },
     {
       "parser": "python-email",

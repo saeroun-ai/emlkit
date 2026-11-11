@@ -16,8 +16,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/saeroun-ai/emlkit"
+	"github.com/saeroun-ai/emlkit/charset"
 	"github.com/saeroun-ai/emlkit/mail"
 )
 
@@ -42,7 +44,9 @@ import (
 //	                            JSON; relative to the mail directory
 
 const (
-	dfSchema           = "emlkit-differential/1"
+	// dfSchema is the record schema. Version 2 added cc, reply_to and
+	// message_id, which a driver of version 1 does not print.
+	dfSchema           = "emlkit-differential/2"
 	dfReportSchema     = "emlkit-differential-report/1"
 	dfExceptionsSchema = "emlkit-differential-exceptions/1"
 
@@ -59,7 +63,7 @@ const (
 	dfMaxDepth = 128
 )
 
-// dfAddress is one address of a From or To field.
+// dfAddress is one address of a From, To, Cc or Reply-To field.
 type dfAddress struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
@@ -94,6 +98,9 @@ type dfMessage struct {
 	Subject       *string     `json:"subject"`
 	From          []dfAddress `json:"from"`
 	To            []dfAddress `json:"to"`
+	Cc            []dfAddress `json:"cc"`
+	ReplyTo       []dfAddress `json:"reply_to"`
+	MessageID     *string     `json:"message_id"`
 	Date          *string     `json:"date"`
 	Root          *dfPart     `json:"root"`
 }
@@ -158,7 +165,7 @@ type dfSummary struct {
 // dfFields are the field names a difference can carry, in the order they are
 // compared.
 var dfFields = []string{
-	"error", "subject", "from", "to", "date",
+	"error", "subject", "from", "to", "cc", "reply_to", "message_id", "date",
 	"media_type", "charset", "disposition", "filename", "content_id",
 	"transfer_encoding", "body_length", "body_sha256", "text_sha256", "children",
 }
@@ -205,15 +212,6 @@ func TestDifferentialPython(t *testing.T) {
 	}
 
 	exceptions := dfLoadExceptions(t, filepath.Join("..", "testdata", "differential", "exceptions.json"))
-
-	// The emlkit side is dumped without a CharsetReader, whatever the test
-	// binary has installed, so that a text body is the bytes after transfer
-	// decoding for every charset, as the schema compares them. Top-level
-	// tests run one at a time, and a parallel one only after them all, so no
-	// other test sees the change.
-	saved := message.CharsetReader
-	message.CharsetReader = nil
-	t.Cleanup(func() { message.CharsetReader = saved })
 
 	others := dfRunDriver(t, driver, files)
 	report := &dfReport{Schema: dfReportSchema, Driver: driver}
@@ -457,37 +455,51 @@ func dfRunDriver(t *testing.T, driver, files []string) map[string]*dfMessage {
 
 // dfDumpEmlkit is the emlkit driver: what message.Parse, with the default
 // options, and ReadTree, descending into embedded messages, make of data.
+//
+// It parses data twice. The first parse runs without a CharsetReader, so that
+// every body is the bytes after transfer decoding whatever its charset, as
+// body_length and body_sha256 compare them. The second runs with the charset
+// plugin, as a deployment that reads legacy-charset mail does, and gives the
+// rest: the structure, the header fields and filenames as decoded, the text
+// and the diagnostics. Each sets message.CharsetReader for its own parse, and
+// the value the caller had is put back before it returns, so no other test
+// sees the plugin: top-level tests run one at a time, and a parallel one only
+// after them all. Should the two parses frame the message differently — the
+// plugin changing the structure — the record says so in its error.
 func dfDumpEmlkit(fixture string, data []byte) *dfMessage {
-	m := &dfMessage{Schema: dfSchema, Parser: "emlkit", Fixture: fixture}
-	session, e, err := message.Parse(bytes.NewReader(data), nil)
-	if e == nil {
-		m.Error = fmt.Sprintf("parse: %v", err)
-		return m
-	}
-	tree, err := mail.ReadTree(e, &mail.TreeOptions{
-		DescendMessages: true,
-		MaxBodyBytes:    dfMaxInput,
-		MaxTotalBytes:   -1,
-	})
-	if err != nil {
-		m.Error = fmt.Sprintf("tree: %v", err)
-	}
-	if tree == nil || tree.Root == nil {
-		if m.Error == "" {
-			m.Error = "tree: no root"
-		}
-		return m
-	}
+	saved := message.CharsetReader
+	defer func() { message.CharsetReader = saved }()
+	message.CharsetReader = nil
+	raw := dfParseEmlkit(data)
+	message.CharsetReader = charset.Reader
+	dec := dfParseEmlkit(data)
 
-	nodes := map[string]*dfPart{}
-	m.Root = dfPartOf(tree.Root, nodes, 0)
-	diags := append(append([]message.Diagnostic(nil), session.Diagnostics()...), tree.Diagnostics...)
+	m := &dfMessage{Schema: dfSchema, Parser: "emlkit", Fixture: fixture, Error: dec.err}
+	if dec.tree == nil || dec.tree.Root == nil {
+		return m
+	}
+	b := &dfBuild{raw: map[string]*mail.Node{}, nodes: map[string]*dfPart{}, rootWarning: dec.warning}
+	if raw.tree != nil && raw.tree.Root != nil {
+		dfIndex(raw.tree.Root, b.raw, 0)
+	}
+	if raw.err != dec.err {
+		b.differs("error %q without the plugin", raw.err)
+	}
+	m.Root = b.part(dec.tree.Root, 0)
+	if b.mismatchN > 0 {
+		if m.Error != "" {
+			m.Error += "; "
+		}
+		m.Error += fmt.Sprintf("emlkit: the charset plugin changed the tree in %d places: %s",
+			b.mismatchN, strings.Join(b.mismatch, "; "))
+	}
+	diags := append(append([]message.Diagnostic(nil), dec.session.Diagnostics()...), dec.tree.Diagnostics...)
 	for _, d := range diags {
 		// A diagnostic belongs to the part at its path, or, when no part is
 		// there, to the nearest one above it, with its path.
 		code := string(d.Code)
 		for n := len(d.Path); n >= 0; n-- {
-			if p := nodes[fmt.Sprint(d.Path[:n])]; p != nil {
+			if p := b.nodes[fmt.Sprint(d.Path[:n])]; p != nil {
 				if n < len(d.Path) {
 					code += " " + fmt.Sprint(d.Path)
 				}
@@ -497,13 +509,20 @@ func dfDumpEmlkit(fixture string, data []byte) *dfMessage {
 		}
 	}
 
-	h := mail.Header{Header: tree.Root.Header}
+	// The header fields are decoded here, while the plugin is installed.
+	h := mail.Header{Header: dec.tree.Root.Header}
 	if h.Has("Subject") {
 		s, _ := h.Subject()
+		s = dfText(s)
 		m.Subject = &s
 	}
 	m.From = dfAddresses(&h, "From")
 	m.To = dfAddresses(&h, "To")
+	m.Cc = dfAddresses(&h, "Cc")
+	m.ReplyTo = dfAddresses(&h, "Reply-To")
+	if h.Has("Message-Id") {
+		m.MessageID = dfOptional(h.MessageIDTolerant().ID)
+	}
 	if h.Has("Date") {
 		if r := h.DateTolerant(); r.Valid {
 			s := r.Time.UTC().Format("2006-01-02T15:04:05Z")
@@ -513,28 +532,118 @@ func dfDumpEmlkit(fixture string, data []byte) *dfMessage {
 	return m
 }
 
+// dfRun is one parse of a fixture, read to its end.
+type dfRun struct {
+	session *message.ParseSession
+	tree    *mail.Tree
+	err     string
+	// warning is the unknown-charset warning message.Parse returned with
+	// the root, which ReadTree does not keep in the root's Node.Warning.
+	warning error
+}
+
+func dfParseEmlkit(data []byte) dfRun {
+	session, e, err := message.Parse(bytes.NewReader(data), nil)
+	if e == nil {
+		return dfRun{session: session, err: fmt.Sprintf("parse: %v", err)}
+	}
+	r := dfRun{session: session}
+	if message.IsUnknownCharset(err) {
+		r.warning = err
+	}
+	tree, err := mail.ReadTree(e, &mail.TreeOptions{
+		DescendMessages: true,
+		MaxBodyBytes:    dfMaxInput,
+		MaxTotalBytes:   -1,
+	})
+	r.tree = tree
+	if err != nil {
+		r.err = fmt.Sprintf("tree: %v", err)
+	}
+	if (tree == nil || tree.Root == nil) && r.err == "" {
+		r.err = "tree: no root"
+	}
+	return r
+}
+
+// dfIndex records every node of the tree under n by its path.
+func dfIndex(n *mail.Node, out map[string]*mail.Node, depth int) {
+	out[fmt.Sprint(n.Path)] = n
+	if depth >= dfMaxDepth {
+		return
+	}
+	for _, c := range n.Children {
+		dfIndex(c, out, depth+1)
+	}
+}
+
 func dfAddresses(h *mail.Header, key string) []dfAddress {
 	if !h.Has(key) {
 		return nil
 	}
 	out := []dfAddress{}
 	for _, a := range h.AddressListTolerant(key, nil).Addresses {
-		out = append(out, dfAddress{Name: a.Name, Address: a.Address})
+		out = append(out, dfAddress{Name: dfText(a.Name), Address: dfText(a.Address)})
 	}
 	return out
 }
 
+// dfOptional is s as an optional string of the schema: nil when empty.
 func dfOptional(s string) *string {
 	if s == "" {
 		return nil
 	}
+	s = dfText(s)
 	return &s
 }
 
-func dfPartOf(n *mail.Node, nodes map[string]*dfPart, depth int) *dfPart {
+// dfText is s as the schema carries a string: UTF-8, with U+FFFD in place of
+// each byte that is not part of a valid sequence. That is what JSON makes of
+// an undecoded raw 8-bit value on either side — Go's encoder replaces each
+// such byte, and the Python driver each surrogate escape, which stands for
+// one byte — so a name both parsers left undecoded compares as equal, and
+// one that only one of them decoded as different.
+func dfText(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && n == 1 {
+			b.WriteRune(utf8.RuneError)
+		} else {
+			b.WriteString(s[i : i+n])
+		}
+		i += n
+	}
+	return b.String()
+}
+
+// dfBuild turns the tree of the parse with the plugin into the schema, the
+// bodies taken from the parse without it.
+type dfBuild struct {
+	raw         map[string]*mail.Node // the parse without the plugin, by path
+	nodes       map[string]*dfPart    // what was built, by path
+	rootWarning error
+	// mismatch is where the two parses framed the message differently: the
+	// first few places, and how many there were.
+	mismatch  []string
+	mismatchN int
+}
+
+func (b *dfBuild) differs(format string, args ...any) {
+	b.mismatchN++
+	if len(b.mismatch) < 4 {
+		b.mismatch = append(b.mismatch, fmt.Sprintf(format, args...))
+	}
+}
+
+func (b *dfBuild) part(n *mail.Node, depth int) *dfPart {
+	key := fmt.Sprint(n.Path)
 	p := &dfPart{
 		Path:             append([]int{}, n.Path...),
-		MediaType:        n.MediaType,
+		MediaType:        dfText(n.MediaType),
 		Charset:          dfOptional(strings.ToLower(strings.TrimSpace(n.Params["charset"]))),
 		Disposition:      dfOptional(n.Disposition),
 		Filename:         dfOptional(n.Filename),
@@ -542,31 +651,42 @@ func dfPartOf(n *mail.Node, nodes map[string]*dfPart, depth int) *dfPart {
 		TransferEncoding: dfOptional(strings.ToLower(strings.TrimSpace(n.Header.Get("Content-Transfer-Encoding")))),
 		Defects:          []string{},
 	}
-	nodes[fmt.Sprint(n.Path)] = p
+	b.nodes[key] = p
+	r := b.raw[key]
+	switch {
+	case r == nil:
+		b.differs("no part %s without the plugin", key)
+	case r.MediaType != n.MediaType || len(r.Children) != len(n.Children):
+		b.differs("part %s is %s with %d parts without the plugin, %s with %d with it",
+			key, r.MediaType, len(r.Children), n.MediaType, len(n.Children))
+	}
 	if len(n.Children) > 0 || n.Role == mail.RoleContainer {
 		p.Children = []*dfPart{}
 		if depth < dfMaxDepth {
 			for _, c := range n.Children {
-				p.Children = append(p.Children, dfPartOf(c, nodes, depth+1))
+				p.Children = append(p.Children, b.part(c, depth+1))
 			}
 		}
 		return p
 	}
-	// A leaf whose body was read has a digest; one the parse stopped before
-	// has none, and its body is unknown.
-	if n.SHA256 == ([32]byte{}) {
-		return p
+	// The body is the parse's without the plugin: the bytes after transfer
+	// decoding. A leaf whose body was read has a digest; one the parse
+	// stopped before has none, and its body is unknown.
+	if r != nil && len(r.Children) == 0 && r.SHA256 != ([32]byte{}) {
+		size, sum := r.Size, hex.EncodeToString(r.SHA256[:])
+		p.BodyLength, p.BodySHA256 = &size, &sum
 	}
-	size, sum := n.Size, hex.EncodeToString(n.SHA256[:])
-	p.BodyLength, p.BodySHA256 = &size, &sum
-	// Without a CharsetReader the text of a part is its bytes only when its
-	// charset needs no conversion; for any other charset emlkit's text is not
-	// known here, and text_sha256 stays null.
-	if strings.HasPrefix(n.MediaType, "text/") && !n.Truncated {
-		switch p.charset() {
-		case "", "utf-8", "us-ascii":
-			p.TextSHA256 = &sum
-		}
+	// The text is the body of the parse with the plugin, which decoded it to
+	// UTF-8 — or passed it through as read, for UTF-8, US-ASCII and no
+	// charset — unless the charset is one it does not know, when the body is
+	// the undecoded bytes and emlkit has no text.
+	warning := n.Warning
+	if n.Parent == nil {
+		warning = b.rootWarning
+	}
+	if strings.HasPrefix(n.MediaType, "text/") && !n.Truncated && n.SHA256 != ([32]byte{}) && !message.IsUnknownCharset(warning) {
+		sum := hex.EncodeToString(n.SHA256[:])
+		p.TextSHA256 = &sum
 	}
 	return p
 }
@@ -599,6 +719,9 @@ func dfCompare(parser string, mine, other *dfMessage) []*dfDifference {
 	field(nil, "subject", mine.Subject, other.Subject)
 	field(nil, "from", mine.From, other.From)
 	field(nil, "to", mine.To, other.To)
+	field(nil, "cc", mine.Cc, other.Cc)
+	field(nil, "reply_to", mine.ReplyTo, other.ReplyTo)
+	field(nil, "message_id", mine.MessageID, other.MessageID)
 	field(nil, "date", mine.Date, other.Date)
 
 	var part func(a, b *dfPart, depth int)
