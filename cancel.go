@@ -87,9 +87,11 @@ import (
 // since every later read of a Body and every NextPart report the stop first.
 // What a container's reader can hold is more than its 4 KiB buffer: a
 // delimiter candidate whose white space runs past the buffer is held up to
-// Limits.MaxLineBytes plus one buffer (one buffer with that budget disabled),
-// and is delivered as body if it turns out not to be one, and a framing line
-// is accumulated to the same bound; every enclosing container, Limits.MaxMIMEDepth
+// Limits.MaxLineBytes plus one buffer — with that budget disabled, until it
+// is decided, which only the bytes already admitted bound (#64) — and is
+// delivered as body if it turns out not to be one, and a framing line is
+// accumulated to the same bound (streamed, holding nothing, with it
+// disabled); every enclosing container, Limits.MaxMIMEDepth
 // of them at most, holds its own. That is the work framing can still do in
 // that read; it is not bounded by 4 KiB per container. That is what lets the framing see
 // an enclosing scope's end the parse has already proven: the line ending after

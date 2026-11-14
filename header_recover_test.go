@@ -76,7 +76,9 @@ func TestParse_headerRecovery(t *testing.T) {
 		{
 			name: "white space only separator",
 			text: "Subject: hi\r\n \t\r\nthe body\r\n",
-			want: recovered{fields: []string{"Subject=hi"}, body: "the body\r\n", codes: []Code{CodeHeaderWhitespaceBodySeparator}},
+			// The white space only line is a fold, and unfolding keeps its
+			// white space (#63).
+			want: recovered{fields: []string{"Subject=hi \t"}, body: "the body\r\n", codes: []Code{CodeHeaderWhitespaceBodySeparator}},
 		},
 		{
 			name: "colonless line inside the header",

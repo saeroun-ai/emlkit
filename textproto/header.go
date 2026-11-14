@@ -1737,6 +1737,58 @@ func trimAroundNewlines(v []byte) string {
 	return b.String()
 }
 
+// unfoldValue unfolds v, a field's value as kept — every physical line ended
+// by "\r\n" — as RFC 5322 section 3.2.2 says: each line ending is removed and
+// nothing else (ROB-020-007, #63). The white space of a fold stays, tabs and
+// runs of spaces as written; a continuation line of white space alone keeps
+// that white space; white space at the end of a line, the last one too, stays.
+// Only the white space and folds between the colon and the value's first other
+// byte are not part of it, as they never were. A continuation line that does
+// not begin with white space is one recovery joined to the field as a line
+// that lost it (UnindentedContinuations): one space stands for the white space
+// it lost, as before, so that "from a" and "by b" do not run together. A '\r'
+// that is no line ending (one recovery found to be content) is content. A bare
+// '\n', which a value as kept does not hold, is removed as a line ending too.
+//
+// It is the unfolding of a block read with HeaderLimits.Recover;
+// trimAroundNewlines, which replaces each fold and the white space around it
+// with one space and drops an empty continuation, stays that of every other
+// read and of AddRaw.
+func unfoldValue(v []byte) string {
+	i := 0
+	for i < len(v) {
+		switch {
+		case isSpace(v[i]) || v[i] == '\n':
+			i++
+			continue
+		case v[i] == '\r' && i+1 < len(v) && v[i+1] == '\n':
+			i += 2
+			continue
+		}
+		break
+	}
+	v = v[i:]
+	var b strings.Builder
+	b.Grow(len(v))
+	for {
+		j := bytes.IndexByte(v, '\n')
+		if j < 0 {
+			b.Write(v)
+			break
+		}
+		line := v[:j]
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		b.Write(line)
+		v = v[j+1:]
+		if len(v) > 0 && !isSpace(v[0]) {
+			b.WriteByte(' ')
+		}
+	}
+	return b.String()
+}
+
 // ReadHeader reads a MIME header from r. The header is a sequence of possibly
 // continued "Key: Value" lines ending in a blank line.
 //
@@ -2057,7 +2109,7 @@ func readFields(r *bufio.Reader, scan *headerScan) (Header, error) {
 				}
 			}
 		default:
-			fs = append(fs, pend.field(len(fs)+1))
+			fs = append(fs, pend.field(len(fs)+1, scan.lim.Recover))
 		}
 		pend = pendingField{}
 	}
@@ -2571,9 +2623,15 @@ func (p *pendingField) dropLastLine() {
 }
 
 // field builds the field, once; seq is its place among the fields of its
-// block, counting from 1.
-func (p *pendingField) field(seq int) *headerField {
-	f := newHeaderField(p.key, trimAroundNewlines(p.kv[p.valueStart:]), p.kv)
+// block, counting from 1. A field read under recovery (rfc) has its value
+// unfolded as RFC 5322 section 3.2.2 says (unfoldValue); any other field as
+// it always was (trimAroundNewlines).
+func (p *pendingField) field(seq int, rfc bool) *headerField {
+	unfold := trimAroundNewlines
+	if rfc {
+		unfold = unfoldValue
+	}
+	f := newHeaderField(p.key, unfold(p.kv[p.valueStart:]), p.kv)
 	f.seq = seq
 	if p.hpExact && p.raw != nil {
 		f.orig = p.raw[:len(p.raw):len(p.raw)]

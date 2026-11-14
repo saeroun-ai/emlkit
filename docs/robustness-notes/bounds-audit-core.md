@@ -72,7 +72,7 @@ allocate past a budget, on a 64-bit or a 32-bit `int`, for the reason given.
 | `multipart.go: match`, `matchTail` | `c+elen`, `head+len(db)`, `k`, `k+1` | safe: `len(buf)-head < len(db)` is checked first; every later index is compared with `len(buf)` before use |
 | `multipart.go: scanBody` | `j-1`, `j-2`, `q-1`, `q+1`, `q+2`, `max(0, len(buf)-len(db)-2)` | safe: each guarded (`j >= 2`, `q > 0`, `q+1 < len(buf)`); a boundary longer than the buffer can never match and is never indexed (test: `boundaryLongerThanBuffer`) |
 | `multipart.go: decide`, `scanHeld`, `checkLine` | `m.end-m.endLen-(c+elen)`, `held+m.k` as `int64` against `MaxLineBytes` or the buffer size | safe: values are within one buffer plus what is held; compared as `int64`, no narrowing |
-| `multipart.go: heldCandidate.held`, `MultipartReader.out` | bytes of one framing line held outside the buffer | bounded by `MaxLineBytes`, or by one buffer with no line budget |
+| `multipart.go: heldCandidate.held`, `MultipartReader.out` | bytes of one framing line held outside the buffer | bounded by `MaxLineBytes`, or by one buffer with no line budget; with `UnboundedFramingLines` (a disabled budget under `Parse`, #64) by the candidate's length, so by `MaxInputBytes` only |
 | `multipart.go: partReader.Read` | `p.n` (`int`), `p.total` (`int64`) | safe: `p.n` is at most what the buffer holds; `bufio.Read` returns no more than asked |
 | `multipart.go: offset`, `windowAt` | `src.n` less buffered, held and restored bytes | safe: all are bytes already counted in `src.n` |
 | `multipart.go: restore`, `orphan.go: restoreReader` | `make(len(held)+n+len(pre))`; buffer size doubled, clamped at `math.MaxInt/2` | safe: sizes are bytes in hand; a restore happens only after a proof past the whole buffer, the proof is bounded by the header budgets or `crLegacyCap` (64 KiB), so the doubling stops there |
@@ -123,7 +123,7 @@ allocate past a budget, on a 64-bit or a 32-bit `int`, for the reason given.
 | `cte_tolerant.go: tolerantUU.endLine`, `uuWhole` | length character `n` (0..63), `(n+2)/3*4`, `len(data)*3/4`, `at(i)` | safe: `line` is capped at 256 bytes; `at` checks `i < len(data)`; a length character alone cannot stand for bytes the line does not hold |
 | `cte_tolerant.go: cteNotes` | `1 << k` in a `uint32`, `at [cteNoteCount]int64` | safe: `k < cteNoteCount`, which is below 32 |
 | `cte_tolerant.go: canonicalCTE`, `stripCTEComments` | header value length | safe: encoded-word decoding only for 256 bytes or fewer, comment stripping for 1024 or fewer |
-| `cte_tolerant.go: sevenBitMonitor.Read` | `p[:min(n, len(p))]` | safe |
+| `cte_tolerant.go: sevenBitMonitor.Read`, `scan` | `n = max(0, min(n, len(p)))`, `col` (`int64`), `held` | safe: `held` is a copy of what one read returned past the byte that proved a line overlong, taken once per body; `col` counts at most the body's bytes (#33) |
 | `encoding.go: lenientQPReader`, `whitespaceReplacingReader` | `pending` growth, `p[i]` for `i < n` | safe: at most 6 bytes appended per input byte and drained each read; `n` comes from this module's own readers |
 | `encoding.go: lineWrapper.Write`, `cutLine` | `maxLineLen - curLineLen` (may reach -1) | safe: a negative width cuts an empty line, which ends the line and resets the count (writer side) |
 | `mbox.go: mboxEnvelopeLen`, `readMboxEnvelope` | `limit` (at most 998, or a smaller `MaxLineBytes`), `Peek(i+1)`, `held[5:n]` | safe: `int(l)` only when `l < 998`; looks at most `limit+2` bytes, within the 4096-byte buffer |
@@ -174,6 +174,50 @@ allocate past a budget, on a 64-bit or a 32-bit `int`, for the reason given.
   but it is the same kind of sentinel mismatch as fix 2, it makes "disabled"
   less tolerant than any finite budget, and `Limits.MaxLineBytes` does not
   say so. A caller who wants no line limit should set a large finite budget.
+
+  **Follow-up 2026-11-13 (#64, independently reviewed).** Under `Parse`, `LimitDisabled` is
+  now no line limit. `ParseSession.headerLimits` sets the new
+  `textproto.HeaderLimits.UnboundedFramingLines`, and with it the reader
+  changes in three places:
+  - **Framing lines before the first part.** Preamble lines, the first
+    delimiter line, and lines after a part the input ended are read by
+    `streamFramingLine`. Each byte is matched as it passes against the
+    delimiter grammar (`delimLineMatcher`, checked exhaustively against
+    `delimiterLine`) and then consumed. A preamble line or a delimiter
+    padded with any amount of white space costs one buffer. Under Recover
+    the preamble is kept as it passes, within `SetPreambleLimit`, and taken
+    back when the line proves to be framing.
+  - **A delimiter candidate in a body**, or after a part header's malformed
+    prefix or orphan record (`checkLine`, `holdLimit`). These are held
+    until a byte decides them, with no new cap. Their memory is their
+    length: the line ending, "--", the boundary, any "--" and the run of
+    SP/HTAB. That retention is unavoidable without spooling, because a
+    candidate that fails is body and its exact white space must be
+    delivered. Only `MaxInputBytes` bounds it, and only when it is not
+    disabled itself.
+  - **The boundary length.** A boundary is not capped at 70 bytes when it
+    is read, and the line length was never what made a line a non-delimiter.
+    Before the first part, the streaming matcher matches a name of any
+    length.
+
+  `Read`, `ReadWithOptions`, `New` and a bare `textproto` reader, including
+  one given `MaxLineBytes: -1` without the flag, keep the 4 KiB framing and
+  `bufio.ErrBufferFull`. The old test is now
+  `TestParse_multipartLineBytes_disabledIsNoLimit`, which also pins `Read`.
+  Further pins:
+  - `limit_line_bytes_disabled_test.go` checks the same tree, errors and
+    diagnostics as the default budget, at chunk sizes whole, 1, 16 and 4096,
+    with CRLF, LF and CR endings. It also checks allocation that does not
+    grow from a 256 KiB to a 4 MiB line, and a held candidate stopped by
+    `MaxInputBytes`. Input failures and cancellation inside long lines
+    behave as under the default budget.
+  - `textproto/multipart_unbounded_test.go` diffs against a 1 GiB budget
+    across offsets, preamble cuts, endings and epilogue. It also checks
+    that the reader holds one buffer and no line after 4 MiB framing lines.
+
+  A boundary name longer than about one buffer is still never matched by a
+  body scan under any budget. That predates this item and is not changed
+  here.
 - (c) **Counts from a `CharsetReader`'s reader or a replaced `Entity.Body`.**
   Fix 1 holds counts to the contract where a reader enters a buffered reader
   of this module. A caller's reader that is read directly by the caller's own
@@ -187,7 +231,8 @@ allocate past a budget, on a 64-bit or a 32-bit `int`, for the reason given.
   so the count cannot overflow; the overshoot is bounded by the callers' read
   sizes.
 - (e) **Budgets a caller turns off are off.** With `LimitDisabled` the
-  preamble (after fix 2), a held framing line under a huge `MaxLineBytes`, the
+  preamble (after fix 2), a held framing line under a huge or (since #64)
+  disabled `MaxLineBytes`, the
   header block, and the diagnostics list grow with the input. That is what the
   setting asks for; `MaxInputBytes` is the backstop, and it too can be
   disabled.
@@ -216,3 +261,7 @@ allocate past a budget, on a 64-bit or a 32-bit `int`, for the reason given.
   (negative, tiny, past 32 bits) and chunking, beside a watchdog. Run it with
   `-fuzzminimizetime 1s`: the seeds are 72 KiB, and the default minimization
   of each new input otherwise takes most of a short run.
+
+## Independent #64 review (2026-11-13)
+
+Codex reviewed the streaming matcher, preamble accounting, candidate retention and legacy paths. Sixty public-API comparisons (five input shapes, three profiles, four chunk sizes) passed; they include padded delimiters and a 120-byte boundary. Fresh full unit tests, build, vet with the documented exemptions, gofmt and diff checks passed independently. Claude's textproto and core/mail race groups passed. The held-candidate and over-buffer boundary limitations above remain explicit; this review does not close the other ROB-120-001 audit gaps.

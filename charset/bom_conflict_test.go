@@ -37,11 +37,13 @@ func bomEncode32(s string, be bool) string {
 
 // TestParse_bomDeclarationConflicts pins ROB-080-004 with the plugin: a text
 // body whose byte order mark contradicts its declared charset is reported
-// once as charset.bom_mismatch, naming both; under the healing profiles it is
-// decoded as the mark says when the bytes after the mark are valid in that
-// encoding (SeverityRecovered), and otherwise as declared (SeverityInfo).
-// ProfileStrict and Read decode as declared, as before, and a mark the
-// declaration accepts is not reported.
+// once as charset.bom_mismatch, naming both. By default (#65) it is decoded as
+// declared, at SeverityInfo; where the bytes after the mark are valid in its
+// encoding the Action names that encoding. With
+// ParseOptions.RecoverCharsetDeclarations, under the healing profiles, such a
+// body is decoded as the mark says (SeverityRecovered). The rec column is
+// that opt-in outcome. ProfileStrict and Read decode as declared, with the
+// option or without, and a mark the declaration accepts is not reported.
 func TestParse_bomDeclarationConflicts(t *testing.T) {
 	const text = "Hi 안녕"
 	var (
@@ -135,41 +137,47 @@ func TestParse_bomDeclarationConflicts(t *testing.T) {
 			want = declared
 		}
 
+		// The encoding the mark names, without its byte order.
+		family := strings.TrimSuffix(strings.TrimSuffix(tc.mark, "LE"), "BE")
 		for _, p := range []message.Profile{message.ProfileTolerant, message.ProfileForensic, message.ProfileStrict} {
-			for _, one := range []bool{false, true} {
-				var src io.Reader = strings.NewReader(input)
-				if one {
-					src = iotest.OneByteReader(src)
-				}
-				s, e, err := message.Parse(src, &message.ParseOptions{Profile: p})
-				if err != nil {
-					t.Fatalf("%s/%v: Parse() = %v", name, p, err)
-				}
-				b, rerr := io.ReadAll(e.Body)
-				wantBody, wantSev := want, tc.sev
-				if p == message.ProfileStrict {
-					wantBody = declared
-					if wantSev != none {
-						wantSev = info
+			for _, optIn := range []bool{false, true} {
+				for _, one := range []bool{false, true} {
+					var src io.Reader = strings.NewReader(input)
+					if one {
+						src = iotest.OneByteReader(src)
 					}
-				}
-				if string(b) != wantBody || rerr != nil {
-					t.Errorf("%s/%v/one=%v: body (%q, %v), want %q", name, p, one, b, rerr, wantBody)
-				}
-				var got []message.Diagnostic
-				for _, d := range s.Diagnostics() {
-					if d.Code == message.CodeCharsetBOMMismatch {
-						got = append(got, d)
+					s, e, err := message.Parse(src, &message.ParseOptions{Profile: p, RecoverCharsetDeclarations: optIn})
+					if err != nil {
+						t.Fatalf("%s/%v: Parse() = %v", name, p, err)
 					}
-				}
-				switch {
-				case wantSev == none && len(got) != 0:
-					t.Errorf("%s/%v/one=%v: %v, want no charset.bom_mismatch", name, p, one, got)
-				case wantSev == none:
-				case len(got) != 1 || got[0].Severity != wantSev:
-					t.Errorf("%s/%v/one=%v: %v, want one charset.bom_mismatch at %v", name, p, one, got, wantSev)
-				case !strings.Contains(got[0].Message, tc.mark) || !strings.Contains(got[0].Message, `"`+tc.charset+`"`) && tc.charset != "" || got[0].Action == "":
-					t.Errorf("%s/%v/one=%v: %q / %q does not name %q and the mark %s", name, p, one, got[0].Message, got[0].Action, tc.charset, tc.mark)
+					b, rerr := io.ReadAll(e.Body)
+					wantBody, wantSev := want, tc.sev
+					// Two readings, and the declaration is followed.
+					twoReadings := tc.sev == rec && (p == message.ProfileStrict || !optIn)
+					if twoReadings {
+						wantBody, wantSev = declared, info
+					}
+					if string(b) != wantBody || rerr != nil {
+						t.Errorf("%s/%v/optIn=%v/one=%v: body (%q, %v), want %q", name, p, optIn, one, b, rerr, wantBody)
+					}
+					var got []message.Diagnostic
+					for _, d := range s.Diagnostics() {
+						if d.Code == message.CodeCharsetBOMMismatch {
+							got = append(got, d)
+						}
+					}
+					switch {
+					case wantSev == none && len(got) != 0:
+						t.Errorf("%s/%v/optIn=%v/one=%v: %v, want no charset.bom_mismatch", name, p, optIn, one, got)
+					case wantSev == none:
+					case len(got) != 1 || got[0].Severity != wantSev:
+						t.Errorf("%s/%v/optIn=%v/one=%v: %v, want one charset.bom_mismatch at %v", name, p, optIn, one, got, wantSev)
+					case !strings.Contains(got[0].Message, tc.mark) || !strings.Contains(got[0].Message, `"`+tc.charset+`"`) && tc.charset != "" || got[0].Action == "":
+						t.Errorf("%s/%v/optIn=%v/one=%v: %q / %q does not name %q and the mark %s", name, p, optIn, one, got[0].Message, got[0].Action, tc.charset, tc.mark)
+					case twoReadings && p != message.ProfileStrict &&
+						(!strings.Contains(got[0].Action, "also valid "+family) || !strings.Contains(got[0].Action, "RecoverCharsetDeclarations")):
+						t.Errorf("%s/%v/one=%v: Action %q does not name %s as the other reading", name, p, one, got[0].Action, family)
+					}
 				}
 			}
 		}
@@ -177,9 +185,19 @@ func TestParse_bomDeclarationConflicts(t *testing.T) {
 
 	// Every mark under every kind of label, followed by nothing, by a cut
 	// unit, by a lone surrogate, and by a run that ends past the look: the
-	// same body and diagnostics whole and a byte at a time.
+	// same body and diagnostics whole and a byte at a time, by default and
+	// with the recovery on.
+	for _, optIn := range []bool{false, true} {
+		bomChunkMatrix(t, &message.ParseOptions{RecoverCharsetDeclarations: optIn})
+	}
+}
+
+// bomChunkMatrix parses every mark under every kind of label whole and a byte
+// at a time under opts and compares the outcomes.
+func bomChunkMatrix(t *testing.T, opts *message.ParseOptions) {
+	t.Helper()
 	outcome := func(r io.Reader) string {
-		s, e, err := message.Parse(r, nil)
+		s, e, err := message.Parse(r, opts)
 		if err != nil {
 			return err.Error()
 		}
@@ -203,7 +221,7 @@ func TestParse_bomDeclarationConflicts(t *testing.T) {
 				input := "Content-Type: " + ct + "\r\n\r\n" + mark + tail
 				whole := outcome(strings.NewReader(input))
 				if bytewise := outcome(iotest.OneByteReader(strings.NewReader(input))); whole != bytewise {
-					t.Errorf("%s %q+%q: whole %q, a byte at a time %q", label, mark, tail[:min(len(tail), 4)], whole, bytewise)
+					t.Errorf("%s %q+%q optIn=%v: whole %q, a byte at a time %q", label, mark, tail[:min(len(tail), 4)], opts.RecoverCharsetDeclarations, whole, bytewise)
 				}
 			}
 		}

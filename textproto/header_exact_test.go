@@ -172,7 +172,9 @@ func TestHeaderExact_views(t *testing.T) {
 	if raw, _ := h.RawAsRead("x"); string(raw) != "X: 1\r\n" {
 		t.Errorf("RawAsRead(X) = %q", raw)
 	}
-	if got := h.Get("Subject"); got != "caf\xe9 next" {
+	// Unfolded as RFC 5322 says (#63): the line endings go, the fold's tab and
+	// the trailing space stay.
+	if got := h.Get("Subject"); got != "caf\xe9\tnext " {
 		t.Errorf("Get() = %q", got)
 	}
 
@@ -250,7 +252,9 @@ func (r *hpOneByte) Read(p []byte) (int, error) {
 
 // hpReplayCheck reads data under recovery and, when the block was read, holds
 // the header to the replay: it is intact, and WriteHeaderAsRead writes exactly
-// the bytes the read consumed.
+// the bytes the read consumed. A block a UTF-16 or UTF-32 mark begins is no
+// accepted block — the read returns no error but reads nothing — and is held
+// to that instead.
 func hpReplayCheck(t *testing.T, data []byte, size int) {
 	t.Helper()
 	br := bufio.NewReaderSize(bytes.NewReader(data), size)
@@ -259,6 +263,25 @@ func hpReplayCheck(t *testing.T, data []byte, size int) {
 		return
 	}
 	rest, _ := io.ReadAll(br)
+	if m := h.ByteOrderMark(); m.wide() {
+		// A block a UTF-16 or UTF-32 mark begins is not read (bom.go): no
+		// error and no block to replay, so it is no accepted block. Hold the
+		// read to that instead: nothing consumed or handed back, the input
+		// still whole in the reader, mark first, no field, record or prefix,
+		// and a Header that is not intact and that the replay refuses.
+		if len(unread) != 0 || !bytes.Equal(rest, data) || !bytes.HasPrefix(data, m.Bytes()) {
+			t.Fatalf("%q: %v mark, unread %q, left %q; want nothing read, the whole input left", data, m, unread, rest)
+		}
+		if h.Len() != 0 || len(h.OrphanContinuations()) != 0 || h.MalformedPrefix().Present() || h.Intact() {
+			t.Fatalf("%q: %v mark, %d fields, %d records, prefix %v, intact %v; want an unread block",
+				data, m, h.Len(), len(h.OrphanContinuations()), h.MalformedPrefix().Present(), h.Intact())
+		}
+		var b bytes.Buffer
+		if err := WriteHeaderAsRead(&b, h); err == nil || b.Len() != 0 {
+			t.Fatalf("%q: %v mark, WriteHeaderAsRead() wrote %q, %v; want a refusal and nothing written", data, m, b.Bytes(), err)
+		}
+		return
+	}
 	rest = append(unread, rest...)
 	if !bytes.HasSuffix(data, rest) {
 		t.Fatalf("%q: what is left, %q, is not the input's end", data, rest)
@@ -273,6 +296,36 @@ func hpReplayCheck(t *testing.T, data []byte, size int) {
 	}
 }
 
+// hpWideBOMInputs begin with a UTF-16 or UTF-32 byte order mark: each mark
+// alone, followed by a header in its encoding, and followed by ASCII text.
+// "\xfe\xff" alone is the input FuzzHeaderExact_replay first failed on.
+var hpWideBOMInputs = []string{
+	"\xfe\xff",
+	"\xff\xfe",
+	"\x00\x00\xfe\xff",
+	"\xff\xfe\x00\x00",
+	"\xfe\xff\x00A\x00:\x00 \x001\x00\r\x00\n\x00\r\x00\n",
+	"\xff\xfeA\x00:\x00 \x001\x00\r\x00\n\x00\r\x00\n\x00",
+	"\x00\x00\xfe\xff\x00\x00\x00A\x00\x00\x00:\x00\x00\x00\r\x00\x00\x00\n",
+	"\xff\xfe\x00\x00A\x00\x00\x00:\x00\x00\x00\r\x00\x00\x00\n\x00\x00\x00",
+	"\xfe\xffA: 1\r\n\r\nbody",
+	"\xff\xfeA: 1\nB: 2\n\nbody",
+	"\xff\xfe\x00\x00Subject: x\r\r",
+}
+
+// TestHeaderExact_wideBOM pins what a recovering read does with a block a
+// UTF-16 or UTF-32 mark begins: it is not read. No error, no field, no record,
+// nothing consumed or handed back — every byte of the input, the mark first,
+// is still in the reader — and the Header, which reports the mark, is not
+// intact and is refused by WriteHeaderAsRead, which writes nothing.
+func TestHeaderExact_wideBOM(t *testing.T) {
+	for _, s := range hpWideBOMInputs {
+		for _, size := range []int{16, 4096} {
+			hpReplayCheck(t, []byte(s), size)
+		}
+	}
+}
+
 // FuzzHeaderExact_replay holds every block a recovering read accepts to a
 // byte-exact replay, whatever its line endings and damage.
 func FuzzHeaderExact_replay(f *testing.F) {
@@ -284,6 +337,10 @@ func FuzzHeaderExact_replay(f *testing.F) {
 		"Content-Type: a/b;\nboundary=x\nplain text\n",
 		"A: 1\rbroken\r cont\rB: 2\r\r",
 	} {
+		f.Add([]byte(s))
+	}
+	// Blocks a UTF-16 or UTF-32 mark begins, which are not read (#63 review).
+	for _, s := range hpWideBOMInputs {
 		f.Add([]byte(s))
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {

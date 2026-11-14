@@ -327,8 +327,15 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   framing after it, do not depend on read chunking; decoded bodies are outside
   this item.
   ([`mbox.go`](../mbox.go))
-- **Folded values** are unfolded and whitespace-collapsed for the parsed value;
-  the original raw bytes are preserved separately. ([`textproto/header.go`](../textproto/header.go) · `trimAroundNewlines`)
+- **Folded values** are unfolded as RFC 5322 section 3.2.2 says under `Parse`
+  with every profile but `ProfileStrict`: line endings (CRLF, and the bare LF
+  and CR recovery accepts) are removed and the fold's white space kept; the
+  white space after the colon is not part of the value, and a line that lost
+  its indentation is joined with one space. `Read`, `ReadWithOptions`,
+  `ProfileStrict` and `AddRaw` keep the legacy whitespace-collapsed value.
+  The original raw bytes are preserved separately either way.
+  ([`textproto/header.go`](../textproto/header.go) · `unfoldValue`,
+  `trimAroundNewlines`; issue #63)
 - **Empty and header-only input** is framed identically under every `Profile`
   and `Compatibility` (`ROB-010-001`). An empty input, an input that is only the
   empty line, and complete CRLF-terminated fields (folded ones included) ended
@@ -390,7 +397,8 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   that failure. A `\r` before a line that is exactly a delimiter makes it one —
   the inherent reading of CR-delimited input. White space before the ending may
   run to `MaxLineBytes`; with no line budget the line must fit in 4 KiB, as
-  before. That budget is charged on the candidate's valid prefix however the
+  before, on the legacy entry points, while a disabled `MaxLineBytes` under
+  `Parse` reads it at any length (#64). That budget is charged on the candidate's valid prefix however the
   input arrives, so one past it is refused before the byte that breaks it. Under
   `Parse`, `multipart.bare_lf`, `multipart.bare_cr` and
   `multipart.mixed_line_endings` are recorded once per parse, and
@@ -479,15 +487,16 @@ preserved (see [Behavioral guarantees](#behavioral-guarantees)).
   ([`charset/charset.go`](../charset/charset.go) · `charsets`)
 - **Missing or wrong charset declarations** are not guessed by default.
   Under `Parse` (not `ProfileStrict`), a text body whose byte order mark
-  contradicts the declared label is decoded as the mark says when the bytes
-  after it fit (`charset.bom_mismatch`; [`charset_bom.go`](../charset_bom.go),
+  contradicts the declared label, or that is UTF-8 under a legacy label, is
+  decoded as declared and reported at Info (`charset.bom_mismatch`,
+  `charset.declaration_suspect`), naming the other encoding; only with
+  `ParseOptions.RecoverCharsetDeclarations` is it decoded as the bytes say
+  (issue #65; [`charset_bom.go`](../charset_bom.go),
   [`charset-plugin.md`](robustness-notes/charset-plugin.md)). With
   `ParseOptions.FallbackCharset`, a text body that declares no charset, UTF-8
   or US-ASCII and is not UTF-8 is decoded with the fallback
   (`charset.missing`, `charset.declaration_suspect`;
-  [`charset_monitor.go`](../charset_monitor.go)). Pending:
-  charset-declaration healing is being changed in another change; this entry
-  describes the code before it.
+  [`charset_monitor.go`](../charset_monitor.go)).
 - **Malformed encoded-words** are decoded as far as they go and the rest of
   the value is decoded around them; a word whose charset has no decoder is
   left as written. In parameter values the same decoder is used, and text
@@ -778,19 +787,21 @@ These are deliberate boundaries, each with a reason.
   can read the raw body again, and `DecodedBody` decodes it again under the
   same per-body budgets ([`raw-source.md`](robustness-notes/raw-source.md)).
   ([`limit_body.go`](../limit_body.go))
-- **Two budgets in `Limits` are resolved but not consulted.** Beside the
+- **Two budgets in `Limits` bound the spool, not the parse.** Beside the
   fifteen above, `MaxMessageDepth` (above), `MaxPreambleBytes` (the preamble a
   healing multipart iterator keeps, and how far boundary inference and the
   look-ahead past a shared close read; `limit.preamble_bytes`) and
   `MaxEpilogueBytes` (what `MultipartEpilogue` keeps; `limit.epilogue_bytes`)
   are enforced ([`multipart-recovery.md`](robustness-notes/multipart-recovery.md),
   [`nested-boundaries.md`](robustness-notes/nested-boundaries.md)).
-  `MaxMemorySpoolBytes` and `MaxDiskSpoolBytes` are validated and reported by
-  `ParseSession.Limits`, and nothing reads them: `limit.memory_spool_bytes` is
-  never emitted, and `mail.Spool` takes its quotas from `SpoolOptions`, which
-  is where `limit.disk_spool_bytes` comes from. The doc comment of `Limits`
-  in `limits.go` still says only fifteen are enforced.
-  ([`limits.go`](../limits.go), [`mail/spool.go`](../mail/spool.go))
+  `MaxMemorySpoolBytes` and `MaxDiskSpoolBytes` are applied by `mail.Spool`
+  to the tree `mail.ReadTree` reads from the parse, beside the spool's own
+  `SpoolOptions` quotas; the smaller room wins (#43). A body that spills from
+  memory goes to disk whole and is not reported, so `limit.memory_spool_bytes`
+  is never emitted; a body cut on disk records `limit.disk_spool_bytes` in
+  `Spool.Diagnostics()`. The parse itself retains nothing under them.
+  ([`limits.go`](../limits.go), [`mail/spool_limits.go`](../mail/spool_limits.go),
+  [`spool.md`](robustness-notes/spool.md))
 
 ## Behavioral guarantees
 

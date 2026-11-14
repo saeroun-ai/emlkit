@@ -48,7 +48,7 @@ discard what it is given. Finally it picks one of five consumers:
 
 | consumer | what it does |
 | --- | --- |
-| drain | reads part of the root body sometimes, then `Entity.Drain` twice |
+| drain | reads part of the root body, or of a multipart root's first part, sometimes, then `Entity.Drain` twice |
 | walk | `Entity.Walk`, reading every leaf body; afterwards, what each walked message left of its carrier |
 | tree | `mail.ReadTree` with random `MaxBodyBytes`, `MaxTotalBytes`, `DescendMessages` |
 | spool | the same, with a `mail.Spool` with small quotas, in a `t.TempDir()`, or an in-memory `BlobStore` whose `Create` sometimes fails; every kept body is read back |
@@ -82,8 +82,9 @@ For every pass:
   and offsets not negative, at most `MaxDiagnosticCount` kept and delivered,
   as many kept as delivered unless the sink stopped the parse, none kept when
   discarded, no more kept than counted;
-- a second `Drain` after a clean one finds nothing (except under Strict, see
-  below);
+- a `Drain` that returns nil leaves no stop, and a second `Drain` after it
+  returns nil, under every profile; after a `Drain` that returned an error
+  while the parse was stopped, a second returns the identical stop;
 - trees: children name their parent and extend its path; containers hold no
   body; `Data ≤ Size`, `Truncated` true exactly when Data is short, Data
   within `MaxBodyBytes` and `MaxTotalBytes`, the digest that of Data kept
@@ -105,6 +106,13 @@ n-th diagnostic. They are not compared when:
 - a budget is small, since budgets are spent as bytes are read and readers
   fetch ahead;
 - the profile is Strict (see the open findings).
+
+This applies only when the spool's `Body` ended `ReadTree` in the middle of
+the same body in both readings. That means the hook returned an error and
+`ReadTree` returned that very value, compared by identity, with no parse stop
+(`skAbandonment`). The rest of the outcome is still compared exactly. The
+diagnostics only need one list to begin with the other, with the extra ones at
+or under that body (`skAbandonedAlike`, iteration 202279 below).
 
 Every 100 iterations (1000 in long mode), and at the end, it checks
 resources. Goroutines must return to the count before the first iteration,
@@ -189,8 +197,8 @@ with parses a sink stops compared as well, 185,691 with none.
    counted in `Completion`, and how much epilogue was left depended on the
    chunking. Under recovery, an entity whose parts were read to their end
    now gets an iterator at its end, which reports the parse's stop if there
-   is one. Strict keeps the earlier behavior, and so does a body the caller
-   replaced. `TestSoak_drainAgain`.
+   is one. A body the caller replaced keeps the earlier behavior.
+   `TestSoak_drainAgain`. Strict kept it too until 2026-11-13 (see fix 10).
 3. **`Drain` left a carrier unread** (iteration 91). Under
    `WalkEmbeddedMessages`, when the embedded message could not be read,
    nothing read the carrier's body, and `Completion` stayed `in-progress`
@@ -257,6 +265,63 @@ with parses a sink stops compared as well, 185,691 with none.
    itself a multipart had a span; read three bytes at a time it had none, and
    the tree reported `signed.unverifiable`. The span of each child is now
    taken after the iterator's next call. `TestSoak_signedSpan`.
+10. **Drain's verdict after the walk, and Strict's second Drain** (#10,
+    #70; seed 1300007 in the default pass, iterations 41, 430, 707 and 11
+    more in 3,000, all Strict). Strict's second `Drain` framed the epilogue
+    again and returned the iterator's `NextPart: EOF` after a first that
+    returned nil; an epilogue holding a delimiter line made up parts. The
+    end-of-parts iterator of fix 2 now applies under every profile, and
+    returns the failure the parts ended with, if any. Separately, under
+    Strict the walk does not read what an embedded message left of its
+    carrier, `Drain` does after the walk, and a stop that arose there was
+    lost: `Drain` returned nil, or a Strict refusal that had ended the walk
+    first. It now returns the parse's stop whenever there is one. The drain
+    mode's oracle now asks Strict for a second Drain too, and requires a nil
+    `Drain` to leave no stop. `completion_drain_test.go`.
+    A Drain after the caller had taken a multipart's first part and read some
+    of it (found in review, not by the soak, whose partial read only touched
+    a leaf root) framed the body anew from inside that part: Strict returned
+    `NextPart: EOF`, the healing profiles nil with the parse `in-progress`.
+    The iterator a caller began is now resumed and its current part finished
+    first, and a part gone past unread is never counted read
+    (`drain_resume.go`, `completion_resume_test.go`, completion.md). The
+    drain mode's partial read now also reads part of a multipart root's first
+    part; 20,000 iterations pass.
+
+### Resolved follow-ups (2026-11-14)
+
+- **A 7bit violation noted or not by how far a spool got** (seed 1300007,
+  iteration 202279, found 2026-11-13 by a 60 s run; present at `ef192b2`).
+  Triaged and independently reviewed 2026-11-14 (#43): the oracle was wrong, not the spool. The
+  store fails at its first `Create` (`store=true/1`). With `MemoryBytes: -1`,
+  `Spool.Body` has read one decoded byte to learn the body is not empty, and
+  then `ReadTree` ends with the store's error, leaving the
+  `text/calendar; charset=ks_c_5601-1987` body unfinished. The charset decoder
+  above the 7bit monitor reads ahead of that byte by one read of the input.
+  The monitor reports the first 8-bit byte when it hands it on, so read whole,
+  `cte.seven_bit_violation` is already recorded, and read 16 bytes at a time
+  it is not. Drained, both readings record the same diagnostics. When both
+  readings let go of the same body through the spool's Body error,
+  `skAbandonedAlike` now requires an identical tree, counters and stop. One
+  diagnostic list must begin with the other, and every extra diagnostic must
+  be at or under the abandoned body's path. Pinned by
+  `TestSoak_abandonedSpoolBody`
+  (`testdata/soak/spool-store-failure-abandoned-body.eml`). The iteration
+  passes. `TestSoakOracle_abandonedAlike` and
+  `TestSoakOracle_abandonment` reject changed tree/counters/order/path and
+  require an actual Body-hook error with no parse stop.
+- **The walk consumer reads everything and a body is not counted read**
+  (seed 1300007, iteration 114063, found 2026-11-14). The carrier of an
+  embedded leaf that ended on its own line budget was left unread; the new
+  abandonment accounting correctly refused to count the late read of bytes
+  already discarded. Earlier success depended on read-ahead. `Walk` now
+  reads a consumed embedded message's carrier rest before moving on, under
+  every profile; a skipped message remains unread. This also fixes Strict
+  carrier rests larger than a read-ahead. Pinned by `TestWalkCarrierRest`
+  and `TestSoak_walkCarrierRest`, with the original fixture at
+  `testdata/soak/walk-carrier-rest-after-cut-leaf.eml`. The exact iteration,
+  fresh full units and 30 s / 172,985 seeded iterations pass. The completion
+  oracle is unchanged. See [completion.md](completion.md).
 
 ### Open
 
@@ -276,11 +341,6 @@ with parses a sink stops compared as well, 185,691 with none.
   much of the input was fetched, and what follows a closing delimiter is not
   read, so they depend on buffering; a budget is spent as bytes are read, so
   a parse that runs into one may do so at another place.
-- Strict's second `Drain` still frames the epilogue (see fix 2), so the soak
-  does not ask Strict for a second Drain.
-- `Drain` returns nil when its walk reached the end, even when the parse was
-  stopped while it read the last body (iterations 111, 272). `Completion`
-  and later scopes report the stop. This is noted, not changed.
 
 ## Limits
 

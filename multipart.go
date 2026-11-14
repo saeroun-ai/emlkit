@@ -85,6 +85,18 @@ type multipartReader struct {
 	// epi is what this iterator knows of its epilogue; see
 	// multipart_epilogue.go.
 	epi epiState
+
+	// current is the part this iterator last returned, until it moves on;
+	// handed counts the parts it returned; abandoned reports that what it
+	// iterates was gone past unread, so nothing it returns counts as read.
+	// Kept under Parse only; see drain_resume.go.
+	current   *Entity
+	handed    int
+	abandoned bool
+
+	// uc is the look of unselected_ct.go over the body this iterator frames,
+	// finished when the iteration ends with io.EOF; nil otherwise.
+	uc *ucScan
 }
 
 // NextPart implements MultipartReader. It is nextPart, counted for
@@ -92,11 +104,36 @@ type multipartReader struct {
 // of it returns io.EOF or fails for good.
 func (r *multipartReader) NextPart() (*Entity, error) {
 	e, err := r.nextPart()
+	if e == nil && err == io.EOF && r.uc != nil {
+		// After everything the iteration recorded, its end included. A sink
+		// that stopped the parse on it makes the stop this call's error, and
+		// every later call's, as for any other diagnostic of the iteration.
+		if stop := r.uc.closeParts(r.r); stop != nil {
+			err = stop
+		}
+	}
 	if s := r.parent.session; s != nil {
 		s.prog.touched.Store(true)
+		if e != nil {
+			r.current = e
+			r.handed++
+			if r.abandoned {
+				e.abandon()
+			}
+		}
 		if e == nil && (err == io.EOF || r.fatal != nil || r.skFailed != nil || s.fatalErr() != nil) && r.owner != nil && !r.owner.partsEnded {
 			r.owner.partsEnded = true
-			s.prog.multipartsRead.Add(1)
+			if err != io.EOF {
+				r.owner.partsErr = err
+			}
+			if !r.abandoned {
+				s.prog.multipartsRead.Add(1)
+			}
+			// Nothing is left to resume; see drain_resume.go.
+			r.current = nil
+			if r.owner.active == r {
+				r.owner.active = nil
+			}
 		}
 	}
 	return e, err
@@ -133,6 +170,11 @@ func (r *multipartReader) nextPart() (*Entity, error) {
 		return nil, fatal
 	}
 
+	// The reader is about to discard what is left of the part last returned;
+	// see drain_resume.go.
+	if r.parent.session != nil {
+		r.leaveCurrent()
+	}
 	p, err := r.r.NextPart()
 
 	// The delimiter lines the reader proved since this iterator last looked —

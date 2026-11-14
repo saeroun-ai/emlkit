@@ -104,7 +104,7 @@
         "[] text/plain 11"
       ],
       "headers": [
-        "Subject 1 \"s\""
+        "Subject 3 \"s\""
       ],
       "text": [
         "[] \"body text\""
@@ -1220,7 +1220,8 @@
       "description": "Two Content-Type fields, a default text/plain and then the multipart/mixed the body really is, as a bulk mailer that prepends its own default writes them; the parts themselves are well-formed.",
       "state": "complete",
       "diagnostics": [
-        "recovered header.duplicate_singleton []"
+        "recovered header.duplicate_singleton []",
+        "info header.unselected_multipart []"
       ],
       "leaves": [
         "[] text/plain 444"

@@ -27,6 +27,13 @@ import (
 // from a defer placed right after NewSpool, whatever happens in between.
 
 // SpoolOptions configures a Spool. The zero value is usable.
+//
+// The quotas count everything the spool holds, whatever tree it came from.
+// The bodies of a tree ReadTree read from a parse (message.Parse and its
+// variants) are also bounded by that parse's Limits.MaxMemorySpoolBytes and
+// MaxDiskSpoolBytes, counted for that tree: the smaller room applies, and a
+// LimitDisabled budget leaves the quota here alone. An entity of Read,
+// ReadWithOptions or New has no parse budget, nor does a Node built by hand.
 type SpoolOptions struct {
 	// MemoryBytes is how many bytes of bodies the spool keeps in memory in
 	// all. A body that would pass it goes to disk whole, or to the Store.
@@ -106,17 +113,41 @@ func NewSpool(opts *SpoolOptions) *Spool {
 // quota and the rest is read and dropped, so the tree's sizes and digests are
 // still those of the whole body. A failure of the storage ends ReadTree with
 // that error; nothing is left behind that Close does not remove.
+//
+// For a node of a tree ReadTree built from a parse, the parse's
+// Limits.MaxMemorySpoolBytes and MaxDiskSpoolBytes bound the bodies of that
+// tree together, beside the spool's own quotas: whichever has less room left
+// applies (spool_limits.go). A body that does not fit in memory goes to disk
+// whole; that loses nothing and is not reported.
 func (s *Spool) Body(n *Node, r io.Reader) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return errors.New("mail: spool is closed")
 	}
-	// One byte short of the largest quota, so that the "one byte more" read
-	// below cannot overflow.
-	memRoom := min(max(s.opts.MemoryBytes-s.mem, 0), math.MaxInt64-1)
+	memRoom := max(s.opts.MemoryBytes-s.mem, 0)
 	diskRoom := max(s.opts.DiskBytes-s.disk, 0)
 	s.mu.Unlock()
+	// The parse's budgets, when it has any, bound the room further.
+	var budget *spoolBudget
+	if n != nil {
+		budget = n.budget
+	}
+	pm, pd := budget.room()
+	if pm >= 0 && pm < memRoom {
+		memRoom = pm
+	}
+	diskByParse := false
+	if pd >= 0 && pd < diskRoom {
+		diskRoom, diskByParse = pd, true
+	}
+	// One byte short of the largest quota, so that the "one byte more" read
+	// below cannot overflow.
+	memRoom = min(memRoom, math.MaxInt64-1)
+	cutMsg := "mail: the spool's disk quota is spent"
+	if diskByParse {
+		cutMsg = "mail: the parse's Limits.MaxDiskSpoolBytes is spent"
+	}
 
 	e := &spoolEntry{}
 	// One byte more than memory has room for says whether the body fits. A
@@ -130,13 +161,14 @@ func (s *Spool) Body(n *Node, r io.Reader) error {
 		s.mem += e.size
 		s.entries[n] = e
 		s.mu.Unlock()
+		budget.charge(e.size, 0)
 		return nil
 	}
 
 	// Past the memory quota: the whole body goes to a blob.
 	if diskRoom <= 0 {
 		e.cut = true
-		s.note(n, message.CodeLimitDiskSpoolBytes, "mail: the spool's disk quota is spent", "kept nothing of this body; its size and digest are still those of the whole body")
+		s.note(n, message.CodeLimitDiskSpoolBytes, cutMsg, "kept nothing of this body; its size and digest are still those of the whole body")
 		s.mu.Lock()
 		s.entries[n] = e
 		s.mu.Unlock()
@@ -148,22 +180,26 @@ func (s *Spool) Body(n *Node, r io.Reader) error {
 	}
 	e.key = key
 	written, werr := copyLimited(w, io.MultiReader(&buf, r), diskRoom)
-	cerr := w.Close()
-	if werr == nil {
-		werr = cerr
+	// The writer's Close decides whether the blob holds what was written,
+	// whatever else ended the copy. The errors the copy itself makes are top
+	// level values, known by identity: an error of the caller's writer is
+	// never looked into (see internal/errgraph).
+	if cerr := w.Close(); cerr != nil {
+		return fmt.Errorf("mail: spool: %w", cerr)
 	}
-	if werr != nil && !errors.Is(werr, errSpoolQuota) && !isReadError(werr) {
+	if werr != nil && werr != errSpoolQuota && !isReadError(werr) {
 		return fmt.Errorf("mail: spool: %w", werr)
 	}
 	e.size = written
-	if errors.Is(werr, errSpoolQuota) {
+	if werr == errSpoolQuota {
 		e.cut = true
-		s.note(n, message.CodeLimitDiskSpoolBytes, "mail: the spool's disk quota is spent", "kept the first bytes of this body, up to the quota")
+		s.note(n, message.CodeLimitDiskSpoolBytes, cutMsg, "kept the first bytes of this body, up to the quota")
 	}
 	s.mu.Lock()
 	s.disk += written
 	s.entries[n] = e
 	s.mu.Unlock()
+	budget.charge(0, written)
 	return nil
 }
 
@@ -190,8 +226,15 @@ func isReadError(err error) bool {
 	return ok
 }
 
+// errSpoolWriteCount is a writer's Write that reported writing fewer than no
+// bytes or more than it was given.
+var errSpoolWriteCount = errors.New("invalid write result")
+
 // copyLimited copies r to w, at most limit bytes, and reports errSpoolQuota
-// when r held more. What is past the limit is read and dropped.
+// when r held more. What is past the limit is read and dropped. A Write that
+// takes fewer bytes than it was given without an error is io.ErrShortWrite,
+// and one that reports an impossible count errSpoolWriteCount: the blob does
+// not hold the body, and the copy ends rather than keep a body with a hole.
 func copyLimited(w io.Writer, r io.Reader, limit int64) (int64, error) {
 	var written int64
 	buf := make([]byte, 32<<10)
@@ -206,9 +249,15 @@ func copyLimited(w io.Writer, r io.Reader, limit int64) (int64, error) {
 			}
 			if len(chunk) > 0 {
 				m, werr := w.Write(chunk)
+				if m < 0 || m > len(chunk) {
+					return written, errSpoolWriteCount
+				}
 				written += int64(m)
 				if werr != nil {
 					return written, werr
+				}
+				if m < len(chunk) {
+					return written, io.ErrShortWrite
 				}
 			}
 		}
@@ -292,7 +341,11 @@ func (s *Spool) Usage() (memory, disk int64) {
 }
 
 // Diagnostics returns what the spool's quotas cut: one limit.disk_spool_bytes
-// diagnostic for each body cut or not kept, at that body's path.
+// diagnostic for each body cut or not kept, at that body's path, whether
+// SpoolOptions.DiskBytes or the parse's Limits.MaxDiskSpoolBytes cut it (the
+// message says which). A body that goes to disk because memory is spent is
+// kept whole and reported by nothing; limit.memory_spool_bytes is not
+// recorded.
 func (s *Spool) Diagnostics() []message.Diagnostic {
 	s.mu.Lock()
 	defer s.mu.Unlock()

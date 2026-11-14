@@ -131,8 +131,9 @@ func (m *utf8Monitor) noteInvalid() {
 //     bytes in a charset nothing names (with ParseOptions.FallbackCharset the
 //     same code is SeverityRecovered and the body is decoded);
 //   - declared us-ascii: charset.declaration_suspect at SeverityInfo, likewise;
-//   - read as UTF-8 against a legacy declaration (cdDecideUTF8):
-//     charset.invalid_sequence, with a message that says so.
+//   - read as UTF-8 against a legacy declaration (cdDecideUTF8, only under
+//     ParseOptions.RecoverCharsetDeclarations): charset.invalid_sequence,
+//     with a message that says so.
 //
 // Valid UTF-8 under no declaration or under us-ascii is not reported: it is
 // delivered as it was read, which is what it is.
@@ -389,4 +390,11 @@ func (s *ParseSession) fallbackCharset() string {
 		return ""
 	}
 	return s.cfg.fallbackCharset
+}
+
+// recoverCharset reports whether a text body whose bytes contradict its
+// declared charset is decoded as they say: ParseOptions.RecoverCharsetDeclarations,
+// outside ProfileStrict. It is false for no session.
+func (s *ParseSession) recoverCharset() bool {
+	return s != nil && s.cfg.recoverCharset && s.Profile() != ProfileStrict
 }

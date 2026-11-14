@@ -219,6 +219,7 @@ const (
 	CodeCTEIllegalForMultipart    Code = "cte.illegal_for_multipart"
 	CodeCTEIllegalForMessage      Code = "cte.illegal_for_message"
 	CodeCTESevenBitViolation      Code = "cte.seven_bit_violation"
+	CodeCTESevenBitOverlongLine   Code = "cte.seven_bit_overlong_line"
 	CodeCTEBase64Junk             Code = "cte.base64_junk"
 	CodeCTEBase64PaddingMissing   Code = "cte.base64_padding_missing"
 	CodeCTEBase64PaddingInvalid   Code = "cte.base64_padding_invalid"

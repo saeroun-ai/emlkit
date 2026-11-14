@@ -181,6 +181,69 @@ func TestParse_nestedBoundaries(t *testing.T) {
 	}
 }
 
+// TestParse_nestedBoundariesLongTail reads, whole and in 1-, 16- and
+// 4096-byte reads, a long line after a closing delimiter line a nested
+// multipart shared (#71): the outer parts after it, the trailing input and the
+// diagnostics are the same however the input arrives. The work is held in
+// textproto (TestMultipartReader_ResumeAfterCloseLinear).
+func TestParse_nestedBoundariesLongTail(t *testing.T) {
+	const n = 1 << 15
+	shared := "Content-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b--\r\n"
+	tests := []struct {
+		name, text string
+		leaves     []string
+		trailing   string
+	}{
+		// The issue's input: nothing but a long line follows, which stays
+		// the trailing input, byte for byte.
+		{"no delimiter after it", shared + strings.Repeat("x", n), nil, strings.Repeat("x", n)},
+		{"a part follows", shared + "X: " + strings.Repeat("y", n) + "\r\n\r\ntwo\r\n--b\r\n" + nbLeaf("application/pdf", "pdf") + "\r\n--b--\r\n",
+			[]string{"[1] text/plain|two", "[2] application/pdf|pdf"}, ""},
+	}
+	for _, tc := range tests {
+		var want string
+		for _, size := range []int{0, 1, 16, 4096} {
+			var src io.Reader = strings.NewReader(tc.text)
+			if size > 0 {
+				src = &chunkReader{s: tc.text, n: size}
+			}
+			s, e, err := Parse(src, &ParseOptions{Profile: ProfileForensic})
+			if e == nil {
+				t.Fatalf("%s/%d: Parse() = %v", tc.name, size, err)
+			}
+			var leaves []string
+			werr := e.Walk(func(path []int, p *Entity, err error) error {
+				if err != nil || p.MultipartReader() != nil {
+					return err
+				}
+				mt, _, _ := p.EffectiveContentType()
+				b, rerr := io.ReadAll(p.Body)
+				leaves = append(leaves, fmt.Sprintf("%v %s|%s", path, mt, b))
+				return rerr
+			})
+			if werr != nil {
+				t.Fatalf("%s/%d: Walk() = %v", tc.name, size, werr)
+			}
+			if !reflect.DeepEqual(leaves, tc.leaves) {
+				t.Errorf("%s/%d: leaves %q, want %q", tc.name, size, leaves, tc.leaves)
+			}
+			var trailing []byte
+			if rd, ok := s.TrailingInputReader(); ok {
+				trailing, _ = io.ReadAll(rd)
+			}
+			if string(trailing) != tc.trailing {
+				t.Errorf("%s/%d: trailing input is %d bytes, want %d", tc.name, size, len(trailing), len(tc.trailing))
+			}
+			got := fmt.Sprintf("%q", codesOfDiags(s.Diagnostics()))
+			if size == 0 {
+				want = got
+			} else if got != want {
+				t.Errorf("%s/%d: diagnostics %s, want %s", tc.name, size, got, want)
+			}
+		}
+	}
+}
+
 // TestParse_nestedBoundariesUnchanged pins that ProfileStrict does not read
 // past a shared closing delimiter, and that under ProfileForensic the input
 // after the last closing delimiter is still the trailing input when nothing

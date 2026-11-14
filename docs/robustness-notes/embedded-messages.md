@@ -73,7 +73,13 @@ Code: `chunk_invariance.go`. Under the healing profiles:
   and its place in `Completion` therefore do not depend on buffering. A
   walkFunc that wants the bytes of an unreadable message calls
   `EmbeddedMessage` itself and, given none, reads the carrier's `Body`. An
-  embedded message that is a single body is left to walkFunc.
+  embedded message that is a single body is left to walkFunc; once walkFunc
+  has read it to its end — to the carrier's end, or to an error of its own
+  such as a line budget — the rest of the carrier is read too. Under every
+  profile since 2026-11-14 (#10): a carrier the walk leaves unread is gone
+  past by its multipart and abandoned (completion.md), so before that a
+  ProfileStrict walk, or one whose embedded leaf ended early, could leave the
+  parse `in-progress` depending on read-ahead (soak iteration 114063).
 
 `ProfileStrict` walks and fails as before.
 

@@ -109,6 +109,24 @@ type ParseOptions struct {
 	// (mime.parameter_fallback_charset, ParameterCandidate.Fallback). Header
 	// text takes its fallback from HeaderTextOptions.
 	FallbackCharset string
+
+	// RecoverCharsetDeclarations lets the evidence of a text body's own bytes
+	// decide its charset where they contradict the one it declares (issue #65):
+	// a byte order mark the declaration does not accept, followed by bytes
+	// valid in the mark's encoding, is decoded as the mark says
+	// (charset.bom_mismatch), and a body declared in a legacy charset whose
+	// first 4096 bytes are UTF-8 by the evidence rule documented in
+	// charset_bom.go is read as UTF-8
+	// (charset.declaration_suspect); both are then SeverityRecovered. The
+	// header is never changed, and the raw bytes are kept.
+	//
+	// It is off by default: such a body is decoded as declared, and the
+	// contradiction is reported at SeverityInfo with the same code, naming
+	// the encoding the bytes also read as, so that a caller can re-decode
+	// it. Under ProfileStrict it is ignored: the declaration is always
+	// followed. FallbackCharset, for bodies that declare no charset, UTF-8 or
+	// US-ASCII, does not depend on it. See charset_bom.go.
+	RecoverCharsetDeclarations bool
 }
 
 // Parse reads a message from r and returns the session collecting what the

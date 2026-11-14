@@ -186,20 +186,30 @@ func (e *Entity) ciRestore(b *ciBlocks) {
 // had fetched those bytes; read after the walk, as Drain did, the body ended
 // wherever the decoder's buffer had, and its last diagnostics with it.
 //
-// An embedded message that is one body is left alone: reading it to its end
-// reads the carrier's, and a walkFunc that did not read it keeps it. A
-// walkFunc that wants the bytes of a message that cannot be read asks
-// EmbeddedMessage itself and, given none, reads the carrier's Body.
+// An embedded message that is one body is read to its end by walkFunc or not
+// at all. Read to its end, it is consumed, and the rest of the carrier is read
+// here too: a body that ended at the carrier's end leaves nothing, but one
+// ended by an error of its own — a body or line budget — leaves the rest of
+// the carrier unread, and whether the carrier's own reader had already
+// returned its end depended on how far it had read ahead (a 7bit carrier
+// holding back bytes after an overlong line returns its end a read later).
+// Unread, the carrier would be gone past by its multipart and abandoned
+// (drain_resume.go; #10, soak iteration 114063). A walkFunc that did not read
+// the message keeps it, and the carrier stays unread. A walkFunc that wants
+// the bytes of a message that cannot be read asks EmbeddedMessage itself and,
+// given none, reads the carrier's Body.
 func (r *embeddedReader) ciRest() {
 	if r.ciRested {
 		return
 	}
 	r.ciRested = true
-	if !r.e.parse.headerLimits().Recover {
-		// ProfileStrict walks as it always did.
-		return
-	}
-	if emb := r.e.embedded; (emb == nil || emb.partsEnded) && r.e.Body != nil {
+	// Under every profile: ProfileStrict once left the rest to the caller,
+	// but a carrier a walk leaves unread is gone past by its multipart and
+	// abandoned, so a rest that was not read here could not be read at all,
+	// and whether a read-ahead had reached the carrier's end decided whether
+	// the parse could be complete (#10). Nothing is healed or interpreted
+	// here; the carrier's own decoder reads what the multipart would discard.
+	if emb := r.e.embedded; (emb == nil || emb.consumed()) && r.e.Body != nil {
 		io.Copy(io.Discard, r.e.Body)
 	}
 }

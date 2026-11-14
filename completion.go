@@ -162,7 +162,7 @@ func (p *sessionProgress) noteDiagnostic(d Diagnostic) {
 		p.severities[d.Severity].Add(1)
 	}
 	switch d.Code {
-	case CodeMultipartBoundaryAmbiguous, CodeMIMEParameterDuplicate, CodeMIMEFilenameConflict:
+	case CodeMultipartBoundaryAmbiguous, CodeMIMEParameterDuplicate, CodeMIMEFilenameConflict, CodeHeaderUnselectedMultipart:
 		p.ambiguous.Store(true)
 	case CodeHeaderDuplicateSingleton:
 		if d.Severity == SeverityRecovered {
@@ -259,16 +259,39 @@ func (s *ParseSession) Completion() Completion {
 // a caller that wants the parse's whole verdict — ParseSession.Completion and
 // every diagnostic — gets it without wanting the bytes.
 //
-// It returns nil when the walk ended at the end of the message, and
-// otherwise what ended it: the parse's stop, or an error of an iterator. A
-// body that ends with an error of its own does not end the walk; the session
-// has its diagnostic. Drain may be called again, and after a partial read; it
-// reads what is left.
+// It returns nil when the walk ended at the end of the message and nothing
+// stopped the parse, and otherwise what ended it: the parse's stop, or an
+// error of an iterator or a refusal of ProfileStrict. A stop that arose while
+// Drain read the last body, or what an embedded message left of its carrier,
+// is returned too, and outranks an error of one entity that ended the walk
+// before it: when Drain returns nil, or an error that is not the parse's stop,
+// the parse had not been stopped when Drain looked last. A body that ends
+// with an error of its own (a body budget, a decoder failure) does not end
+// the walk; the session has its diagnostic.
+//
+// Drain may be called again, and after a partial read; it reads what is left.
+// A multipart whose parts a caller began to iterate — with MultipartReader,
+// Walk or an earlier Drain — is resumed where its iterator stands, and the
+// part that iterator last returned is read to its end first, its own parts
+// and embedded message included, before the iterator moves on. A part the
+// iterator already went past before it was read to its end was discarded, as
+// NextPart documents; Drain cannot read it, and Completion never counts it
+// read. A Body the caller replaced is framed anew, and a part the earlier
+// iterator over the original body returned is left as it is. See
+// drain_resume.go.
+//
+// A multipart whose parts were read to their end is not framed again, under
+// any profile: what follows its closing delimiter is not the message's, and
+// Drain reads none of it. Called again, Drain returns nil after a Drain that
+// returned nil, the identical stop once the parse was stopped, and the
+// failure an iterator ended with for good when that is what ended the walk.
 func (e *Entity) Drain() error {
 	var carriers []*Entity
 	err := e.Walk(func(_ []int, p *Entity, _ error) error {
 		if p.MultipartReader() != nil {
-			return nil
+			// A part a caller took from the iterator and did not finish is
+			// finished before the iterator moves on; see drain_resume.go.
+			return p.finishCurrent()
 		}
 		if p.walkEmbedded() != nil {
 			carriers = append(carriers, p)
@@ -286,6 +309,15 @@ func (e *Entity) Drain() error {
 		if c.Body != nil {
 			io.Copy(io.Discard, c.Body)
 		}
+	}
+	// The walk asked for the parse's stop after every body it was handed, but
+	// the carriers above are read after it. A stop that arose there is what
+	// ended the parse: nil would say that nothing did, and an error of one
+	// entity that ended the walk first — a refusal of ProfileStrict, an
+	// iterator's failure — describes less of the parse than the stop, which
+	// outranks it as everywhere else (#70).
+	if stop := e.parse.fatalErr(); stop != nil {
+		return stop
 	}
 	return err
 }

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 )
 
 // Malformed prefixes (ROB-020-001).
@@ -91,7 +92,8 @@ import (
 // first byte. With no line budget a line still undecided past one buffer is
 // refused as the multipart reader refuses any such framing line, with its own
 // error wrapping bufio.ErrBufferFull, which ends the iteration: such a line is
-// decided only within that buffer. A boundary that holds a '\r' or '\n' is
+// decided only within that buffer — unless HeaderLimits.UnboundedFramingLines
+// is set, when it is held, without bound, until it is decided. A boundary that holds a '\r' or '\n' is
 // never held. A part's header in which an orphan record was recovered is
 // looked at the same way after it (ROB-020-002; see orphan.go). Other header
 // blocks, and the message's own header, are not looked at this way;
@@ -293,7 +295,10 @@ func (s *headerScan) parentDelimiter(r *bufio.Reader) (delimiterLook, delimMatch
 // framing line budget of the multipart, MaxLineBytes, which bounds a delimiter
 // line however the header around it is budgeted, or, with no line budget, one
 // buffer of size bytes, the bound the multipart reader then puts on an
-// undecided framing line. framing reports the latter.
+// undecided framing line. framing reports the latter. With no line budget and
+// HeaderLimits.UnboundedFramingLines there is no bound: the line is held until
+// a byte decides it or the input ends or fails, as the multipart reader then
+// holds any undecided framing line.
 //
 // No budget of the header alone — MaxBytes, MaxFieldBytes, MaxCount or the
 // shared budget — bounds it: a delimiter is no header content, so a proved one
@@ -303,6 +308,9 @@ func (s *headerScan) parentDelimiter(r *bufio.Reader) (delimiterLook, delimMatch
 func (s *headerScan) holdLimit(size int) (limit int64, framing bool) {
 	if l := s.parent.limits.MaxLineBytes; l > 0 {
 		return l, false
+	}
+	if s.parent.limits.UnboundedFramingLines {
+		return math.MaxInt64, false
 	}
 	return int64(size), true
 }

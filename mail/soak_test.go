@@ -350,8 +350,10 @@ func (h *skHarness) iteration(iter uint64) (skStats, error) {
 	// ProfileStrict keeps a base64 decoder whose verdict depends on where
 	// reads end, which is its earlier behavior (see
 	// TestSoak_strictBase64Chunked and docs/robustness-notes/soak.md).
+	// A body the spool let go of when its store failed may have had more or
+	// fewer of its diagnostics recorded (skAbandonedAlike).
 	comparable := !cfg.small && cfg.opts.Profile != message.ProfileStrict
-	if comparable && whole.out.String() != chunked.out.String() {
+	if comparable && whole.out.String() != chunked.out.String() && !skAbandonedAlike(whole, chunked) {
 		return st, fmt.Errorf("reading the input in chunks of at most %d bytes changed the outcome\nwhole:\n%s\nchunked:\n%s", cfg.chunkMax, whole.out.String(), chunked.out.String())
 	}
 
@@ -646,12 +648,14 @@ type skSink struct {
 	stopAfter int
 	stopped   bool
 	seen      []string
+	paths     [][]int // the path of each of seen
 }
 
 func (k *skSink) diagnose(_ *message.ParseSession, d message.Diagnostic) error {
 	k.calls++
 	if len(k.seen) < 4096 {
 		k.seen = append(k.seen, fmt.Sprintf("%s %s %v", d.Severity, d.Code, d.Path))
+		k.paths = append(k.paths, slices.Clone(d.Path))
 	}
 	if k.stopAfter > 0 && k.calls >= k.stopAfter {
 		k.stopped = true
@@ -745,6 +749,57 @@ type skPass struct {
 	complete bool // the consumer read everything and ended at the end
 	state    message.CompletionState
 	codes    []message.Code
+
+	// abandoned is set when the spool's Body ended ReadTree with an error of
+	// its own (a store that failed) in the middle of the leaf at
+	// abandonedPath: the consumer let go of a body it had read part of.
+	abandoned     bool
+	abandonedPath []int
+	// diagStart is where the diagnostic lines begin in out, and diagPaths the
+	// path of each of those lines.
+	diagStart int
+	diagPaths [][]int
+}
+
+// skAbandonedAlike reports whether two passes that each let go of the same
+// body differ only in diagnostics recorded at or under that body after the
+// shorter list ends. A decoder records what it finds when the stage above it
+// reads that far, and a stage above may read ahead of the consumer by as much
+// as one read of the input returned, so how far a body's diagnostics got
+// when its consumer stopped depends on the read sizes; read to its end it
+// does not (TestSoak_abandonedSpoolBody). Everything else — the tree, the
+// counters, the stop, and the diagnostics both recorded, in order — is still
+// compared exactly.
+// skAbandonment reports whether ReadTree let go of a body because its Body
+// hook failed: the hook returned hookErr while reading hookNode, ReadTree
+// returned that very value (compared by identity, never looked into), and the
+// parse was not stopped. A parse stop, or a ReadTree error the hook did not
+// return, never qualifies.
+func skAbandonment(hookNode *mail.Node, hookErr, treeErr, stop error) (bool, []int) {
+	if hookNode == nil || hookErr == nil || stop != nil || !skSame(treeErr, hookErr) {
+		return false, nil
+	}
+	return true, hookNode.Path
+}
+
+func skAbandonedAlike(a, b *skPass) bool {
+	if !a.abandoned || !b.abandoned || !slices.Equal(a.abandonedPath, b.abandonedPath) {
+		return false
+	}
+	if len(a.diagPaths) > len(b.diagPaths) {
+		a, b = b, a
+	}
+	ao, bo := a.out.String(), b.out.String()
+	if ao[:a.diagStart] != bo[:b.diagStart] || !strings.HasPrefix(bo[b.diagStart:], ao[a.diagStart:]) {
+		return false
+	}
+	at := a.abandonedPath
+	for _, p := range b.diagPaths[len(a.diagPaths):] {
+		if len(p) < len(at) || !slices.Equal(p[:len(at)], at) {
+			return false
+		}
+	}
+	return true
 }
 
 // bound is how many decoded bytes the input may yield in all: no decoder
@@ -817,27 +872,42 @@ func (p *skPass) run() error {
 }
 
 func (p *skPass) drain(e *message.Entity) error {
-	if p.cfg.partial > 0 && e.MultipartReader() == nil {
-		n, _, err := p.body(io.LimitReader(e.Body, p.cfg.partial))
-		if p.decoded > p.bound() {
-			return err
+	if p.cfg.partial > 0 {
+		// Part of the root's body, or of its first part, is read before
+		// Drain, which must read the rest (drain_resume.go in the root
+		// package).
+		body := e.Body
+		if mr := e.MultipartReader(); mr != nil {
+			body = nil
+			if first, _ := mr.NextPart(); first != nil {
+				body = first.Body
+			}
 		}
-		fmt.Fprintf(&p.out, "read %d first\n", n)
+		if body != nil {
+			n, _, err := p.body(io.LimitReader(body, p.cfg.partial))
+			if p.decoded > p.bound() {
+				return err
+			}
+			fmt.Fprintf(&p.out, "read %d first\n", n)
+		}
 	}
 	err := e.Drain()
 	fmt.Fprintf(&p.out, "drain err=%v\n", err != nil)
 	if err == nil {
-		// Drain returns nil when its walk reached the end, even when the parse
-		// was stopped while it read the last body; a later scope reports that
-		// stop. ProfileStrict frames what follows a multipart again, as it
-		// always did, so it is not asked. Anything else must find nothing
-		// left to read.
-		if p.cfg.opts.Profile != message.ProfileStrict {
-			if again := e.Drain(); again != nil && !skSame(again, e.ParseStop()) {
-				return fmt.Errorf("Drain after a Drain that ended at the end returned %v", again)
-			}
+		// Drain returns nil only when nothing stopped the parse, and a second
+		// Drain, under every profile, finds nothing left to read.
+		if stop := e.ParseStop(); stop != nil {
+			return fmt.Errorf("Drain returned nil, and the parse was stopped: %v", stop)
+		}
+		if again := e.Drain(); again != nil {
+			return fmt.Errorf("Drain after a Drain that ended at the end returned %v", again)
 		}
 		p.complete = true
+	} else if stop := e.ParseStop(); stop != nil {
+		// A stopped parse stays stopped: Drain again returns the same stop.
+		if again := e.Drain(); !skSame(again, stop) {
+			return fmt.Errorf("Drain after a stopped Drain returned %v, not the stop %v", again, stop)
+		}
 	}
 	return nil
 }
@@ -956,10 +1026,27 @@ func (p *skPass) tree(e *message.Entity) error {
 		defer sp.Close()
 		opts.Body = sp.Body
 	}
+	// The first error the Body hook itself returned, and the node it was
+	// reading: the provenance of an abandoned body.
+	var (
+		hookNode *mail.Node
+		hookErr  error
+	)
+	if opts.Body != nil {
+		body := opts.Body
+		opts.Body = func(n *mail.Node, r io.Reader) error {
+			err := body(n, r)
+			if err != nil && hookErr == nil {
+				hookNode, hookErr = n, err
+			}
+			return err
+		}
+	}
 	tr, terr := mail.ReadTree(e, &opts)
 	if tr == nil || tr.Root == nil {
 		return fmt.Errorf("ReadTree returned no tree (err %v)", terr)
 	}
+	p.abandoned, p.abandonedPath = skAbandonment(hookNode, hookErr, terr, e.ParseStop())
 	fmt.Fprintf(&p.out, "tree err=%v\n", terr != nil)
 	p.complete = terr == nil
 
@@ -1239,10 +1326,13 @@ func (p *skPass) check(s *message.ParseSession, sink *skSink) error {
 	var lines []string
 	if sink != nil && p.cfg.discard {
 		lines = append(lines, sink.seen...)
+		p.diagPaths = append(p.diagPaths, sink.paths...)
 	}
 	for _, d := range diags {
 		lines = append(lines, fmt.Sprintf("%s %s %v", d.Severity, d.Code, d.Path))
+		p.diagPaths = append(p.diagPaths, d.Path)
 	}
+	p.diagStart = p.out.Len()
 	for _, l := range lines {
 		p.out.WriteString(l + "\n")
 	}
@@ -2127,6 +2217,44 @@ func TestSoak_rootCloseLost(t *testing.T) {
 	}
 }
 
+// TestSoak_walkCarrierRest is what seed 1300007, iteration 114063 found once
+// a part gone past unread was abandoned (#10). A message/news carrier inside
+// an embedded multipart carries a leaf whose base64 body a line budget ends
+// early, so the rest of the carrier was left unread: the walk read it only
+// after an embedded multipart, never after a leaf, and only under recovery.
+// The carrier's 7bit reader holds bytes back after an overlong line and
+// returns its end a read later, so no read-ahead reached it either; the
+// multipart went past the carrier, which was abandoned, and the walk consumer
+// that then read the carrier counted 3 of 4 bodies. The walk now reads the
+// rest of the carrier whenever the embedded message was read to its end,
+// under every profile. Each profile, read whole and in chunks, through the
+// soak's own walk and drain consumers and oracle.
+func TestSoak_walkCarrierRest(t *testing.T) {
+	in, err := os.ReadFile(filepath.Join("testdata", "soak", "walk-carrier-rest-after-cut-leaf.eml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []message.Profile{message.ProfileForensic, message.ProfileTolerant, message.ProfileStrict} {
+		for _, mode := range []int{skModeWalk, skModeDrain} {
+			for _, chunk := range []int{0, 1, 16, 64} {
+				cfg := skConfig{mode: mode, chunkMax: chunk, chunkSeed: [2]uint64{1300007, 114063}}
+				cfg.opts = message.ParseOptions{Profile: profile, WalkEmbeddedMessages: true,
+					Limits: message.Limits{MaxLineBytes: 215, MaxParameterSegments: 2, MaxEpilogueBytes: 26}}
+				var src io.Reader = bytes.NewReader(in)
+				if chunk > 0 {
+					src = cfg.reader(in, nil)
+				}
+				p := &skPass{cfg: &cfg, in: in, src: src}
+				if err := p.run(); err != nil {
+					t.Errorf("%v %s chunk %d: %v", profile, skModeNames[mode], chunk, err)
+				} else if profile == message.ProfileForensic && !p.complete {
+					t.Errorf("%v %s chunk %d: the consumer did not end at the end:\n%s", profile, skModeNames[mode], chunk, p.out.String())
+				}
+			}
+		}
+	}
+}
+
 // TestSoak_signedSpan is what seed 1300007, iteration 7043 found, once the
 // soak got past 5509. The signed part of a multipart/signed is itself a
 // multipart. ReadTree took a child's raw span as soon as the child was read,
@@ -2217,5 +2345,76 @@ func TestSoak_diagnosticOrder(t *testing.T) {
 	cfg := skConfig{chunkMax: 3}
 	if got := order(cfg.reader(in, nil)); !slices.Equal(got, whole) {
 		t.Errorf("in chunks of 3 the diagnostics come in another order:\n%q\nwhole:\n%q", got, whole)
+	}
+}
+
+// TestSoak_abandonedSpoolBody is what seed 1300007, iteration 202279 found:
+// a spool whose store fails at its first Create ends ReadTree after reading
+// one byte of a 7bit text/calendar body in ks_c_5601-1987. The charset decoder
+// above the 7bit monitor reads ahead of that byte by as much as one read of
+// the input returned, and the monitor reports the first 8-bit byte when it
+// hands it on: read whole, cte.seven_bit_violation is recorded before the
+// consumer lets go; read 16 bytes at a time, it is not yet. That depends on
+// the read sizes and is not a spool fault. What is pinned: the tree and the
+// store failure are the same, one list of diagnostics is a prefix of the
+// other, the rest is at the abandoned body, and once the parse is drained
+// both readings record the same diagnostics.
+func TestSoak_abandonedSpoolBody(t *testing.T) {
+	in, err := os.ReadFile(filepath.Join("testdata", "soak", "spool-store-failure-abandoned-body.eml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The charset decoder is the stage that reads ahead, as under TestSoak.
+	old := message.CharsetReader
+	message.CharsetReader = charset.Reader
+	t.Cleanup(func() { message.CharsetReader = old })
+	type outcome struct{ abandoned, drained []string }
+	run := func(src io.Reader) outcome {
+		t.Helper()
+		s, e, _ := message.Parse(src, &message.ParseOptions{
+			Profile: message.ProfileForensic, Compatibility: message.CompatibilityPythonEmail,
+			WalkEmbeddedMessages: true,
+		})
+		if e == nil {
+			t.Fatal("no entity")
+		}
+		store := skNewStore(1)
+		sp := mail.NewSpool(&mail.SpoolOptions{MemoryBytes: -1, DiskBytes: 3585, Store: store, Dir: t.TempDir()})
+		defer sp.Close()
+		tr, terr := mail.ReadTree(e, &mail.TreeOptions{Body: sp.Body})
+		if terr == nil || e.ParseStop() != nil || len(tr.Root.Children) != 1 {
+			t.Fatalf("ReadTree() = %v (stop %v), want the store's failure in the one part", terr, e.ParseStop())
+		}
+		var o outcome
+		for _, d := range s.Diagnostics() {
+			o.abandoned = append(o.abandoned, fmt.Sprintf("%s %v", d.Code, d.Path))
+		}
+		e.Drain()
+		for _, d := range s.Diagnostics() {
+			o.drained = append(o.drained, fmt.Sprintf("%s %v", d.Code, d.Path))
+		}
+		return o
+	}
+	whole := run(bytes.NewReader(in))
+	cfg := skConfig{chunkMax: 16}
+	chunked := run(cfg.reader(in, nil))
+
+	short, long := chunked.abandoned, whole.abandoned
+	if len(short) > len(long) {
+		short, long = long, short
+	}
+	if !slices.Equal(long[:len(short)], short) {
+		t.Errorf("abandoned: one reading's diagnostics do not begin with the other's:\nwhole:   %q\nchunked: %q", whole.abandoned, chunked.abandoned)
+	}
+	for _, l := range long[len(short):] {
+		if !strings.HasSuffix(l, " [0]") {
+			t.Errorf("abandoned: %q is not at the abandoned body [0]", l)
+		}
+	}
+	if len(short) == len(long) {
+		t.Logf("the readings now record the same diagnostics when abandoned: %q", short)
+	}
+	if !slices.Equal(whole.drained, chunked.drained) {
+		t.Errorf("drained: the diagnostics differ:\nwhole:   %q\nchunked: %q", whole.drained, chunked.drained)
 	}
 }

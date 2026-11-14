@@ -32,10 +32,15 @@ import (
 // without a mark.
 //
 // The declaration is never silently replaced, and the header is never
-// changed. A conflict is healed — the body decoded as its mark says — only
-// when all of these hold, and the diagnostic is then SeverityRecovered:
+// changed. By default it is not replaced at all (issues #62 and #65): where
+// the bytes after the mark are valid in the mark's encoding they read two
+// ways, the body is decoded as declared, and the diagnostic is SeverityInfo
+// with an Action that names the other encoding. A conflict is healed — the
+// body decoded as its mark says — only when all of these hold, and the
+// diagnostic is then SeverityRecovered:
 //
-//   - the profile is not ProfileStrict;
+//   - the caller asked for it, ParseOptions.RecoverCharsetDeclarations, and
+//     the profile is not ProfileStrict, which ignores that option;
 //   - the bytes after the mark, as far as bomWindow of them, are valid in the
 //     mark's encoding (a cut sequence at the end of that window is no evidence
 //     either way). For FF FE 00 00, which begins both UTF-32LE and UTF-16LE
@@ -52,9 +57,10 @@ import (
 // it was read, which already is UTF-8, so there is nothing to heal.
 //
 // A body with no mark that declares a legacy charset is checked against its
-// bytes too, by the same hold: one that is UTF-8 all the same is read as
-// UTF-8 (charset.declaration_suspect). See cdDecideUTF8 for the evidence and
-// cdRead for what the look costs.
+// bytes too, by the same hold: one that is UTF-8 all the same is reported
+// (charset.declaration_suspect), and read as UTF-8 only under
+// ParseOptions.RecoverCharsetDeclarations. See cdDecideUTF8 for the evidence
+// and cdRead for what the look costs; the look is the same either way.
 //
 // Read, ReadWithOptions and New look at nothing and report nothing, as before.
 // A CharsetReader that reads its input while it builds its decoder gets that
@@ -508,14 +514,21 @@ func (h *bomHold) cdRead(v *bomView, p []byte) (n int, err error, done bool) {
 // legacy charset — any label the CharsetReader accepted that names no Unicode
 // encoding: euc-kr, ks_c_5601-1987, shift_jis, gb2312, big5, iso-2022-*,
 // iso-8859-1, windows-1252 … — is UTF-8 all the same, and sets h.utf8 and
-// h.cut when it is. Senders that write UTF-8 under the charset their software was
-// configured with years ago are common, and the declared decoder turns every
-// character of such a body into another without a single error.
+// h.cut when it is to be read so. Senders that write UTF-8 under the charset
+// their software was configured with years ago are common, and the declared
+// decoder turns every character of such a body into another without a single
+// error.
+//
+// The bytes then read two ways, so by default the declaration is followed and
+// the evidence only reported: charset.declaration_suspect at SeverityInfo,
+// naming UTF-8. Under ParseOptions.RecoverCharsetDeclarations the body is read
+// as UTF-8 instead, at SeverityRecovered; the evidence and its known false
+// positives below are the same.
 //
 // The evidence is the sniff window: the first charsetSniff bytes of the body
 // after its transfer encoding was removed, or all of it when it is shorter. A
-// sequence the end of a full window cuts is left out. The body is read as
-// UTF-8 when all of these hold:
+// sequence the end of a full window cuts is left out. The body is UTF-8 by
+// this rule when all of these hold:
 //
 //  1. The window holds no ill-formed byte: every byte above 0x7F is part of a
 //     well-formed UTF-8 sequence.
@@ -542,8 +555,8 @@ func (h *bomHold) cdRead(v *bomView, p []byte) (n int, err error, done bool) {
 // other accented letter anywhere in the window, is what UTF-8 read as
 // windows-1252 looks like and not what anybody writes.
 //
-// What is delivered: the ASCII before the first byte above 0x7F as the
-// declared decoder read it — which is as anyone reads ASCII — and everything
+// What is delivered under the option: the ASCII before the first byte above
+// 0x7F as the declared decoder read it — which is as anyone reads ASCII — and everything
 // from that byte on as it is, watched for bytes that are not UTF-8 after all
 // (charset.invalid_sequence). The header is not changed.
 //
@@ -553,7 +566,7 @@ func (h *bomHold) cdRead(v *bomView, p []byte) (n int, err error, done bool) {
 // and output bounds of a parameter value.
 //
 // ProfileStrict, Read, ReadWithOptions and New decode as declared and look at
-// nothing. So does a body whose byte order mark was reported
+// nothing, with the option or without. So does a body whose byte order mark was reported
 // (charset.bom_mismatch), which has had its look.
 func (h *bomHold) cdDecideUTF8() {
 	h.sniff = false
@@ -566,15 +579,21 @@ func (h *bomHold) cdDecideUTF8() {
 	if s.long == 0 && !h.cdDeclaredMisreads(w[:s.at]) {
 		return
 	}
-	h.utf8, h.cut = true, s.lead
-	h.ctx.recordBody(Diagnostic{
+	d := Diagnostic{
 		Code:     CodeCharsetDeclarationSuspect,
-		Severity: SeverityRecovered,
+		Severity: SeverityInfo,
 		Message: fmt.Sprintf("a text body declared %q is well-formed UTF-8: %d multi-byte sequences and no ill-formed byte in its first %d bytes",
 			h.charset, s.multi, s.at),
-		Field:  "Content-Type",
-		Action: "decoded the body as UTF-8, not as declared; the Content-Type is left as it was",
-	})
+		Field: "Content-Type",
+		Action: fmt.Sprintf("decoded the body as declared, %q; its bytes also read as UTF-8, as which ParseOptions.RecoverCharsetDeclarations would decode them",
+			h.charset),
+	}
+	if h.ctx.session.recoverCharset() {
+		h.utf8, h.cut = true, s.lead
+		d.Severity = SeverityRecovered
+		d.Action = "decoded the body as UTF-8, not as declared; the Content-Type is left as it was"
+	}
+	h.ctx.recordBody(d)
 }
 
 // cdDeclaredMisreads reports whether the declared charset's decoder reads w —
@@ -639,6 +658,10 @@ func (h *bomHold) decide() {
 		d.Action = asDeclared + ": ProfileStrict does not decode by the mark"
 	case !valid:
 		d.Action = asDeclared + ": the bytes after the mark are not " + encoding
+	case !h.ctx.session.recoverCharset():
+		// Two readings, and the declaration is the one followed (#62, #65).
+		d.Action = asDeclared + "; the bytes after the mark are also valid " + encoding +
+			", as which ParseOptions.RecoverCharsetDeclarations would decode them"
 	case m == textproto.BOMUTF8:
 		h.healed = h.ctx.watchUTF8(label, h.leaf.countCharsetInput(&bomView{h: h}))
 		d.Severity = SeverityRecovered

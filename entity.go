@@ -55,9 +55,10 @@ type Entity struct {
 	// the cancellation, framing only works through bytes the parse already
 	// admitted — what each enclosing container's reader holds: its 4 KiB
 	// buffer, a delimiter candidate held or being delivered as body, at most a
-	// framing line under Limits.MaxLineBytes plus one buffer (one buffer with
-	// that budget disabled), and its framing-line accumulator, bounded the same
-	// way — at every depth of containers, Limits.MaxMIMEDepth bounding how
+	// framing line under Limits.MaxLineBytes plus one buffer (with that budget
+	// disabled, the candidate as far as the bytes already admitted go, #64),
+	// and its framing-line accumulator, bounded the same way (empty with the
+	// budget disabled, the line streamed) — at every depth of containers, Limits.MaxMIMEDepth bounding how
 	// many, and only inside a read a caller had already started. NextPart and
 	// Walk still report the stop before framing anything.
 	framing io.Reader
@@ -112,9 +113,29 @@ type Entity struct {
 	// a multipart of the input; see RawSpan.
 	wirePart *textproto.Part
 
+	// srcEmbedded reports a message embedded in a carrier whose header block
+	// is placed in the input (see Entity.srcPlaced), so that its own header
+	// block is where its origin says; see source_entity.go.
+	srcEmbedded bool
+
 	// partsEnded reports that an iterator over this multipart's parts has
-	// reached its end; see ParseSession.Completion.
+	// reached its end; see ParseSession.Completion. partsErr is the failure
+	// it ended with, nil when it reached io.EOF; see multipart_stuck.go.
 	partsEnded bool
+	partsErr   error
+
+	// guard is the bodyGuard of a leaf under Parse, nil otherwise; active is
+	// the iterator MultipartReader handed out over the body the parse gave
+	// this entity, kept until its parts end; abandoned reports that an
+	// iterator went past this entity while it was not read to its end. See
+	// drain_resume.go.
+	guard     *bodyGuard
+	active    *multipartReader
+	abandoned bool
+
+	// uc is the look for an unselected multipart Content-Type of this entity,
+	// or nil; see unselected_ct.go.
+	uc *ucScan
 }
 
 // New makes a new message with the provided header and body. The entity's
@@ -262,6 +283,24 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 	// inputErr is an ordinary failure of the body's input that an eager
 	// CharsetReader ran into; see the charset stage below.
 	var inputErr error
+
+	// A later Content-Type that declares a multipart is looked for in the
+	// first wire bytes of the body (#67), of a leaf under its decoders and of
+	// a framed multipart under its framing; see unselected_ct.go. The tap
+	// reads nothing itself, and the verbatim copy WriteTo makes does not go
+	// through it. A framed multipart's own framing reads the tap alone
+	// (ucFraming), so that the observation is finished when its parts end,
+	// not wherever the framing's buffer reached the end of the body.
+	var uc *ucScan
+	var ucFraming io.Reader
+	if (leaf != nil || (strings.HasPrefix(mediaType, "multipart/") && !ct.unframed)) && fatal == nil && local == nil && !wide {
+		if uc = ctx.ucWatch(header, mediaType, mediaParams["boundary"]); uc != nil {
+			body = &ucTap{r: body, s: uc}
+			if leaf == nil {
+				ucFraming = body
+			}
+		}
+	}
 
 	// QUIRK: RFC 2045 section 6.4 specifies that multipart messages can't have
 	// a Content-Transfer-Encoding other than "7bit", "8bit" or "binary".
@@ -460,6 +499,13 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 		}
 	}
 
+	// What the tap above found is recorded when the decoded body ends, after
+	// what every stage under this point records about the body's bytes; for a
+	// framed multipart, when a caller reads its raw Body to the end.
+	if uc != nil {
+		body = &ucEnd{r: body, s: uc}
+	}
+
 	// The guard goes over whatever stages ran, including none, so that what
 	// Body delivers is what the decoded budgets count.
 	body = ctx.guardBody(body, leaf)
@@ -494,6 +540,9 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 			fatal = ctx.session.cancelErr()
 		}
 	}
+	if ucFraming != nil {
+		framing = ucFraming
+	}
 
 	e := &Entity{
 		Header:                     header,
@@ -510,6 +559,7 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 		charset:                    charset,
 		skipTextAttachmentDecoding: skipTextAttachmentDecoding,
 		parse:                      ctx,
+		uc:                         uc,
 	}
 
 	// Counted for ParseSession.Completion: the entity, and the body or the
@@ -518,6 +568,7 @@ func newWithOptions(header Header, body io.Reader, skipTextAttachmentDecoding bo
 		s.prog.entities.Add(1)
 		switch {
 		case leaf != nil:
+			e.guard = &leaf.guard
 			s.prog.bodies.Add(1)
 		case e.framesParts():
 			s.prog.multiparts.Add(1)
@@ -867,6 +918,17 @@ func Read(r io.Reader) (*Entity, error) {
 // to those budgets one by one, and reading Body directly instead is bounded by
 // Limits.MaxInputBytes alone. A body kept opaque as above is a leaf, held to the
 // body budgets like any other. See Limits.MaxEncodedBodyBytes.
+//
+// For an entity from Parse whose Body is the one the parse gave it, every call
+// returns the same iterator until its parts end, so a second call goes on
+// where the first stopped rather than framing what is left of the body anew.
+// Once the parts have ended, under every profile, a later call returns an
+// iterator at that end: it frames nothing of what follows the closing
+// delimiter, and returns the parse's stop if there is one, else the failure
+// the parts ended with, else io.EOF. A body the caller replaced is framed anew
+// on every call, and entities from Read, ReadWithOptions and New get a new
+// iterator on every call, as before. See drain_resume.go and
+// multipart_stuck.go.
 func (e *Entity) MultipartReader() MultipartReader {
 	if !e.framesParts() {
 		return nil
@@ -878,6 +940,11 @@ func (e *Entity) MultipartReader() MultipartReader {
 	// multipart_stuck.go.
 	if e.skPartsRead() {
 		return skEndedParts{e}
+	}
+	// The iterator already handed out over the parse's body is the only one
+	// that knows where that body stands; see drain_resume.go.
+	if r := e.resumable(); r != nil {
+		return r
 	}
 
 	parent := e.parse
@@ -901,6 +968,12 @@ func (e *Entity) MultipartReader() MultipartReader {
 		// The parse's own framing reads the body as the parse read it, behind
 		// no cancellation gate of this entity's; see Entity.framing.
 		src = e.framing
+	}
+	// The look of unselected_ct.go is finished by this iterator's end when
+	// the iterator frames the body the look watched.
+	var uc *ucScan
+	if e.framing != nil && sameReader(src, e.framing) {
+		uc = e.uc
 	}
 
 	// Under recovery a multipart that declares no boundary is still read: the
@@ -932,7 +1005,7 @@ func (e *Entity) MultipartReader() MultipartReader {
 	// always been.
 	r.SetHeaderLimits(limits)
 
-	return &multipartReader{
+	mr := &multipartReader{
 		r:                          r,
 		skipTextAttachmentDecoding: e.skipTextAttachmentDecoding,
 		parent:                     parent,
@@ -941,7 +1014,10 @@ func (e *Entity) MultipartReader() MultipartReader {
 		reused:                     reused,
 		digest:                     e.mediaType == "multipart/digest",
 		owner:                      e,
+		uc:                         uc,
 	}
+	e.keepActive(mr)
+	return mr
 }
 
 // framesParts reports whether MultipartReader returns an iterator for this
@@ -1100,6 +1176,16 @@ type WalkFunc func(path []int, entity *Entity, err error) error
 // stopped by it: the refused entity and its raw body stay the caller's, and a
 // caller that wants the siblings after a refused part iterates MultipartReader
 // directly, where the next call continues with them.
+//
+// For an entity from Parse, a multipart whose parts a caller already began to
+// iterate is walked from where that iteration stands, with each part's own
+// index in path: the parts already returned are not visited again, and the
+// part last returned is gone past, as NextPart does. See drain_resume.go.
+//
+// Under ParseOptions.WalkEmbeddedMessages, once the embedded message was read
+// to its end — its parts walked, or its body read by walkFunc — Walk reads
+// what the message left of its carrier's body before it goes on, under every
+// profile; see embeddedReader.ciRest.
 func (e *Entity) Walk(walkFunc WalkFunc) error {
 	var multipartReaders []MultipartReader
 	// containers holds the entity whose parts each reader yields, so that a
@@ -1218,7 +1304,7 @@ func (e *Entity) Walk(walkFunc WalkFunc) error {
 			if strict {
 				containers = append(containers, part)
 			}
-			path = append(path, -1)
+			path = append(path, walkStart(mr))
 		} else if er := part.walkEmbedded(); er != nil {
 			// A parse that asked for it descends into the message this entity
 			// carries, as its one child; see embedded.go.

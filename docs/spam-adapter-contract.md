@@ -84,22 +84,48 @@ use them for untrusted mail.
 header line goes (`header_recover.go`) and whether Base64 data after padding
 is decoded (`CompatibilityPythonEmail` stops at the padding).
 
+### Healing policy (#62)
+
+Recovery makes damaged mail readable; it does not establish what the sender
+intended. Where the bytes establish one reading, recover that reading and
+report the repair. Where alternative semantic readings remain plausible, keep
+the declaration and report the conflicting evidence; the caller chooses an
+alternative explicitly. `RecoverCharsetDeclarations` is the option for charset
+conflicts. Report guesses belong in `StatusGuess`, `ActionGuess` and
+`TypeGuess`, apart from the declared fields. Raw APIs keep the original bytes;
+unfolding a header value preserves its whitespace.
+
+Two structural exceptions are retained: bounded boundary inference and joining
+an unindented continuation under the existing evidence rules. They reconstruct
+structure found in the input and report the recovery without rewriting the
+raw header. Inference still stops beyond eight inferred levels, and the first
+`Content-Type` still wins. The reasons and limits are in
+[header-recovery.md](robustness-notes/header-recovery.md) and
+[multipart-recovery.md](robustness-notes/multipart-recovery.md). The classification
+of every older recovery against this policy remains open under #62; this is
+not a claim that the whole inventory has been audited.
+
 ### Options
 
 | Field | Effect |
 | --- | --- |
 | `Limits` | resource budgets; zero fields take the defaults (below) |
 | `FallbackCharset` | charset for a text body that declares none, UTF-8 or US-ASCII and whose first bytes are not UTF-8; needs a `CharsetReader` that knows it; every use is recorded (`charset.missing`, `charset.declaration_suspect`) |
+| `RecoverCharsetDeclarations` | off by default; under the healing profiles a text body whose bytes contradict its declared charset is decoded as they say: by a byte order mark followed by bytes valid in its encoding (`charset.bom_mismatch`), or as UTF-8 under a legacy label (`charset.declaration_suspect`), both Recovered. ProfileStrict ignores it |
 | `WalkEmbeddedMessages` | `Entity.Walk` and `Entity.Drain` descend into `message/rfc822` and `message/global` bodies |
 | `RecognizeMboxEnvelope` | keeps one leading mbox `From_` line apart (`ParseSession.MboxEnvelope`) |
 | `DiagnosticSink` | receives each diagnostic as it is found and may stop the parse |
 | `DiscardDeliveredDiagnostics` | with a sink: the session keeps nothing it delivered |
 | `ReadOptions` | the older read options, such as `SkipTextAttachmentDecoding` |
 
-A declaration the bytes contradict is healed under the healing profiles and
-reported, from the first 4096 bytes after transfer decoding: a body declared
-in a legacy charset that is UTF-8 is delivered as UTF-8
-(`charset.declaration_suspect`, Recovered); with a `FallbackCharset`, a body
+A declaration the bytes contradict is followed by default and the
+contradiction reported (issues #62, #65), from the first 4096 bytes after
+transfer decoding (1024 after a byte order mark): a body declared in a legacy
+charset that is UTF-8, or that begins with a byte order mark of another
+encoding and is valid in it, reads two ways, and is decoded as declared with
+`charset.declaration_suspect` or `charset.bom_mismatch` at Info, the Action
+naming the other encoding. Only with `RecoverCharsetDeclarations` is it
+decoded as the bytes say (Recovered). With a `FallbackCharset`, a body
 that is mostly valid UTF-8 stays UTF-8 and only one that is not is decoded
 with the fallback; text with no charset and no fallback that is not UTF-8 is
 kept as read and observed (`charset.missing`, Info). The evidence rules and
@@ -146,13 +172,17 @@ returns the defaults; `ParseSession.Limits()` the values a parse ran under.
 | `MaxDecodedBodyBytes` | 128 MiB | that body ends; siblings are read |
 | `MaxTotalDecodedBytes` | 512 MiB | the parse ends |
 | `MaxDiagnosticCount` | 1000 | recording stops; nothing ends |
-| `MaxMemorySpoolBytes` | 8 MiB | not read by anything |
-| `MaxDiskSpoolBytes` | 1 GiB | not read by anything |
+| `MaxMemorySpoolBytes` | 8 MiB | with `ReadTree` and `Spool.Body`: a body that does not fit in memory goes to disk whole; nothing ends |
+| `MaxDiskSpoolBytes` | 1 GiB | with `ReadTree` and `Spool.Body`: that body is cut (`limit.disk_spool_bytes` in `Spool.Diagnostics()`); nothing ends |
 
-`mail.Spool` takes its quotas from `SpoolOptions`, not from the two spool
-fields. `MaxLineBytes: LimitDisabled` reads framing lines within one 4 KiB
-buffer, which is less tolerant than any finite budget; set a large finite
-value instead (bounds-audit-core.md, item (b)).
+The two spool fields bound only what `mail.Spool` keeps for a tree `ReadTree`
+reads from the parse. The spool applies whichever has less room, the field or
+its own `SpoolOptions` quota. `LimitDisabled` leaves the `SpoolOptions` quota
+alone, and a negative `SpoolOptions` quota keeps nothing (spool.md).
+`MaxLineBytes: LimitDisabled` is no line limit (#64): framing lines
+before the first part are streamed at any length, and a padded delimiter
+candidate in a body is held until decided, so only `MaxInputBytes` bounds that
+memory (bounds-audit-core.md, item (b)). `Read` keeps its 4 KiB framing.
 
 ## 2. The whole verdict
 
@@ -190,7 +220,8 @@ message. `Completion().Clean()` is the strict test: `complete`, not
 including those `MaxDiagnosticCount` kept out (`Diagnostics`), the stop
 (`Stop`), the input's error (`InputErr`), and `Ambiguous`: the parse chose
 between readings that mean different things (several boundaries,
-conflicting Content-Type or parameter repeats, conflicting filenames).
+conflicting Content-Type or parameter repeats, an unselected multipart
+Content-Type whose boundary delimits the body, conflicting filenames).
 
 An input cut in transit exactly where a message could end is
 indistinguishable from a whole one.
@@ -322,9 +353,13 @@ rc, ok, err := spool.Open(tree.Root.Attachments()[0]) // a fresh reader each cal
 
 Memory is used until `MemoryBytes` (8 MiB by default) is spent, then whole
 bodies go to temporary files in `Dir` or to the caller's `BlobStore`, up to
-`DiskBytes` (1 GiB by default). A body cut by the disk quota records `limit.disk_spool_bytes` in
+`DiskBytes` (1 GiB by default). The parse's `MaxMemorySpoolBytes` and
+`MaxDiskSpoolBytes` bound the same tree too, and the smaller room applies. A body cut by
+either disk quota records `limit.disk_spool_bytes` in
 `Spool.Diagnostics()`; the tree's `Size` and `SHA256` are still the whole
-body's. `Close` removes everything the spool made. See spool.md.
+body's. A storage failure (a failed `Create`, `Write` or `Close`, a short
+write) ends `ReadTree` with that error. `Close` removes everything the spool
+made. See spool.md.
 
 ## 4. What to send the model
 
@@ -348,9 +383,9 @@ body's. `Close` removes everything the spool made. See spool.md.
 Healed defects are useful features because another reader may read the same
 bytes differently: `multipart.boundary_mismatch`, `multipart.nested_boundary_reused`,
 `multipart.close_shared`, `cte.base64_data_after_padding`,
-`header.duplicate_singleton` (Recovered), `rfc2047.header_injection`,
-`mime.parameter_duplicate`, `mime.filename_conflict`,
-`header.missing_body_separator`.
+`header.duplicate_singleton` (Recovered), `header.unselected_multipart`,
+`rfc2047.header_injection`, `mime.parameter_duplicate`,
+`mime.filename_conflict`, `header.missing_body_separator`.
 
 ## 5. What may be trusted
 
@@ -459,6 +494,11 @@ message's own tail under `ProfileForensic`, `TrailingInputReader` read it.
 `mail.ParseDeliveryStatus`, `ParseDispositionNotification` and
 `ParseFeedbackReport` read a body directly. A feedback report's
 `AuthenticationResults` are raw; `AuthResults()` parses them and trusts none.
+Typed fields hold only what the report gives (#66): a recipient without a
+readable `Status` has `Status.Valid == false`, one without `Action` has an
+empty `Action`, a value without a type has an empty `Type`. What the other
+fields suggest is in `StatusGuess`, `ActionGuess` and `TypeGuess`; classify
+on a guess only knowingly, as the report does not say it.
 A report part cut at `MaxBodyBytes` is read from what was kept
 (`report.truncated`). Plain-text bounces that are not `multipart/report` are
 not recognised. See reports.md.
@@ -577,7 +617,7 @@ multipart, instead of repairing it.
 | `limit.encoded_body_bytes`, `limit.decoded_body_bytes` | LimitExceeded | S | one body cut; siblings read |
 | `limit.total_decoded_bytes` | LimitExceeded | S | all bodies together over budget; the parse ended |
 | `limit.diagnostic_count` | LimitExceeded | S, H, A, R | recording stopped there; more defects exist (`Tree.RepairsUnknown` in a tree) |
-| `limit.disk_spool_bytes` | LimitExceeded | P | a spooled body was cut at `SpoolOptions.DiskBytes`; `Size` and `SHA256` are still whole |
+| `limit.disk_spool_bytes` | LimitExceeded | P | a spooled body was cut at `SpoolOptions.DiskBytes` or the parse's `MaxDiskSpoolBytes`, whichever had less room; `Size` and `SHA256` are still whole |
 
 ### Header
 
@@ -596,6 +636,7 @@ multipart, instead of repairing it.
 | `header.mixed_line_endings` | Info; Recovered with a bare CR | S | one header block mixes line endings: assembled from pieces |
 | `header.truncated_line` | Incomplete† | S | the input ended inside a header line |
 | `header.duplicate_singleton` | Info; Recovered when a repeated `Content-Type`, `Content-Transfer-Encoding` or `Content-Disposition` differs | S | a field allowed once repeats; the parser reads the first, a DKIM verifier the last; Recovered sets `Ambiguous` |
+| `header.unselected_multipart` | Info | S | a later `Content-Type` of the same block declares a multipart whose boundary delimits lines (opening or closing delimiters) in the first 4096 wire bytes of the body, whether the first field made the entity a leaf or a multipart: a reader that takes the later field sees other parts than this parse (an evasion pattern). The first field is still read; the message names the two media types only; once per entity, when its body or its parts are read to the end; sets `Ambiguous`. Re-read it by removing the earlier field and parsing again (header-recovery.md) |
 | `header.mbox_envelope` | Info | S | (`RecognizeMboxEnvelope`) a leading `From_` line was kept apart |
 | `header.decoder_no_progress` | InvalidMetadata | S | a charset reader stalled on a parameter's encoded word; value kept raw |
 | `header.invalid_utf8` | Recovered (fallback applied); Unsupported (fallback failed); InvalidMetadata (U+FFFD) | H | raw 8-bit header text that is not UTF-8 |
@@ -657,6 +698,7 @@ These are recorded when the parse interprets a `Content-Type` or
 | `cte.invalid_token` | Recovered | S | `Content-Transfer-Encoding` written oddly (`base-64`, quotes, parameters) |
 | `cte.unknown` | Unsupported | S | no decoder; body raw; `IsUnknownEncoding` warning |
 | `cte.seven_bit_violation` | Info | S | a `7bit` body holds a NUL or 8-bit byte |
+| `cte.seven_bit_overlong_line` | Info | S | a `7bit` body holds a line over 998 octets; once per body, at the first such line |
 | `cte.base64_junk` | Recovered | S | bytes outside the alphabet were skipped |
 | `cte.base64_url_alphabet` | Recovered | S | `-` and `_` read as `+` and `/` |
 | `cte.base64_data_after_padding` | Recovered | S | data after `=` was decoded too; a scanner that stops at the padding sees less |
@@ -687,10 +729,10 @@ These are recorded when the parse interprets a `Content-Type` or
 | --- | --- | --- | --- |
 | `charset.unknown` | Unsupported | S | no decoder for the body's charset; body undecoded; import the plugin |
 | `charset.missing` | Recovered (decoded with `FallbackCharset`); Info (no fallback, kept as read) | S | text that declares no charset and is not UTF-8 |
-| `charset.declaration_suspect` | Recovered (healed: decoded with the fallback, or a legacy declaration over UTF-8 read as UTF-8); Info (US-ASCII declared, other bytes kept as read) | S, H | the declared charset is not what the bytes are |
+| `charset.declaration_suspect` | Recovered (healed: decoded with the fallback, or, with `RecoverCharsetDeclarations`, a legacy declaration over UTF-8 read as UTF-8); Info (a legacy declaration over UTF-8 decoded as declared, the Action naming UTF-8; or US-ASCII declared, other bytes kept as read) | S, H | the declared charset is not what the bytes are |
 | `mime.parameter_fallback_charset` | Recovered | S | a raw 8-bit parameter value, a filename mostly, decoded with `FallbackCharset` |
 | `charset.invalid_sequence` | Info (body); Recovered (decoded word) | S, H | text declared UTF-8 is not valid UTF-8; the body keeps its bytes, a word gets U+FFFD |
-| `charset.bom_mismatch` | Recovered (decoded as the mark says); Info (declaration kept) | S | a byte order mark contradicts the declared charset |
+| `charset.bom_mismatch` | Recovered (decoded as the mark says, only with `RecoverCharsetDeclarations`); Info (declaration kept; the Action names the mark's encoding when the bytes are also valid in it) | S | a byte order mark contradicts the declared charset |
 | `charset.empty` | Recovered | H | an encoded word names no charset |
 | `rfc2047.invalid_word` | Recovered (no closing `?=`); InvalidMetadata (the charset reader failed) | H | a malformed encoded word |
 | `rfc2047.unknown_charset` | Unsupported; Recovered for placeholder labels such as `unknown-8bit` | H, A | an encoded word in a charset with no decoder, left as written |
@@ -741,7 +783,7 @@ session.
 
 | Code | Severity | Where | For a classifier |
 | --- | --- | --- | --- |
-| `report.missing_field` | Recovered (inferred); InvalidMetadata | R | a required report field is missing |
+| `report.missing_field` | InvalidMetadata | R | a required report field is missing; a guess, if any, is in a `...Guess` field |
 | `report.invalid_status` | Recovered; InvalidMetadata | R | `Status` is not a bare RFC 3463 code |
 | `report.invalid_action` | Recovered; InvalidMetadata | R | `Action` is not an RFC 3464 action |
 | `report.invalid_field` | Info; Recovered; InvalidMetadata | R | another field does not read as its RFC writes it |

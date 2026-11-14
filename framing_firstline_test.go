@@ -69,6 +69,10 @@ type firstLineCase struct {
 	start  int64
 	lines  int
 	fields []string
+	// healed is the fields under every profile but ProfileStrict when they
+	// differ from fields, which Read, ReadWithOptions and ProfileStrict give:
+	// those profiles unfold as RFC 5322 says (#63).
+	healed []string
 	body   string
 	extra  []lineEndingFacts
 }
@@ -178,7 +182,7 @@ func firstLineCases() []firstLineCase {
 			prefix: " Content-Transfer-Encoding: base64\r\n", lines: 1, body: "QUJD"},
 		{name: "white space alone, then the empty line", text: " \t\r\n\r\nbody", prefix: " \t\r\n", lines: 1, body: "body"},
 		{name: "a whitespace line after a field is a fold", text: "A: 1\r\n \r\nB: 2\r\n\r\nbody",
-			fields: []string{`[] A="1"`, `[] B="2"`}, body: "body"},
+			fields: []string{`[] A="1"`, `[] B="2"`}, healed: []string{`[] A="1 "`, `[] B="2"`}, body: "body"},
 	}
 }
 
@@ -263,8 +267,12 @@ func TestParse_firstLineReferences(t *testing.T) {
 						t.Errorf("%s: Parse() err = %v, want nil", label, err)
 					}
 					tr := readLineEndingTree(e)
-					if !reflect.DeepEqual(tr.fields, tc.fields) && !(len(tr.fields) == 0 && len(tc.fields) == 0) {
-						t.Errorf("%s: fields = %q, want %q", label, tr.fields, tc.fields)
+					wantFields := tc.fields
+					if profile != ProfileStrict && tc.healed != nil {
+						wantFields = tc.healed
+					}
+					if !reflect.DeepEqual(tr.fields, wantFields) && !(len(tr.fields) == 0 && len(wantFields) == 0) {
+						t.Errorf("%s: fields = %q, want %q", label, tr.fields, wantFields)
 					}
 					if wantBodies := []string{fmt.Sprintf("[] %q", tc.body)}; !reflect.DeepEqual(tr.bodies, wantBodies) || tr.errs != nil {
 						t.Errorf("%s: bodies = %q (%q), want %q", label, tr.bodies, tr.errs, wantBodies)

@@ -106,6 +106,11 @@ func (e *Entity) embeddedMessage(walking bool) (*Entity, error) {
 	}
 	e.embeddedTried = true
 	e.embedded, e.embeddedErr = e.readEmbedded(walking)
+	// A message read out of a carrier gone past unread is abandoned with it;
+	// see drain_resume.go.
+	if e.abandoned && e.embedded != nil {
+		e.embedded.abandon()
+	}
 	return e.embedded, e.embeddedErr
 }
 
@@ -198,7 +203,11 @@ func (e *Entity) readEmbedded(walking bool) (*Entity, error) {
 		return nil, aerr
 	}
 	blocks.release()
-	return newWithOptions(Header{h}, body, e.skipTextAttachmentDecoding, ctx)
+	emb, err := newWithOptions(Header{h}, body, e.skipTextAttachmentDecoding, ctx)
+	if emb != nil && !ctx.origin.unplaced {
+		emb.srcEmbedded = e.srcPlaced()
+	}
+	return emb, err
 }
 
 // An embeddedReader is the iterator Walk descends into an embedded message
@@ -237,7 +246,7 @@ func (r *embeddedReader) Close() error { return nil }
 // walkEmbedded returns the iterator Walk descends into e with, or nil when e
 // carries no message, the parse did not ask for embedded messages to be
 // walked, or nothing of e's body is left to read one from.
-func (e *Entity) walkEmbedded() MultipartReader {
+func (e *Entity) walkEmbedded() *embeddedReader {
 	if !e.CarriesMessage() || e.parse.session == nil || !e.parse.session.cfg.walkEmbedded {
 		return nil
 	}

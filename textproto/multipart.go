@@ -68,7 +68,8 @@ type Part struct {
 // the framing line budget, HeaderLimits.MaxLineBytes, and no header-only
 // budget; with no line budget, a line still undecided past one buffer is this
 // reader's framing refusal wrapping bufio.ErrBufferFull, which ends the
-// iteration. A line that only begins like one is read as the line it is. A
+// iteration, unless HeaderLimits.UnboundedFramingLines lets it be held until
+// it is decided. A line that only begins like one is read as the line it is. A
 // header block with neither a malformed prefix nor an orphan record is read as
 // it always was, and a missing separator there is not looked for
 // (ROB-020-005).
@@ -302,7 +303,11 @@ type partReader struct {
 // returns the reader's own *LineLimitError. With no budget a
 // candidate line must fit in one buffer of the reader, ending included, as it
 // always had to; one that does not ends the body the same way, and NextPart
-// returns this reader's own error wrapping bufio.ErrBufferFull.
+// returns this reader's own error wrapping bufio.ErrBufferFull. With no budget
+// and HeaderLimits.UnboundedFramingLines nothing bounds it: the candidate is
+// held until a byte decides it, so the memory it takes is its length — the
+// line ending before it, "--", the boundary, any "--" and the run of spaces
+// and tabs after them — which only the length of the input bounds.
 //
 // At a delimiter, Read returns io.EOF, and NextPart consumes the delimiter. A
 // failure of the input other than io.EOF while a candidate is undecided does
@@ -719,8 +724,9 @@ func (r *MultipartReader) scanHeld(p *Part, buf []byte, eof, failed bool) (int, 
 
 // checkLine holds the delimiter line being decided, of content bytes from
 // its "--", to the framing line budget, or with none to one buffer of the
-// reader, its ending of endLen bytes included once decided says it has one.
-// A line past it is this reader's own refusal, kept for NextPart.
+// reader, its ending of endLen bytes included once decided says it has one —
+// unless HeaderLimits.UnboundedFramingLines lifts that, when nothing is held
+// to anything. A line past it is this reader's own refusal, kept for NextPart.
 func (r *MultipartReader) checkLine(content int64, endLen int, decided bool, lineStart int64) error {
 	if limit := r.limits.MaxLineBytes; limit > 0 {
 		if content <= limit {
@@ -728,6 +734,9 @@ func (r *MultipartReader) checkLine(content int64, endLen int, decided bool, lin
 		}
 		r.refuseLine(newLineLimitError(limit, lineStart))
 		return r.pending
+	}
+	if r.limits.UnboundedFramingLines {
+		return nil
 	}
 	size := int64(r.bufReader.Size())
 	if content+int64(endLen) <= size && (decided || content <= size) {
@@ -909,6 +918,11 @@ type MultipartReader struct {
 
 	// skFailed is the last failure of a framing read; see multipart_stuck.go.
 	skFailed skFramingFailure
+
+	// resumeScanned counts the bytes ResumeAfterClose searched for line
+	// endings, over every call, each once (a '\r' last in a read is looked at
+	// again when the next read decides it); tests hold it linear (#71).
+	resumeScanned int64
 }
 
 // defaultPreambleMax is how much of a preamble a recovering reader keeps when
@@ -933,12 +947,42 @@ func (r *MultipartReader) Preamble() (b []byte, truncated bool) {
 	return r.preamble, r.preambleOver
 }
 
-// keepPreamble keeps one preamble line and its line ending.
+// keepPreamble keeps one preamble line and its line ending: as many of the
+// line's bytes as the limit has room for, and then its line ending only if the
+// whole of it fits, so that a line that does not fit is kept cut and with no
+// line ending, whether its bytes come at once or in pieces.
 func (r *MultipartReader) keepPreamble(line []byte, end LineEnding) {
-	limit := r.preambleMax
-	if limit <= 0 {
-		limit = defaultPreambleMax
+	r.keepPreambleBytes(line)
+	r.keepPreambleEnd(end)
+}
+
+// preambleLimit is how many preamble bytes are kept; see SetPreambleLimit.
+func (r *MultipartReader) preambleLimit() int64 {
+	if r.preambleMax <= 0 {
+		return defaultPreambleMax
 	}
+	return r.preambleMax
+}
+
+// keepPreambleBytes keeps b, bytes of a preamble line's content, as far as the
+// limit has room for them, and notes when it has not.
+func (r *MultipartReader) keepPreambleBytes(b []byte) {
+	limit := r.preambleLimit()
+	room := limit - int64(len(r.preamble))
+	if int64(len(b)) > room {
+		r.preambleOver = true
+		if room > 0 {
+			r.preamble = append(r.preamble, b[:room]...)
+		}
+		return
+	}
+	r.preamble = pfGrow(r.preamble, len(b), limit)
+	r.preamble = append(r.preamble, b...)
+}
+
+// keepPreambleEnd keeps a preamble line's ending, none for 0, if the whole of
+// it fits, and otherwise notes that it does not.
+func (r *MultipartReader) keepPreambleEnd(end LineEnding) {
 	var term string
 	switch end {
 	case LineEndingCRLF:
@@ -948,16 +992,16 @@ func (r *MultipartReader) keepPreamble(line []byte, end LineEnding) {
 	case LineEndingCR:
 		term = "\r"
 	}
-	room := limit - int64(len(r.preamble))
-	if int64(len(line)+len(term)) > room {
-		r.preambleOver = true
-		if room > 0 {
-			r.preamble = append(r.preamble, line[:min(int64(len(line)), room)]...)
-		}
+	if term == "" {
 		return
 	}
-	r.preamble = pfGrow(r.preamble, len(line)+len(term), limit)
-	r.preamble = append(append(r.preamble, line...), term...)
+	limit := r.preambleLimit()
+	if int64(len(term)) > limit-int64(len(r.preamble)) {
+		r.preambleOver = true
+		return
+	}
+	r.preamble = pfGrow(r.preamble, len(term), limit)
+	r.preamble = append(r.preamble, term...)
 }
 
 // A MultipartFraming is how the iteration over a multipart has gone so far.
@@ -1052,6 +1096,17 @@ func (r *MultipartReader) SetMaxHeaderBytes(n int64) {
 // accumulated across buffers up to the budget, which is what makes the budget
 // the thing that decides, rather than a buffer size that was never meant to.
 //
+// HeaderLimits.UnboundedFramingLines, with no line budget, removes the bound
+// altogether. A framing line before the first part — a preamble line or a
+// delimiter line, however much white space pads it — is matched as its bytes
+// pass and is never held, so it costs one buffer whatever its length; under
+// Recover the preamble it adds is kept within SetPreambleLimit as before. A
+// delimiter candidate inside a body, or after a part header's malformed
+// prefix or orphan record, whose name has matched and whose run of spaces and
+// tabs is still undecided, is held until a byte decides it: its memory is its
+// length, and only the input's length bounds it. A line that is not a
+// delimiter is never held past the byte that shows it.
+//
 // SetHeaderLimits must be called before the first NextPart; calling it later has
 // no effect on a part that has already been read.
 func (r *MultipartReader) SetHeaderLimits(limits HeaderLimits) {
@@ -1115,7 +1170,8 @@ func isEOFClass(err error) bool {
 // buffer consumed. With one, the line is accumulated into lineBuf until it ends
 // or its content passes the budget, which returns this reader's own
 // *LineLimitError saying where the line began; nothing beyond one buffer past
-// the budget is retained.
+// the budget is retained. With HeaderLimits.UnboundedFramingLines and no
+// budget, streamFramingLine reads the line instead.
 //
 // The returned slice is valid until the next read of the reader.
 func (r *MultipartReader) readFramingLine() (line []byte, end LineEnding, start int64, err error) {
@@ -1279,53 +1335,241 @@ func (r *MultipartReader) nextPart() (*Part, error) {
 	// no delimiter, framing is read a line at a time. Before the first part, a
 	// line that is not a delimiter is preamble and is skipped.
 	for {
-		line, end, start, err := r.readFramingLine()
+		var fl framingLine
+		if r.limits.MaxLineBytes <= 0 && r.limits.UnboundedFramingLines {
+			// No bound on the line at all: it is streamed and decided as it
+			// goes, and keeps the preamble itself.
+			fl = r.streamFramingLine()
+		} else {
+			line, end, start, err := r.readFramingLine()
 
-		// A framing line past its budget is this reader's own refusal, and is
-		// returned as itself rather than wrapped: it is not a failure of the
-		// input, and nothing below it should be asked to explain it. Identity
-		// with the refusal this reader made is what identifies it, so an input
-		// that fails with ErrLineTooBig, with a LineLimitError of its own — a
-		// typed nil included — or with a genuine one another reader made, is
-		// the ordinary read failure it is.
-		if err != nil && err == r.refused {
-			return nil, err
+			// A framing line past its budget is this reader's own refusal,
+			// and is returned as itself rather than wrapped: it is not a
+			// failure of the input, and nothing below it should be asked to
+			// explain it. Identity with the refusal this reader made is what
+			// identifies it, so an input that fails with ErrLineTooBig, with
+			// a LineLimitError of its own — a typed nil included — or with a
+			// genuine one another reader made, is the ordinary read failure
+			// it is.
+			if err != nil && err == r.refused {
+				return nil, err
+			}
+			fl = framingLine{end: end, start: start, n: int64(len(line)), err: err}
+			fl.ok, fl.close = r.delimiterLine(line)
+			if r.limits.Recover && r.partsRead == 0 && fl.preamble() {
+				r.keepPreamble(line, end)
+			}
 		}
 
-		ok, close := r.delimiterLine(line)
-		if err == io.EOF && ok && close {
+		if fl.err == io.EOF && fl.ok && fl.close {
 			// "--boundary--" at the end of the input needs no line ending.
-			r.noteBefore(start)
+			r.noteBefore(fl.start)
 			r.markClosed()
 			return nil, io.EOF
 		}
-		if err != nil {
-			if err == io.EOF && r.limits.Recover {
+		if fl.err != nil {
+			if fl.err == io.EOF && r.limits.Recover {
 				// The input ended with no closing delimiter: the iteration
 				// ends, and what was read before any delimiter is kept (see
 				// Framing and Preamble).
-				if r.partsRead == 0 && len(line) > 0 {
-					r.keepPreamble(line, 0)
-				}
 				r.unclosed = true
 				return nil, io.EOF
 			}
-			return nil, r.skFailed.wrap(err, start)
+			return nil, r.skFailed.wrap(fl.err, fl.start)
 		}
-		if !ok && r.partsRead == 0 && r.limits.Recover {
-			r.keepPreamble(line, end)
-		}
-		if ok {
-			r.noteBefore(start)
-			r.ends.note(end, start+int64(len(line)))
-			if close {
+		if fl.ok {
+			r.noteBefore(fl.start)
+			r.ends.note(fl.end, fl.start+fl.n)
+			if fl.close {
 				r.markClosed()
 				return nil, io.EOF
 			}
 			return r.startPart()
 		}
-		r.lastEnd, r.lastEndAt = end, start+int64(len(line))
+		r.lastEnd, r.lastEndAt = fl.end, fl.start+fl.n
 	}
+}
+
+// A framingLine is what one framing line read before the first part — or
+// after a part the input ended — was: whether it is a delimiter line and a
+// closing one, its line ending (0 when the input ended or failed first), where
+// it began, how many content bytes it had, and the input's failure or io.EOF
+// that ended it, if one did.
+type framingLine struct {
+	ok, close bool
+	end       LineEnding
+	start     int64
+	n         int64
+	err       error
+}
+
+// preamble reports whether, under recovery and before the first part, the
+// line is kept as preamble: a line that is not a delimiter line, or one with
+// content the end of the input cut short that is not a closing delimiter line.
+// A line a failure of the input cut is not kept.
+func (fl framingLine) preamble() bool {
+	if fl.err == nil {
+		return !fl.ok
+	}
+	return fl.err == io.EOF && fl.n > 0 && !(fl.ok && fl.close)
+}
+
+// streamFramingLine reads the next framing line as readFramingLine does, with
+// the same line endings, failures and offsets, but without holding it: each
+// byte is matched against the delimiter line grammar of delimiterLine as it
+// passes and then consumed, so a line of any length costs one buffer of the
+// reader. It is how a reader with HeaderLimits.UnboundedFramingLines and no
+// line budget reads framing lines.
+//
+// Under recovery, before the first part, the line's bytes are kept as preamble
+// as they pass, within SetPreambleLimit as keepPreamble keeps them, and taken
+// back if the line turns out to be one framing.preamble does not keep.
+func (r *MultipartReader) streamFramingLine() framingLine {
+	br := r.bufReader
+	fl := framingLine{start: r.offset()}
+	m := delimLineMatcher{db: r.dashBoundary}
+	keep := r.limits.Recover && r.partsRead == 0
+	mark, overMark := len(r.preamble), r.preambleOver
+	var failed error
+
+	take := func(b []byte) {
+		m.feed(b)
+		fl.n += int64(len(b))
+		if keep {
+			r.keepPreambleBytes(b)
+		}
+		br.Discard(len(b))
+	}
+
+	for fl.end == 0 {
+		n := br.Buffered()
+		if n == 0 {
+			if failed != nil {
+				fl.err = failed
+				break
+			}
+			if _, perr := br.Peek(1); perr != nil {
+				failed = perr
+			}
+			continue
+		}
+		w, _ := br.Peek(n)
+		i := bytes.IndexAny(w, "\r\n")
+		switch {
+		case i < 0:
+			// No line ending here: all of it is content.
+			take(w)
+		case w[i] == '\n':
+			take(w[:i])
+			br.Discard(1)
+			fl.end = LineEndingLF
+		case i+1 < n && w[i+1] == '\n':
+			take(w[:i])
+			br.Discard(2)
+			fl.end = LineEndingCRLF
+		case i+1 < n || failed == io.EOF:
+			take(w[:i])
+			br.Discard(1)
+			fl.end = LineEndingCR
+		default:
+			// A '\r' last: the next byte decides it. A failure other than
+			// io.EOF leaves it content of the line that failure cut.
+			take(w[:i])
+			if failed != nil {
+				b, _ := br.Peek(1)
+				take(b)
+				continue
+			}
+			if _, perr := br.Peek(2); perr != nil {
+				failed = perr
+			}
+		}
+	}
+
+	fl.ok, fl.close = m.result()
+	if keep {
+		if fl.preamble() {
+			r.keepPreambleEnd(fl.end)
+		} else {
+			r.preamble, r.preambleOver = r.preamble[:mark], overMark
+		}
+	}
+	return fl
+}
+
+// A delimLineMatcher matches the content of a framing line, fed to it in
+// pieces, against delimiterLine's grammar: "--", the boundary, "--" for the
+// closing one, then only spaces and tabs. It holds no byte of the line.
+type delimLineMatcher struct {
+	db    []byte // "--boundary"
+	i     int    // how much of db has matched, while in dlName
+	state uint8
+	close bool
+}
+
+const (
+	dlName  uint8 = iota // matching db
+	dlAfter              // db matched, nothing after it yet
+	dlDash               // db and one '-'
+	dlPad                // db, any "--", and spaces and tabs
+	dlFail               // not a delimiter line
+)
+
+func (m *delimLineMatcher) feed(b []byte) {
+	for len(b) > 0 {
+		switch m.state {
+		case dlFail:
+			return
+		case dlName:
+			k := min(len(b), len(m.db)-m.i)
+			if !bytes.Equal(b[:k], m.db[m.i:m.i+k]) {
+				m.state = dlFail
+				return
+			}
+			m.i += k
+			b = b[k:]
+			if m.i == len(m.db) {
+				m.state = dlAfter
+			}
+		case dlAfter:
+			switch b[0] {
+			case '-':
+				m.state = dlDash
+			case ' ', '\t':
+				m.state = dlPad
+			default:
+				m.state = dlFail
+				return
+			}
+			b = b[1:]
+		case dlDash:
+			if b[0] != '-' {
+				m.state = dlFail
+				return
+			}
+			m.state, m.close = dlPad, true
+			b = b[1:]
+		case dlPad:
+			for _, c := range b {
+				if c != ' ' && c != '\t' {
+					m.state = dlFail
+					return
+				}
+			}
+			return
+		}
+	}
+}
+
+// result reports what delimiterLine reports of the content fed so far.
+func (m *delimLineMatcher) result() (ok, close bool) {
+	switch m.state {
+	case dlAfter:
+		return true, false
+	case dlPad:
+		return true, m.close
+	}
+	return false, false
 }
 
 // noteBefore records, for a delimiter line found by reading framing lines, the

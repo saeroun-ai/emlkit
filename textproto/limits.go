@@ -61,6 +61,20 @@ type HeaderLimits struct {
 	// terminating is charged the bytes it has.
 	MaxLineBytes int64
 
+	// UnboundedFramingLines, with no line budget (MaxLineBytes zero or below),
+	// has a MultipartReader read its framing lines — preamble lines, delimiter
+	// lines, and a delimiter candidate in a body or after a part header's
+	// malformed prefix or orphan record — at any length, rather than within one
+	// buffer of the reader. Without it, such a line longer than that buffer
+	// ends the iteration with the reader's error wrapping bufio.ErrBufferFull,
+	// as it always has. A line budget, when there is one, decides alone, and a
+	// header block's own lines are not affected. See
+	// MultipartReader.SetHeaderLimits for what it costs.
+	//
+	// The message layer sets it for Limits.MaxLineBytes of LimitDisabled, and
+	// nothing else does.
+	UnboundedFramingLines bool
+
 	// Total, when non-nil, is a budget several blocks spend together, on top
 	// of the per-block budgets above. It is the one field here that is
 	// cumulative; see HeaderBudget. nil is no shared budget.
@@ -72,6 +86,12 @@ type HeaderLimits struct {
 	// the first line of the body. It is no budget and is off by default. See
 	// recover.go, and ReadHeaderRecover for the bytes a block ended that way
 	// hands back.
+	//
+	// Under Recover a field's value is also unfolded as RFC 5322 section
+	// 3.2.2 says: its line endings are removed and the white space of its
+	// folds kept, tabs, runs of spaces, white space only continuation lines
+	// and trailing white space included. Without it, each fold and the white
+	// space around it become one space, as they always did.
 	Recover bool
 
 	// DamagedLine says, under Recover, how a damaged line that continues no

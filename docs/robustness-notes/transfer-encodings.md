@@ -1,7 +1,7 @@
 # Transfer encodings (ROB-070-001 to ROB-070-010, ROB-060-012)
 
 Issues #32, #33, #34, #35, #49. Code: `cte_tolerant.go`, `encoding.go`,
-`entity.go`. Tests: `cte_tolerant_test.go`.
+`entity.go`. Tests: `cte_tolerant_test.go`, `cte_seven_bit_line_test.go`.
 
 ## Principle
 
@@ -34,6 +34,25 @@ A body that declares `7bit` under `Parse` records `cte.seven_bit_violation`
 (Info) at the first NUL or byte above 127. Every byte is kept. An undeclared
 encoding is not checked: 8-bit bytes with no declaration are too common to be
 worth a diagnostic each.
+
+It also records `cte.seven_bit_overlong_line` (Info), once per body, for the
+first line longer than 998 octets (RFC 5322 section 2.1.1, RFC 2045 section
+2.7), located at the start of that line (#33). Lines are framed as the line
+budget frames them (`limit_line_bytes.go`): LF ends a line, a CR right before
+it belongs to the line ending, and a bare CR is content. A part's body ends
+before the line ending of the delimiter that follows it, so that line ending
+is not counted. A line is overlong as soon as its 999th octet is read; a
+line ending or the end of the body need not follow, and a later input failure
+does not take it back. A CR the body ends with is not counted: it may be the
+first half of a line ending that the input cut. Nothing is rewritten or
+dropped. `8bit`, `binary` and undeclared bodies are not checked, nor is any
+body under `ProfileStrict`, `Read`, `ReadWithOptions` or `New`.
+
+The monitor counts in constant memory. So that the diagnostic does not move
+with read sizes, a read never hands on the byte that proved the line overlong
+together with bytes before it: the bytes the source returned from that byte
+on are kept, once per body and at most one read's worth, and the next read
+records the diagnostic and returns them.
 
 ## Base64 (ROB-070-004 to -007)
 
@@ -84,7 +103,8 @@ ends with `io.EOF`. A repair seen on the last, unended line of a body whose
 input then failed is not recorded, and no partial Base64 group is emitted
 there: those bytes may be a multipart delimiter the failure cut short, and the
 failure is what the body reports (ROB-010-006). `cte.seven_bit_violation` is
-recorded at once.
+recorded at once, and `cte.seven_bit_overlong_line` once the line's 999th
+octet is reached, as described under 7bit.
 
 A caller that stops reading a body before its end may therefore miss the
 repairs of the final unended line.
@@ -97,7 +117,9 @@ of a body therefore come in the order of their positions — a
 `cte.qp_invalid_hex` after a `charset.invalid_sequence` that precedes it in
 the text — whatever the read sizes of the input, and a caller that stops
 reading before a repair's position does not get it. `cte.seven_bit_violation`
-is recorded when its byte is read.
+is recorded when its byte is read. `cte.seven_bit_overlong_line` follows the
+decoders' rule: the read that begins at the byte proving the line overlong
+records it, after what the stages above found in the bytes before it.
 
 ## Multipart and message/rfc822 (ROB-060-012)
 

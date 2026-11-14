@@ -33,11 +33,14 @@ func cdParseBody(t *testing.T, r io.Reader, opts *message.ParseOptions) (string,
 
 // TestParse_utf8UnderLegacyDeclaration pins the evidence rule of
 // charset_bom.go (cdDecideUTF8): a text body that declares a legacy charset
-// is read as UTF-8, and reported as charset.declaration_suspect, when its
-// sniff window holds no ill-formed byte and at least two multi-byte
-// sequences, one of them three bytes long or, failing that, the declared
-// decoder itself reading the bytes as not its own. Everything else is decoded
-// as declared, silently; so is everything under ProfileStrict and Read.
+// is UTF-8 by the evidence when its sniff window holds no ill-formed byte and
+// at least two multi-byte sequences, one of them three bytes long or, failing
+// that, the declared decoder itself reading the bytes as not its own. Such a
+// body is decoded as declared and reported as charset.declaration_suspect at
+// SeverityInfo by default (#65), and read as UTF-8 at SeverityRecovered with
+// ParseOptions.RecoverCharsetDeclarations; healed marks it. Everything else
+// is decoded as declared, silently; so is everything under ProfileStrict and
+// Read, with the option or without.
 func TestParse_utf8UnderLegacyDeclaration(t *testing.T) {
 	const (
 		ko      = "안녕하세요, world"
@@ -45,6 +48,7 @@ func TestParse_utf8UnderLegacyDeclaration(t *testing.T) {
 		wreath  = "\xc8\xad\xc8\xaf" // 화환 in EUC-KR, and "ȭȯ" in UTF-8
 		cp1251  = "\xcf\xf0\xe8\xe2\xe5\xf2"
 		suspect = "recovered charset.declaration_suspect"
+		noted   = "info charset.declaration_suspect"
 	)
 	for _, tc := range []struct {
 		name, label, body string
@@ -71,6 +75,8 @@ func TestParse_utf8UnderLegacyDeclaration(t *testing.T) {
 		// taken for a single-byte reading.
 		{"latin that euc-kr reads as pairs", "euc-kr", "café déjà", false},
 		{"half-width katakana pairs", "shift_jis", "\xc3\xbd\xc3\xbd", true},
+		// Valid Shift_JIS, ﾂ｡ﾂ｡, and "¡¡" in UTF-8 (#65): two readings.
+		{"half-width katakana C2 A1", "shift_jis", "\xc2\xa1\xc2\xa1", true},
 		{"real windows-1251", "windows-1251", cp1251, false},
 		{"one sequence", "windows-1252", "it’s", false},
 		{"one sequence, korean", "euc-kr", "가", false},
@@ -87,23 +93,31 @@ func TestParse_utf8UnderLegacyDeclaration(t *testing.T) {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
 		asDeclared, _ := io.ReadAll(declared)
-		want, wantDiags := string(asDeclared), []string(nil)
-		if tc.healed {
-			want, wantDiags = tc.body, []string{suspect}
-		}
-		for name, wrap := range map[string]func(io.Reader) io.Reader{
-			"whole":    func(r io.Reader) io.Reader { return r },
-			"one byte": iotest.OneByteReader,
-		} {
-			got, diags := cdParseBody(t, wrap(strings.NewReader(input)), nil)
-			if got != want || !reflect.DeepEqual(diags, wantDiags) {
-				t.Errorf("%s/%s: body %q %v, want %q %v", tc.name, name, got, diags, want, wantDiags)
+		for _, optIn := range []bool{false, true} {
+			want, wantDiags := string(asDeclared), []string(nil)
+			switch {
+			case tc.healed && optIn:
+				want, wantDiags = tc.body, []string{suspect}
+			case tc.healed:
+				wantDiags = []string{noted}
+			}
+			opts := &message.ParseOptions{RecoverCharsetDeclarations: optIn}
+			for name, wrap := range map[string]func(io.Reader) io.Reader{
+				"whole":    func(r io.Reader) io.Reader { return r },
+				"one byte": iotest.OneByteReader,
+			} {
+				got, diags := cdParseBody(t, wrap(strings.NewReader(input)), opts)
+				if got != want || !reflect.DeepEqual(diags, wantDiags) {
+					t.Errorf("%s/%s/optIn=%v: body %q %v, want %q %v", tc.name, name, optIn, got, diags, want, wantDiags)
+				}
+			}
+			// ProfileStrict decodes as declared and says nothing.
+			opts.Profile = message.ProfileStrict
+			if got, diags := cdParseBody(t, strings.NewReader(input), opts); got != string(asDeclared) || diags != nil {
+				t.Errorf("%s/strict/optIn=%v: body %q %v, want as declared and no diagnostic", tc.name, optIn, got, diags)
 			}
 		}
-		// ProfileStrict and Read decode as declared and say nothing.
-		if got, diags := cdParseBody(t, strings.NewReader(input), &message.ParseOptions{Profile: message.ProfileStrict}); got != string(asDeclared) || diags != nil {
-			t.Errorf("%s/strict: body %q %v, want as declared and no diagnostic", tc.name, got, diags)
-		}
+		// Read decodes as declared.
 		e, err := message.Read(strings.NewReader(input))
 		if err != nil {
 			t.Fatalf("%s: Read() = %v", tc.name, err)
@@ -225,9 +239,11 @@ func TestParse_fallbackCharsetForParameters(t *testing.T) {
 // TestParse_declarationLookIsChunkInvariant: over seeded bodies mixed from
 // ASCII, UTF-8, EUC-KR and stray bytes, under labels of every kind and with
 // and without a fallback charset, the body and the diagnostics do not depend
-// on how the input is cut into reads; a body is either what the declared
-// decoder makes of it, or — with charset.declaration_suspect — its own bytes.
-// The inputs are a fixed 1500, each of at most 6 KiB.
+// on how the input is cut into reads. By default a body is what the declared
+// decoder makes of it, with charset.declaration_suspect at Info exactly where
+// ParseOptions.RecoverCharsetDeclarations would heal it; with the option it is
+// either that, silently, or — at Recovered — its own bytes. The inputs are a
+// fixed 1500, each of at most 6 KiB, parsed by default and with the option.
 func TestParse_declarationLookIsChunkInvariant(t *testing.T) {
 	pieces := []string{
 		"plain text ", "<p>", "\r\n", "안녕하세요 ", "가", "é", "“x” ", "Привет ",
@@ -255,32 +271,47 @@ func TestParse_declarationLookIsChunkInvariant(t *testing.T) {
 		}
 		input := "Content-Type: " + ct + "\r\n\r\n" + body.String()
 
-		want, wantDiags := cdParseBody(t, strings.NewReader(input), opts)
-		for name, wrap := range map[string]func(io.Reader) io.Reader{
-			"one byte": iotest.OneByteReader,
-			"half":     iotest.HalfReader,
-			"data err": iotest.DataErrReader,
-		} {
-			got, diags := cdParseBody(t, wrap(strings.NewReader(input)), opts)
-			if got != want || !reflect.DeepEqual(diags, wantDiags) {
-				t.Fatalf("%q under %q, %s: body %q %v; read whole %q %v", body.String(), label, name, got, diags, want, wantDiags)
+		// By default, then with the recovery on: the default notes what the
+		// recovery heals, and decodes it as declared.
+		var noted bool
+		for _, optIn := range []bool{false, true} {
+			opts.RecoverCharsetDeclarations = optIn
+			want, wantDiags := cdParseBody(t, strings.NewReader(input), opts)
+			for name, wrap := range map[string]func(io.Reader) io.Reader{
+				"one byte": iotest.OneByteReader,
+				"half":     iotest.HalfReader,
+				"data err": iotest.DataErrReader,
+			} {
+				got, diags := cdParseBody(t, wrap(strings.NewReader(input)), opts)
+				if got != want || !reflect.DeepEqual(diags, wantDiags) {
+					t.Fatalf("%q under %q, optIn=%v, %s: body %q %v; read whole %q %v", body.String(), label, optIn, name, got, diags, want, wantDiags)
+				}
 			}
-		}
-		if label == "" || label == "utf-8" || label == "us-ascii" || opts.FallbackCharset != "" {
-			continue
-		}
-		healed := reflect.DeepEqual(wantDiags, []string{"recovered charset.declaration_suspect"}) ||
-			reflect.DeepEqual(wantDiags, []string{"recovered charset.declaration_suspect", "info charset.invalid_sequence"})
-		declared, err := charset.Reader(label, strings.NewReader(body.String()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		asDeclared, _ := io.ReadAll(declared)
-		switch {
-		case healed && want != body.String():
-			t.Fatalf("%q under %q: healed to %q, want its own bytes", body.String(), label, want)
-		case !healed && (want != string(asDeclared) || wantDiags != nil):
-			t.Fatalf("%q under %q: %q %v, want it as declared, %q, and no diagnostic", body.String(), label, want, wantDiags, asDeclared)
+			if label == "" || label == "utf-8" || label == "us-ascii" || opts.FallbackCharset != "" {
+				continue
+			}
+			healed := reflect.DeepEqual(wantDiags, []string{"recovered charset.declaration_suspect"}) ||
+				reflect.DeepEqual(wantDiags, []string{"recovered charset.declaration_suspect", "info charset.invalid_sequence"})
+			declared, err := charset.Reader(label, strings.NewReader(body.String()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			asDeclared, _ := io.ReadAll(declared)
+			if !optIn {
+				noted = reflect.DeepEqual(wantDiags, []string{"info charset.declaration_suspect"})
+				if want != string(asDeclared) || wantDiags != nil && !noted {
+					t.Fatalf("%q under %q by default: %q %v, want it as declared, %q, and at most the suspicion", body.String(), label, want, wantDiags, asDeclared)
+				}
+				continue
+			}
+			switch {
+			case healed != noted:
+				t.Fatalf("%q under %q: healed %v with the option, noted %v without", body.String(), label, healed, noted)
+			case healed && want != body.String():
+				t.Fatalf("%q under %q: healed to %q, want its own bytes", body.String(), label, want)
+			case !healed && (want != string(asDeclared) || wantDiags != nil):
+				t.Fatalf("%q under %q: %q %v, want it as declared, %q, and no diagnostic", body.String(), label, want, wantDiags, asDeclared)
+			}
 		}
 	}
 }

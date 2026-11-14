@@ -61,6 +61,18 @@ parts after a nested close in its epilogue, lost. Now, under `Parse` (not
 - Each resumption is reported as `multipart.close_shared` (Recovered) on the
   outer multipart, at the byte after the closing line.
 
+The look-ahead examines each byte for a line ending once, however the input
+arrives (#71, reviewed 2026-11-13). It used to search a line that a read had
+made longer again from the line's start, so a long line after a shared close,
+read a byte at a time, cost the square of its length. It now keeps the point
+the search reached; a `\r` last in what was read is the one byte looked at
+again, once the byte after it decides it. `TestMultipartReader_ResumeAfterCloseLinear`
+holds the count to twice the bytes after the close for lines of up to 64 KiB,
+whole and in 1-, 16- and 4096-byte reads, and requires the same result and
+epilogue from each; `TestParse_nestedBoundariesLongTail` checks the outer parts,
+trailing input and diagnostics through `Parse`. What is read on, the bound and
+the bytes given back are unchanged.
+
 ## Why
 
 The tree the sender meant is ambiguous once two levels share a boundary: a
@@ -89,3 +101,8 @@ multipart goes on, and only as often as the nested declarations account for.
 - The empty outer part in the `B` in `B--` case is not dropped, and nested
   closing lines no enclosing boundary frames (`--B --`, `--B----`) stay in the
   body of the part before them.
+
+Codex independently reviewed the #71 diff, passed the public reproduction
+(128 KiB at one byte per read: 4.37 ms), focused recovery tests, the full
+unit suite, the textproto race suite, build, formatting and diff checks on
+Linux amd64. Remaining race groups are part of the finishing-round final gate.

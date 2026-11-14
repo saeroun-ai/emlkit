@@ -154,17 +154,17 @@
       "name": "ko-utf8-labelled-euc-kr",
       "state": "complete",
       "diagnostics": [
-        "recovered charset.declaration_suspect []"
+        "info charset.declaration_suspect []"
       ],
       "leaves": [
-        "[] text/html 215"
+        "[] text/html 260"
       ],
       "headers": [
         "Subject 22 \"[광고] 연말 특가\"",
         "From 23 \"shop@shop.example.co.kr\""
       ],
       "text": [
-        "[] \"<html><head><meta charset=\\\"utf-8\\\"></head><body><p>[광고] 연말 특가\"…"
+        "[] \"<html><head><meta charset=\\\"utf-8\\\"></head><body><p>[愿묎퀬] �곕쭚 �\"…"
       ]
     },
     {

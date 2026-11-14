@@ -492,19 +492,25 @@ type bodyGuard struct {
 	err   error
 	proof [1]byte
 
-	// ended reports that a read has ended this body; see Read.
-	ended bool
+	// ended reports that a read has ended this body; see Read. abandoned
+	// reports that an iterator went past the body before it ended, so its end
+	// does not count as read; see drain_resume.go.
+	ended     bool
+	abandoned bool
 }
 
 // Read implements io.Reader. It is read, counted for ParseSession.Completion:
-// the body is read to its end once a read ends it, with io.EOF or otherwise.
+// the body is read to its end once a read ends it, with io.EOF or otherwise,
+// unless it was abandoned before.
 func (g *bodyGuard) Read(p []byte) (int, error) {
 	n, err := g.read(p)
 	if s := g.ctx.session; s != nil {
 		s.prog.touched.Store(true)
 		if err != nil && !g.ended {
 			g.ended = true
-			s.prog.bodiesRead.Add(1)
+			if !g.abandoned {
+				s.prog.bodiesRead.Add(1)
+			}
 		}
 	}
 	return n, err

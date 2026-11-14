@@ -45,20 +45,23 @@ func TestParse_fallbackCharset(t *testing.T) {
 		if tc.contentType != "" {
 			header = "Content-Type: " + tc.contentType + "\r\n"
 		}
-		s, e, err := message.Parse(strings.NewReader("Subject: s\r\n"+header+"\r\n"+tc.body), &message.ParseOptions{FallbackCharset: tc.fallback})
-		if err != nil {
-			t.Fatalf("%s: Parse() = %v", tc.name, err)
-		}
-		b, rerr := io.ReadAll(e.Body)
-		if string(b) != tc.want || rerr != nil {
-			t.Errorf("%s: body (%q, %v), want %q", tc.name, b, rerr, tc.want)
-		}
-		var codes []message.Code
-		for _, d := range s.Diagnostics() {
-			codes = append(codes, d.Code)
-		}
-		if !reflect.DeepEqual(codes, tc.codes) {
-			t.Errorf("%s: diagnostics %v, want %v", tc.name, codes, tc.codes)
+		// The fallback does not depend on ParseOptions.RecoverCharsetDeclarations.
+		for _, optIn := range []bool{false, true} {
+			s, e, err := message.Parse(strings.NewReader("Subject: s\r\n"+header+"\r\n"+tc.body), &message.ParseOptions{FallbackCharset: tc.fallback, RecoverCharsetDeclarations: optIn})
+			if err != nil {
+				t.Fatalf("%s: Parse() = %v", tc.name, err)
+			}
+			b, rerr := io.ReadAll(e.Body)
+			if string(b) != tc.want || rerr != nil {
+				t.Errorf("%s/optIn=%v: body (%q, %v), want %q", tc.name, optIn, b, rerr, tc.want)
+			}
+			var codes []message.Code
+			for _, d := range s.Diagnostics() {
+				codes = append(codes, d.Code)
+			}
+			if !reflect.DeepEqual(codes, tc.codes) {
+				t.Errorf("%s/optIn=%v: diagnostics %v, want %v", tc.name, optIn, codes, tc.codes)
+			}
 		}
 	}
 }

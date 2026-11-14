@@ -43,6 +43,7 @@ const (
 	noteUUMissingEnd
 	noteSevenBit
 	noteB64Truncated
+	noteSevenBitOverlong
 	cteNoteCount
 )
 
@@ -69,6 +70,7 @@ var cteNoteInfo = [cteNoteCount]struct {
 	noteUUMissingEnd:        {CodeCTEUUEncodeMissingEnd, SeverityIncomplete, "uuencoded body has no end line", "decoded up to the end of the body"},
 	noteSevenBit:            {CodeCTESevenBitViolation, SeverityInfo, "body declared 7bit holds a NUL or a byte above 127", "kept every byte"},
 	noteB64Truncated:        {CodeCTEBase64Truncated, SeverityIncomplete, "base64 body ends inside a group because the input ends there, with no closing delimiter after it", "decoded the whole bytes of the cut group and dropped the rest"},
+	noteSevenBitOverlong:    {CodeCTESevenBitOverlongLine, SeverityInfo, "body declared 7bit holds a line longer than 998 octets", "kept every byte"},
 }
 
 // cteNotes reports the repairs of one body's transfer decoder, each kind once,
@@ -842,20 +844,109 @@ func (d *tolerantUU) endLine() {
 	}
 }
 
+// sevenBitLineMax is the most octets a line of a 7bit body may hold, its line
+// ending not counted (RFC 5322 section 2.1.1, RFC 2045 section 2.7).
+const sevenBitLineMax = 998
+
 // A sevenBitMonitor passes a body declared 7bit through unchanged and reports,
-// once, the first NUL or byte above 127 in it (ROB-070-003). It holds nothing
-// and stops looking after the first.
+// once each (ROB-070-003):
+//
+//   - the first NUL or byte above 127, when the Read that returns it reads it;
+//   - the first line longer than sevenBitLineMax octets.
+//
+// A line is ended by LF, and a CR right before the LF is part of that line
+// ending, as the framing line budget counts lines (limit_line_bytes.go); a
+// bare CR is content. A multipart part's body ends before the line ending of
+// the delimiter after it, so its last line is counted up to there. A line is
+// overlong as soon as its 999th content octet is read, whether or not a line
+// ending or the end of the body follows: a line with no ending is not
+// shorter for it. A CR the body ends with is not counted, since it may be the
+// first half of a line ending the input cut.
+//
+// The overlong line is reported when the consumer has read up to the byte that
+// proved it, not before: a Read never returns bytes past that byte together
+// with the bytes before it, and the Read that begins there records it (see
+// chunk_invariance.go). The bytes a read of the source returned past it are
+// held for the next Read — once per body, at most one read's worth.
+// Otherwise the monitor holds nothing and counts in constant memory.
 type sevenBitMonitor struct {
 	r        io.Reader
 	notes    *cteNotes
-	consumed int64
-	found    bool
+	consumed int64 // bytes handed on
+	found    bool  // a NUL or 8-bit byte was reported
+
+	col       int64 // bytes of the current line handed on, CRs included
+	lineStart int64 // offset of the current line in the body
+	long      bool  // an overlong line was found
+	due       bool  // ... and is recorded by the next Read
+	longAt    int64 // where that line began
+	held      []byte
+	heldErr   error
 }
 
 func (m *sevenBitMonitor) Read(p []byte) (int, error) {
-	n, err := m.r.Read(p)
-	if n > 0 && !m.found {
-		for i, c := range p[:min(n, len(p))] {
+	if m.due {
+		m.due = false
+		m.notes.note(noteSevenBitOverlong, m.longAt)
+		m.notes.settle()
+	}
+	var n int
+	var err error
+	if m.held != nil {
+		n = copy(p, m.held)
+		if m.held = m.held[n:]; len(m.held) == 0 {
+			m.held, err, m.heldErr = nil, m.heldErr, nil
+		}
+	} else {
+		n, err = m.r.Read(p)
+		n = max(0, min(n, len(p)))
+	}
+	k := m.scan(p[:n])
+	if k < n {
+		// The line proved overlong at p[k], after bytes this Read hands on.
+		m.held = append([]byte(nil), p[k:n]...)
+		m.heldErr, err = err, nil
+		m.due = true
+		n = k
+	}
+	return n, err
+}
+
+// scan looks at the bytes b about to be handed on, and returns how many of
+// them may be: all of them, or those before the byte that proved a line
+// overlong when it is not the first of b. A NUL or 8-bit byte is looked for
+// in those only.
+func (m *sevenBitMonitor) scan(b []byte) int {
+	k := len(b)
+	if !m.long {
+		for i, c := range b {
+			if c == '\n' {
+				m.col = 0
+				m.lineStart = m.consumed + int64(i) + 1
+				continue
+			}
+			m.col++
+			content := m.col
+			if c == '\r' {
+				// Content only if a byte other than LF follows it.
+				content--
+			}
+			if content > sevenBitLineMax {
+				m.long = true
+				if i == 0 {
+					// The Read begins at the byte that proved it.
+					m.notes.note(noteSevenBitOverlong, m.lineStart)
+					m.notes.settle()
+				} else {
+					m.longAt = m.lineStart
+					k = i
+				}
+				break
+			}
+		}
+	}
+	if !m.found {
+		for i, c := range b[:k] {
 			if c >= 0x80 || c == 0 {
 				// What the byte is does not depend on how the body ends, so
 				// it is reported at once.
@@ -865,9 +956,9 @@ func (m *sevenBitMonitor) Read(p []byte) (int, error) {
 				break
 			}
 		}
-		m.consumed += int64(n)
 	}
-	return n, err
+	m.consumed += int64(k)
+	return k
 }
 
 // transferDecoder returns the decoder of a body whose transfer encoding is

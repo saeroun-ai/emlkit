@@ -25,6 +25,9 @@ iteration no longer ends with an error for these, and `Entity.Walk` and
 
 ## Boundary inference (ROB-060-002 to -004)
 
+Policy classification (#62): this is a retained structural-recovery exception to declaration-first parsing, not a claim that the sender intended the inferred tree. Keep it under healing profiles because the repeated delimiters and part headers below are concrete evidence of structure; retain the declared header and report the repair and any ambiguity. The eight-level inference cap remains. `ProfileStrict` provides the declaration-only path; no new adoption option is introduced by this policy note.
+
+
 It runs only when no line of the body is a delimiter of the declared boundary.
 A candidate is the text after `--` of a line that begins with it: 1 to 70
 bytes, a letter or digit among them. It qualifies when it introduces at least

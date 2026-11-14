@@ -178,6 +178,11 @@ type Node struct {
 	// content as unverified, never as verified with repairs.
 	Unverifiable       bool
 	UnverifiableReason string
+
+	// budget is the parse's spool budget the node's body counts against
+	// (spool_limits.go); nil for a node of an entity no session saw, or one
+	// built by hand.
+	budget *spoolBudget
 }
 
 // TreeOptions configures ReadTree. The zero value, and nil, are the defaults.
@@ -276,7 +281,7 @@ func ReadTree(e *message.Entity, opts *TreeOptions) (*Tree, error) {
 	if o.MaxTotalBytes == 0 {
 		o.MaxTotalBytes = defaultTreeTotal
 	}
-	b := &treeBuilder{opts: o, root: e, seen: make(map[[sha256.Size]byte]*Node)}
+	b := &treeBuilder{opts: o, root: e, seen: make(map[[sha256.Size]byte]*Node), budget: newSpoolBudget(e)}
 	t := &Tree{}
 	root, err := b.read(e, nil, nil, nil)
 	t.Root = root
@@ -294,6 +299,8 @@ type treeBuilder struct {
 	root  *message.Entity
 	total int64
 	seen  map[[sha256.Size]byte]*Node
+	// budget is the parse's spool budget, shared by every node of the tree.
+	budget *spoolBudget
 	// sgByPath is each node by the MIME path the parse gave its entity,
 	// which the parse's diagnostics name; see tree_signed.go.
 	sgByPath map[string]*Node
@@ -302,7 +309,7 @@ type treeBuilder struct {
 // read builds the node of e and everything under it. warn is the warning e
 // came with.
 func (b *treeBuilder) read(e *message.Entity, path []int, parent *Node, warn error) (*Node, error) {
-	n := &Node{Path: path, Parent: parent, Header: e.Header, Warning: warn}
+	n := &Node{Path: path, Parent: parent, Header: e.Header, Warning: warn, budget: b.budget}
 	b.sgRegister(e, n)
 	n.MediaType, n.Params, _ = e.EffectiveContentType()
 	if n.MediaType == "" {

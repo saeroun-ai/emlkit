@@ -19,6 +19,9 @@ the block.
 
 ## How a damaged line is decided
 
+Policy classification (#62): unindented continuation joining remains a structural-recovery exception under healing profiles, restricted to the grammar below. It is not general prose joining or an inference of sender intent. The original physical lines stay available unchanged and the join is diagnosed. Duplicate singleton selection remains declaration-first (the first occurrence); standard unfolding removes line endings without collapsing value whitespace (#63).
+
+
 In this order:
 
 1. **Unindented continuation.** It continues the field before it when that
@@ -55,6 +58,88 @@ one `header.duplicate_singleton`, under every profile. Nothing is removed. The
 parser and the accessors read the first occurrence. Severity is Recovered when
 a repeated `Content-Type`, `Content-Transfer-Encoding` or `Content-Disposition`
 differs from the first, Info otherwise.
+
+## The unselected Content-Type (#67)
+
+The first `Content-Type` stays the one read. When a later `Content-Type` of
+the same block declares a `multipart/*` whose boundary delimits lines of the
+body, the body is also readable as that multipart, and a client that takes the
+later field shows parts this parse does not, or other parts than it does
+(corpus finding 5). Which one the sender meant is not in the bytes (#62), so
+nothing is re-read: Parse, under every profile but `ProfileStrict`, records
+`header.unselected_multipart` (Info), which sets `Completion.Ambiguous`.
+
+- What is looked at: every entity, whether its first Content-Type makes it a
+  leaf or a framed multipart. Every later Content-Type field is parsed with
+  `mime.ParseMediaType`; the header block was already admitted under the
+  header budgets, and what is kept is bounded by it. A field that does not
+  parse, is not `multipart/*`, has no boundary or an empty one, has a boundary
+  holding a line ending or too long for a delimiter line inside the window
+  (over 4093 bytes), or repeats the chosen media type and boundary, is
+  skipped. Boundaries are not capped at RFC 2046's 70 bytes, since the framing
+  reader is not. A boundary declared twice keeps its first declaration.
+- Evidence: a line, in the first 4096 wire bytes of the body (the charset
+  sniff window), that is `--`, the boundary, `--` for a closing delimiter,
+  then only spaces and tabs before a CRLF, LF or bare CR: the rule textproto
+  frames delimiters by. A closing delimiter alone counts (an empty alternate
+  multipart). A last line the body ends without a line ending, inside the
+  window, counts only as a closing delimiter: the healing framing accepts
+  `--B--` there in any place, but keeps a cut `--B` as preamble when no
+  delimiter line came before it, and after one this look has already found
+  its line (`TestUnselectedMultipart_eofRule`). A longer line (`--B-x`, `--B---`), a line not at the line start,
+  or a line whose ending begins past the window is no evidence. A line that
+  reads as a delimiter of two declared boundaries (`--x--` opens `x--` and
+  closes `x`) names the declaration given first. Bytes are read before
+  transfer decoding, as a multipart body would be.
+- Where the bytes are seen: a tap under the decoders of a leaf, or under the
+  framing of a multipart the first field selects. For the latter, lines from
+  the end of its closing delimiter line on are its epilogue, which the framing
+  reads only as far as its buffer went, so they are not counted.
+- Cost: the tap sees the wire bytes the decoders or the framing read; it reads
+  nothing itself and stops looking at 4096 bytes. It keeps one line prefix of
+  at most four bytes more than the longest boundary, never more than 4096
+  bytes, and allocates nothing per byte. The answer depends on the bytes
+  alone, not on how they were delivered.
+- Recording: once per entity, when a leaf body ends with `io.EOF`, when the
+  iteration of a multipart's parts ends with `io.EOF` (after its framing
+  notes, such as `multipart.close_not_found`), or when a multipart's raw `Body`
+  is read to `io.EOF`. A body or iteration not read to its end, one that
+  failed or was stopped, and the verbatim copy `WriteTo` makes record nothing.
+  A sink that stops the parse on the note stops it as on any diagnostic: the
+  `NextPart` call that recorded it returns the parse's stop instead of
+  `io.EOF`, as every later call and `Drain` do; a body read to its end still
+  ends with `io.EOF`, and `Drain` returns the stop.
+- Setup: the boundaries are kept in a map from their form without trailing
+  spaces and tabs to a small tree of those trailing bytes, so many boundaries
+  differing only there cost the bytes they are declared with, to set up and to
+  match; a boundary declared again keeps its first declaration.
+  `Message` names the chosen and the unselected media type and nothing else;
+  `Location` is where the first delimiter line begins; `Action` names the
+  declaration read and the explicit reparse, and says nothing of which parts
+  the other reading would give, which may overlap with this one's (a chosen
+  multipart, or a boundary recovery already framed on). When several
+  declarations qualify, the one whose delimiter line comes first is named.
+
+To read the unselected declaration, rewrite the header and parse again. With
+a `Source` (`ParseAt`, `ParseSource`), or slicing a kept copy of the input at
+`Entity.RawSpan`:
+
+```go
+rh, _ := e.RawHeader()
+h, _ := textproto.ReadHeader(bufio.NewReader(rh))
+f := h.FieldsByKey("Content-Type")
+f.Next()
+f.Del() // repeat for every field before the one wanted
+var head bytes.Buffer
+textproto.WriteHeader(&head, h)
+rb, _ := e.RawBody()
+session, alt, err := message.Parse(io.MultiReader(&head, rb), nil)
+```
+
+The other fields keep their bytes. The result is a second parse with its own
+session and offsets relative to the rewritten input, not a branch of the
+first tree; no API offers both readings at once.
+`TestUnselectedMultipart_reparse` runs this procedure.
 
 ## Not changed
 
@@ -193,6 +278,102 @@ header the input ended, with or without a final line ending.
   empty-name lines now add `header.empty_name` notes, which those tests set
   aside (`hpNoEmptyNameNotes`); every budget expectation is unchanged.
 
+## Unfolding (ROB-020-007 follow-up, #63)
+
+Code: `unfoldValue` in `textproto/header.go`, used by `pendingField.field`
+for a block read with `HeaderLimits.Recover`. Tests:
+`textproto/header_unfold_test.go`, `unfold_parse_test.go`.
+
+A field's value (`Get`, `HeaderFields.Value`, and every view built on it:
+`Text`, `mail.Header.Subject`, the address and date accessors) is now
+unfolded as RFC 5322 section 3.2.2 says under `Parse` with every profile but
+`ProfileStrict`: the line endings are removed and nothing else. CRLF, and the
+bare LF and bare CR that recovery accepts as line endings, all go; the fold's
+white space stays as written.
+
+| Field | Before | Now (healing `Parse`) |
+| --- | --- | --- |
+| `Subject: that is\r\n\tfolded` | `that is folded` | `that is\tfolded` |
+| `Subject: a  \r\n   b` | `a b` | `a     b` |
+| `Subject: s\r\n \t\r\n` (white space only continuation) | `s` | `s \t` |
+| `Subject: x \t` (trailing white space) | `x` | `x \t` |
+| `Subject: a\r\n \r\n b` | `a b` | `a  b` |
+
+What stays:
+
+- The white space (and any folds) between the colon and the value's first
+  other byte is not part of the value, as before: `Subject:\r\n\tx` is `x`.
+- A line recovery joined as a continuation that lost its leading white space
+  (`header.unindented_continuation`) has no fold white space to keep; one
+  space stands for what it lost, as before, so `Received: from a` +
+  `by b` is `from a by b`, not `from aby b`.
+- A CR that recovery found to be content of a value (not a line ending)
+  stays in it, as before.
+- RFC 2047: white space between adjacent encoded words is still dropped,
+  tabs and folds included, so `=?utf-8?q?a?=\r\n\t =?utf-8?q?b?=` reads `ab`.
+  Text between them keeps its white space.
+- The bytes: `Raw`, `RawAsRead`, `WriteHeader`, `WriteHeaderAsRead`, the
+  intact replay and `TestParse_headerReplay` are untouched; only the value
+  string changed.
+
+Decision on the other paths: `Read`, `ReadWithOptions`, `New` (with a header
+from them), `ProfileStrict`, `textproto.ReadHeader`, `ReadHeaderLimits`
+without `Recover`, and `Header.AddRaw` keep the legacy unfolding (each fold
+and the white space around it one space, a white space only continuation
+dropped, each line trimmed). They are the strict, compatible surface, and
+their callers' values must not move; `TestUnfold_legacy`,
+`TestUnfold_addRaw` and `TestUnfold_parseProfiles` pin both rules side by
+side. Every other `textproto.ReadHeaderRecover` caller gets the RFC rule
+too: the `mail` report views (`rptOriginalHeader`, the delivery-status
+groups of `mail/tree.go`), whose field readers already trim each value.
+
+Cost: one pass over the value, the same as before; `TestUnfold_manyFolds`
+checks 2,000 folds against an independently built value.
+
+### Changed test expectations (#63)
+
+- `textproto/header_exact_test.go` (`TestHeaderExact_views`): `Get` of
+  `Subject: caf\xe9\n\tnext \n` is `"caf\xe9\tnext "`, was `"caf\xe9 next"`.
+- `header_recover_test.go` (`white space only separator`): the Subject is
+  `"hi \t"`, was `"hi"`.
+- `framing_firstline_test.go` (`a whitespace line after a field is a fold`):
+  under the healing profiles `A` is `"1 "` (new `healed` column), was `"1"`;
+  Read, ReadWithOptions and `ProfileStrict` keep `"1"`.
+- `framing_empty_test.go`: the Subject `one\r\n\ttwo` is `"one\ttwo"` under
+  the healing profiles (`framingForm.under`), `"one two"` under Read,
+  ReadWithOptions and `ProfileStrict`.
+- `testdata/corpus/manifest.json` (`header-whitespace-separator`): the
+  Subject record is `Subject 3 "s"` (three bytes, `s \t`; the snippet trims),
+  was `Subject 1 "s"`. `charset`'s `TestCorpusWithPlugin` reads the same
+  expectation.
+- `testdata/differential/exceptions.json`: the two open exceptions
+  `header-whitespace-separator` and `dx-subject-folded` (field `subject`)
+  were reported stale by `EMLKIT_DIFFERENTIAL=1` and are removed.
+
+### Replay fuzz oracle correction (#63 review)
+
+A 30 s run of `FuzzHeaderExact_replay` during this work failed on the
+two-byte input `FE FF`: "the block "" was read but is not intact". The
+failure has nothing to do with unfolding. It reproduces on a clean export of
+`HEAD` (`ef192b2`), without any of this change. And no product code was wrong. A block that a
+UTF-16 or UTF-32 mark begins is not read (bom.go, `readHeader`):
+`ReadHeaderRecover` returns a Header with the mark, no fields and no error,
+consumes nothing, and `WriteHeaderAsRead` refuses that Header. The oracle,
+`hpReplayCheck`, took every result without an error to be an accepted block
+that must be intact and replay exactly, which a block that was not read
+cannot be.
+
+The oracle now has a separate branch for a wide mark. That branch holds the
+read to the documented contract rather than skipping it: nothing consumed or
+handed back, the whole input still in the reader with the mark first, no
+field, orphan record or malformed prefix, not `Intact`, and
+`WriteHeaderAsRead` returns an error and writes nothing. Every other
+nil-error result is checked as before. The four marks alone, each mark
+followed by a header in its own encoding, and marks followed by ASCII text
+are permanent seeds of the fuzz target and the cases of
+`TestHeaderExact_wideBOM`. Against the old oracle all eleven failed with the
+same message. Product BOM semantics are unchanged.
+
 ## Observations
 
 ROB-130-003, corpus findings subject-5000 and mbox-from-line. Code:
@@ -226,3 +407,7 @@ to exercise a budget now drop `header.overlong_line` before comparing
 `progress_metadata_test.go` (`TestParse_metadataNoProgressBounds`) and
 `limits_test.go` (`TestDefaultLimits_headerBytesUnchanged`). No budget
 expectation moved.
+
+### Independent review of #63 (2026-11-13)
+
+Codex reviewed the unfolding implementation, unchanged legacy paths, exact replay tests, corpus changes, and the wide-BOM fuzz oracle correction. Focused root/textproto race tests, fresh full unit tests, build, gofmt and diff checks passed. The Python differential run reports 74 fixtures, 42 explained differences, no open/unexplained differences and no stale exceptions. Claude's bounded replay fuzz run passed 1,313,683 executions in 30 seconds. This closes the #63 follow-up; other header replay limitations recorded in the ledger remain separate.

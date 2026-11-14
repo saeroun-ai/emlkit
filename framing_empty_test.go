@@ -152,6 +152,25 @@ func framingForms() []framingForm {
 	}
 }
 
+// under returns f as Parse with profile p reads it. framingForms gives the
+// fields as Read, ReadWithOptions and ProfileStrict unfold them, each fold and
+// the white space around it one space; every other profile removes the line
+// endings alone (#63), which keeps the tab that folds the Subject.
+func (f framingForm) under(p Profile) framingForm {
+	if p == ProfileStrict || f.fields == nil {
+		return f
+	}
+	fields := make([]framingField, len(f.fields))
+	for i, fd := range f.fields {
+		if fd.raw == "Subject: one\r\n\ttwo\r\n" {
+			fd.value = "one\ttwo"
+		}
+		fields[i] = fd
+	}
+	f.fields = fields
+	return f
+}
+
 var framingCompatibilities = []Compatibility{
 	CompatibilityConservative, CompatibilityAngus, CompatibilityMimeKit, CompatibilityPythonEmail,
 }
@@ -347,7 +366,7 @@ func TestParse_emptyAndHeaderOnly(t *testing.T) {
 						for _, eofWith := range []bool{false, true} {
 							name := fmt.Sprintf("%s/%s/%v/%v/chunk %d/eof with data %v", f.name, lname, p, c, chunk, eofWith)
 							src := func() io.Reader { return &framingSource{data: f.text, chunk: chunk, eofWith: eofWith} }
-							runFraming(t, name, f, framingParser(opts), src, true)
+							runFraming(t, name, f.under(p), framingParser(opts), src, true)
 						}
 					}
 				}
@@ -367,7 +386,7 @@ func TestParse_emptyAndHeaderOnlySplits(t *testing.T) {
 				for _, eofWith := range []bool{false, true} {
 					name := fmt.Sprintf("%s/%v/split %d/eof with data %v", f.name, p, cut, eofWith)
 					src := func() io.Reader { return &framingSource{data: f.text, splits: []int{cut}, eofWith: eofWith} }
-					runFraming(t, name, f, framingParser(opts), src, false)
+					runFraming(t, name, f.under(p), framingParser(opts), src, false)
 				}
 			}
 		}
@@ -412,7 +431,7 @@ func TestParse_emptyAndHeaderOnlyEnds(t *testing.T) {
 						name := fmt.Sprintf("%s/%v/chunk %d/with data %v", f.name, p, chunk, withData)
 						src := &ioSource{data: f.text, cut: len(f.text), chunk: chunk, err: errSourceIO, withData: withData, sticky: true}
 						s, e, err := Parse(src, &ParseOptions{Profile: p})
-						checkFramingFailure(t, name, f, s, e, err, errSourceIO, false)
+						checkFramingFailure(t, name, f.under(p), s, e, err, errSourceIO, false)
 						if src.readsAfter != 0 {
 							t.Errorf("%s: %d reads after the input failed", name, src.readsAfter)
 						}
@@ -455,7 +474,7 @@ func TestParse_emptyAndHeaderOnlyEnds(t *testing.T) {
 					// whether the header saw it depends on when that read happened:
 					// an entity built after it is returned with the stop, and its
 					// body delivers nothing more once the stop has been seen.
-					checkFramingFailure(t, name, f, s, e, err, nil, eofWith)
+					checkFramingFailure(t, name, f.under(ProfileTolerant), s, e, err, nil, eofWith)
 					if s.Len() != 0 {
 						t.Errorf("%s: diagnostics %v", name, codesOfDiags(s.Diagnostics()))
 					}
@@ -473,6 +492,7 @@ func TestParse_emptyAndHeaderOnlyEnds(t *testing.T) {
 					for _, z := range []int{maxConsecutiveEmptyReads - 1, maxConsecutiveEmptyReads} {
 						name := fmt.Sprintf("%s/%v/chunk %d/%d empty reads", f.name, p, chunk, z)
 						opts := &ParseOptions{Profile: p}
+						f := f.under(p)
 						src := newZeroSource(f.text, chunk, map[int]int{len(f.text): z})
 						s, e, err := Parse(src, opts)
 						if z < maxConsecutiveEmptyReads {
@@ -556,6 +576,7 @@ func checkFramingFailure(t *testing.T, name string, f framingForm, s *ParseSessi
 // toward MaxHeaderBytes and toward no field.
 func TestParse_emptyAndHeaderOnlyBudgets(t *testing.T) {
 	for _, f := range framingForms() {
+		f := f.under(ProfileTolerant)
 		exact := Limits{MaxInputBytes: max(1, int64(len(f.text))), MaxHeaderCount: max(1, int64(len(f.fields)))}
 		if f.bodyAt > 0 {
 			exact.MaxHeaderBytes = f.bodyAt

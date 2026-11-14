@@ -1,6 +1,7 @@
 package message
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -382,37 +383,55 @@ func TestParse_multipartLineBytes_partBodiesAreNotLines(t *testing.T) {
 	}
 }
 
-// TestParse_multipartLineBytes_disabledKeepsLegacyReading pins what turning the
-// budget off means for framing lines. Nothing is refused by the budget, and the
-// lines are read exactly as they were before this budget existed — which is what
-// Read does too, since it resolves no configuration at all.
-func TestParse_multipartLineBytes_disabledKeepsLegacyReading(t *testing.T) {
-	tc := framingCases("\r\n")[0]
+// TestParse_multipartLineBytes_disabledIsNoLimit pins what turning the budget
+// off means for framing lines (#64). It used to be pinned as
+// disabledKeepsLegacyReading: a disabled budget read framing lines as Read does,
+// within one 4 KiB buffer, so a preamble line longer than that ended the
+// iteration with bufio.ErrBufferFull while the default 64 KiB budget read the
+// same message — turning the limit off read less. Now a disabled budget is no
+// limit: the long line is read, nothing is refused and nothing is recorded.
+//
+// Read resolves no configuration at all and keeps the long-standing framing, so
+// the same message still ends its iteration there with an error wrapping
+// bufio.ErrBufferFull. That is pinned here too, so that a change to either is
+// a change to this test.
+func TestParse_multipartLineBytes_disabledIsNoLimit(t *testing.T) {
+	long := strings.Repeat("p", 5000)
+	text := "Content-Type: multipart/mixed; boundary=B\r\n\r\n" +
+		long + "\r\n" +
+		"--B\r\nContent-Type: text/plain\r\n\r\nzero\r\n--B--\r\n"
 
-	for _, name := range []string{"disabled", "legacy Read"} {
-		var (
-			e   *Entity
-			err error
-			s   *ParseSession
-		)
-		if name == "disabled" {
-			s, e, err = Parse(strings.NewReader(tc.fixture.text), &ParseOptions{Limits: lineOnly(LimitDisabled)})
-		} else {
-			e, err = Read(strings.NewReader(tc.fixture.text))
+	for _, short := range []bool{true, false} {
+		in := text
+		if short {
+			in = framingCases("\r\n")[0].fixture.text
 		}
+		s, e, err := Parse(strings.NewReader(in), &ParseOptions{Limits: lineOnly(LimitDisabled)})
 		if err != nil {
-			t.Fatalf("%s: %v", name, err)
+			t.Fatalf("Parse() = %v", err)
 		}
 		got := readTree(e)
 		if got.err != nil {
-			t.Fatalf("%s: reading the tree = %v", name, got.err)
+			t.Fatalf("short=%v: reading the tree = %v", short, got.err)
 		}
-		if !reflect.DeepEqual(got.bodies, tc.all) {
-			t.Errorf("%s: bodies = %v, want %v", name, got.bodies, tc.all)
+		if !reflect.DeepEqual(got.bodies, []string{"zero"}) {
+			t.Errorf("short=%v: bodies = %v, want [zero]", short, got.bodies)
 		}
 		if d := s.Diagnostics(); d != nil {
-			t.Errorf("%s: Diagnostics() = %v, want none", name, codesOfDiags(d))
+			t.Errorf("short=%v: Diagnostics() = %v, want none", short, codesOfDiags(d))
 		}
+	}
+
+	e, err := Read(strings.NewReader(text))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+	got := readTree(e)
+	if !errors.Is(got.err, bufio.ErrBufferFull) {
+		t.Errorf("Read: reading the tree = %v, want the long-standing buffer failure", got.err)
+	}
+	if IsFatal(got.err) {
+		t.Errorf("Read: err = %v, want an ordinary failure, not a refusal", got.err)
 	}
 }
 

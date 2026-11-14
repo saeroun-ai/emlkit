@@ -138,6 +138,13 @@ ways of delivering it.
    `text/plain` leaf of MIME source, with only `header.duplicate_singleton`.
    Debatable: when a later Content-Type is multipart and its boundary frames
    the body, reading it as such recovers the parts.
+   **Changed by #67 (2026-11-14)**: the policy stands and the leaf is
+   unchanged; `header.unselected_multipart` (Info) now says that the later
+   `multipart/mixed` declaration's boundary delimits the body, and
+   `Completion.Ambiguous` is set (it already was, through the Recovered
+   `header.duplicate_singleton`). Reading the other declaration is a header
+   rewrite and a second parse (header-recovery.md, The unselected
+   Content-Type).
 6. **ko-utf8-labelled-euc-kr** (plugin) — valid UTF-8 HTML declared
    `charset=euc-kr` is decoded as CP949 into mojibake, with no diagnostic.
    Expected: an observation such as `charset.declaration_suspect` when a body
@@ -146,6 +153,10 @@ ways of delivering it.
    **Closed**: read as UTF-8 with `charset.declaration_suspect` (Recovered)
    under the healing profiles; the evidence rule is in charset-plugin.md,
    "UTF-8 under a legacy declaration".
+   **Changed by #65 (2026-11-13)**: by default the body is decoded as
+   declared again, and `charset.declaration_suspect` is reported at Info,
+   naming UTF-8 (`plugin.json`: `info`, CP949 text). The UTF-8 reading is
+   `ParseOptions.RecoverCharsetDeclarations` (Recovered).
 7. **bulk-sloppy-encodings** (plugin, FallbackCharset euc-kr) — one damaged
    quoted-printable escape makes a UTF-8 body invalid UTF-8, so the whole
    body is re-decoded as EUC-KR: "Café" becomes "Caf챕" and "€" two U+FFFD

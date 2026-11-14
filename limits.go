@@ -190,8 +190,11 @@ const (
 // iterator that heals (every profile but ProfileStrict), MaxEpilogueBytes by
 // MultipartEpilogue, and MaxMessageDepth by Entity.EmbeddedMessage and a walk
 // under ParseOptions.WalkEmbeddedMessages. MaxMemorySpoolBytes and
-// MaxDiskSpoolBytes are validated and reported and bound nothing: mail.Spool
-// takes its quotas from mail.SpoolOptions.
+// MaxDiskSpoolBytes bound nothing in the parse itself: mail.ReadTree hands
+// them to the TreeOptions.Body of a mail.Spool, which applies each beside its
+// own mail.SpoolOptions quota, the smaller room winning. Nothing else reads
+// them; a recorded Source keeps raw bytes under its RecordOptions, and
+// Node.Data is bounded by mail.TreeOptions.
 //
 // Fifteen budgets are enforced by the parse itself, and only under Parse. MaxDiagnosticCount bounds
 // the diagnostics a parse records and delivers, and by itself stops no parsing:
@@ -348,6 +351,23 @@ type Limits struct {
 	// such a body is streamed, is never accumulated into a line buffer, and is
 	// never rejected for its length alone. What bounds it is
 	// MaxEncodedBodyBytes and MaxDecodedBodyBytes.
+	//
+	// LimitDisabled is no line limit at all (#64). A header line, an encoded
+	// line and a multipart framing line are read at any length; a framing line
+	// is not refused at the size of a reader's buffer either. A preamble line,
+	// and a delimiter line before the first part however long its white space,
+	// is matched as it passes and never held. A delimiter candidate inside a
+	// part's body, or after a part header's malformed prefix or orphan record
+	// — a line ending, "--", the boundary, any closing "--" and a
+	// run of spaces and tabs not yet followed by the byte that decides it — is
+	// held in memory until it is decided, and its length then bounds that
+	// memory; MaxInputBytes, when it is not disabled too, bounds that length.
+	// A header line under no budget is held whole, as a header is.
+	//
+	// Read, ReadWithOptions and New resolve no Limits at all, and keep their
+	// long-standing framing: a multipart framing line that does not fit one
+	// 4 KiB buffer ends the iteration with an error wrapping
+	// bufio.ErrBufferFull.
 	MaxLineBytes int64
 
 	// MaxTotalHeaderBytes bounds the header blocks of one whole parse
@@ -579,11 +599,18 @@ type Limits struct {
 	// keeps its identity.
 	MaxDiagnosticCount int64
 
-	// MaxMemorySpoolBytes bounds what one message holds in memory when raw
-	// content has to be retained for replay.
+	// MaxMemorySpoolBytes bounds the decoded bodies a mail.Spool keeps in
+	// memory for one tree mail.ReadTree reads from this parse, together with
+	// mail.SpoolOptions.MemoryBytes: a body that does not fit goes to disk
+	// whole. LimitDisabled leaves the spool's own quota alone. The parse
+	// itself retains nothing under it.
 	MaxMemorySpoolBytes int64
 
-	// MaxDiskSpoolBytes bounds what one message spools to temporary files.
+	// MaxDiskSpoolBytes bounds what a mail.Spool writes to temporary files or
+	// its BlobStore for one tree mail.ReadTree reads from this parse, together
+	// with mail.SpoolOptions.DiskBytes: a body is cut where the smaller room
+	// ends, with limit.disk_spool_bytes in Spool.Diagnostics. LimitDisabled
+	// leaves the spool's own quota alone.
 	MaxDiskSpoolBytes int64
 }
 
@@ -698,6 +725,10 @@ type resolvedConfig struct {
 
 	// fallbackCharset is ParseOptions.FallbackCharset; see charset_monitor.go.
 	fallbackCharset string
+
+	// recoverCharset is ParseOptions.RecoverCharsetDeclarations; see
+	// charset_bom.go.
+	recoverCharset bool
 }
 
 // resolveConfig turns caller options into the configuration one parse runs
@@ -729,7 +760,7 @@ func resolveConfig(o ParseOptions) (resolvedConfig, ReadOptions, error) {
 	read := o.ReadOptions
 	read.MaxHeaderBytes = header
 
-	return resolvedConfig{profile: o.Profile, compat: o.Compatibility, limits: limits, mbox: o.RecognizeMboxEnvelope, walkEmbedded: o.WalkEmbeddedMessages, fallbackCharset: strings.TrimSpace(o.FallbackCharset)}, read, nil
+	return resolvedConfig{profile: o.Profile, compat: o.Compatibility, limits: limits, mbox: o.RecognizeMboxEnvelope, walkEmbedded: o.WalkEmbeddedMessages, fallbackCharset: strings.TrimSpace(o.FallbackCharset), recoverCharset: o.RecoverCharsetDeclarations}, read, nil
 }
 
 // bridgeMaxHeaderBytes reconciles the two spellings of the header byte budget

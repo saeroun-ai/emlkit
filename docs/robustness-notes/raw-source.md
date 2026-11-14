@@ -1,7 +1,7 @@
 # Raw source and indexed mode (ROB-110-001, -004, -005, ROB-080-002)
 
 Code: `source.go`, `source_entity.go`, `mail/rawsource.go`.
-Tests: `source_test.go`, `mail/rawsource_test.go`.
+Tests: `source_test.go`, `source_header_test.go`, `mail/rawsource_test.go`.
 
 ## Model
 
@@ -74,7 +74,13 @@ the same, and equals the digest of the input slice (DKIM, `multipart/signed`).
 - The root: always with a seekable source; with a recorded one, once the
   stream has been read to its end. `Drain` does not read past a multipart's
   closing delimiter; reading `root.Body` to its end afterwards does.
-- A header block: as soon as the entity exists.
+- A header block: as soon as the entity exists, for the root, a part a
+  multipart of the input framed, and a message carried as it is by one of
+  those. `RawHeader` needs only the bytes up to the body's first to be
+  readable: with a recorded source it is served before, while and after the
+  body is read, however far past the record limit (#73). A part of an inferred
+  boundary, and a message it carries, are checked against the index and have
+  no span.
 - A part: once the parse has moved past it (as `RawSpan`). Before that, when
   the whole input is readable — a seekable source, or a recorded one read to
   its end — the first such request parses the source one more time, privately,
@@ -82,9 +88,9 @@ the same, and equals the digest of the input slice (DKIM, `multipart/signed`).
   done at most once per parse, keeps a small entry per entity and no body,
   records nothing in the session, and runs under the same options and budgets.
   A caller that reads in document order never pays it.
-- A message carried by a `7bit`/`8bit`/`binary` part (`EmbeddedMessage`): by
-  the index, so only when the whole input is readable. Its parts: like any
-  part.
+- A message carried by a `7bit`/`8bit`/`binary` part (`EmbeddedMessage`): its
+  header block as above; the whole and its body by the index, so only when the
+  whole input is readable. Its parts: like any part.
 
 **Concurrency.** A `Source` and the readers obtained from it are safe to use
 from several goroutines at once, each reader by one goroutine (`ReadAt` on a
@@ -97,7 +103,9 @@ method, for the goroutine that reads the parse. A `RawStore` never sees a
 `MaxBytes`, or after its store failed (`Source.Err`), nothing more is kept;
 the parse is not affected and reads on. `Truncated` reports it, spans wholly
 inside the prefix are still served, and anything reaching past it returns
-`ErrRawNotRecorded`. A store failure is not a defect of the message and
+`ErrRawNotRecorded`. A header block is judged on its own bytes, not its
+body's: a kept header block stays served once its body has run past the
+prefix, and one cut by the limit is refused before and after (#73). A store failure is not a defect of the message and
 records no diagnostic.
 
 **Decoded again.** `DecodedBody` sets up the transfer decoder and charset
@@ -131,3 +139,13 @@ entities answer `ErrNoRawSource`.
 - `mail.ReadTree` and `mail.Spool` do not use the source themselves;
   `Node.RawSection` only slices the caller's reader at the node's span.
 - A seekable source must not change while in use; nothing detects that.
+
+## 2026-11-13 follow-up review (#73)
+
+Codex reviewed the range check and embedded-origin propagation. Independent
+public API probes pass the original 512-byte-cap case and whole headers
+before and after an 8192-byte cap for root, child and both embedded forms
+with one-byte input reads. An inferred outer boundary with a declared inner
+boundary also returned the exact original inner header. The core/mail/charset/
+utf7/internal race group, full unit suite, build, formatting and diff checks
+passed. Missing spans outside this follow-up remain open.

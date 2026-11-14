@@ -49,7 +49,11 @@ func (r *MultipartReader) ResumeAfterClose(limit int64, closes int) (Resumption,
 	br := r.bufReader
 	res := Resumption{Offset: r.epilogueAt}
 	var kept []byte
-	pos, content := 0, -1
+	// scan is where the search for the end of the line at pos goes on: the
+	// bytes of kept[pos:scan] are known to hold no line ending, so a line
+	// that more reads make longer is examined once, not again from its
+	// start on every read (#71).
+	pos, scan, content := 0, 0, -1
 	eof := false
 
 	reopen := func(from int, part bool) (Resumption, bool) {
@@ -71,8 +75,11 @@ func (r *MultipartReader) ResumeAfterClose(limit int64, closes int) (Resumption,
 
 	for {
 		for {
-			line, next, whole := nbLineAt(kept, pos, eof)
+			from := max(pos, scan)
+			line, next, stop, whole := nbLineAt(kept, pos, from, eof)
+			r.resumeScanned += int64(stop - from)
 			if !whole {
+				scan = stop
 				break
 			}
 			ok, close := r.delimiterLine(line)
@@ -116,29 +123,33 @@ func (r *MultipartReader) ResumeAfterClose(limit int64, closes int) (Resumption,
 // nbLineAt returns the line of b that begins at pos, without its line ending,
 // where the next line begins, and whether the line is whole: its line ending
 // is known, or eof says the input ends with it. A '\r' last in b is decided
-// by the byte after it.
-func nbLineAt(b []byte, pos int, eof bool) (line []byte, next int, whole bool) {
+// by the byte after it. The caller knows b[pos:from] holds no line ending, so
+// the search begins at from, which is never below pos. stop is where it
+// ended: for a whole line, next; otherwise where it is to go on once b is
+// longer, the end of b or a '\r' last in it, the one byte that is looked at
+// again.
+func nbLineAt(b []byte, pos, from int, eof bool) (line []byte, next, stop int, whole bool) {
 	if pos >= len(b) {
-		return nil, pos, false
+		return nil, pos, from, false
 	}
-	for i := pos; i < len(b); i++ {
+	for i := from; i < len(b); i++ {
 		switch b[i] {
 		case '\n':
-			return b[pos:i], i + 1, true
+			return b[pos:i], i + 1, i + 1, true
 		case '\r':
 			switch {
 			case i+1 < len(b) && b[i+1] == '\n':
-				return b[pos:i], i + 2, true
+				return b[pos:i], i + 2, i + 2, true
 			case i+1 < len(b) || eof:
-				return b[pos:i], i + 1, true
+				return b[pos:i], i + 1, i + 1, true
 			}
-			return nil, pos, false
+			return nil, pos, i, false
 		}
 	}
 	if eof {
-		return b[pos:], len(b), true
+		return b[pos:], len(b), len(b), true
 	}
-	return nil, pos, false
+	return nil, pos, len(b), false
 }
 
 // nbEndsLine reports whether b ends with a line ending.

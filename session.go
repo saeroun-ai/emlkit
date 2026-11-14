@@ -297,8 +297,10 @@ func (s *ParseSession) enforcedLimits() (Limits, bool) {
 //
 // The translation is the identity on values and on meaning: a resolved budget
 // is a positive count or LimitDisabled, and LimitDisabled is negative, which is
-// exactly what textproto reads as no budget. A parse with no session budgets
-// nothing, so every field stays zero.
+// exactly what textproto reads as no budget. The one addition is
+// UnboundedFramingLines, set with a disabled line budget, which textproto needs
+// to tell "no bound" from the one-buffer framing of a reader configured with
+// nothing. A parse with no session budgets nothing, so every field stays zero.
 func (s *ParseSession) headerLimits() textproto.HeaderLimits {
 	l, ok := s.enforcedLimits()
 	if !ok {
@@ -309,7 +311,11 @@ func (s *ParseSession) headerLimits() textproto.HeaderLimits {
 		MaxFieldBytes: l.MaxHeaderFieldBytes,
 		MaxCount:      l.MaxHeaderCount,
 		MaxLineBytes:  l.MaxLineBytes,
-		Total:         s.headerBudget(l),
+		// A disabled line budget is no bound on a multipart's framing lines
+		// either, rather than the one buffer a reader configured with nothing
+		// reads them in (#64); Read, which resolves no budget, keeps that.
+		UnboundedFramingLines: l.MaxLineBytes <= 0,
+		Total:                 s.headerBudget(l),
 		// Damaged header lines are healed under every profile but Strict; see
 		// header_recover.go. The compatibility policy decides the one case in
 		// which the parsers this library is compared with disagree.

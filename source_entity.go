@@ -160,9 +160,25 @@ func (p *srcPending) settle(index map[string]srcSpan) bool {
 	return true
 }
 
+// srcPlaced reports that the entity's header block and body start where its
+// origin says in the input, as the streaming parse framed them: the root of
+// the input, a part a multipart of the input framed, and a message carried
+// as it is by one of those (srcEmbedded). Any other placed entity — a part of
+// an inferred boundary, the part standing in for an unframed body — is
+// served only when the index parse framed it at the same offsets.
+func (e *Entity) srcPlaced() bool {
+	o := e.parse.origin
+	if !o.known || o.unplaced {
+		return false
+	}
+	return (len(o.path) == 0 && e.parse.msgDepth == 0) || e.wirePart != nil || e.srcEmbedded
+}
+
 // srcBounds returns the binding and the span of the entity in its Source.
-// With needEnd false only the header block's bounds are asked for, and end
-// may be -1.
+// With needEnd false only the header block is asked for: end may be -1, and
+// only the bytes up to the body's first are required to be readable, so that
+// what was kept of a header block stays served however much of the body the
+// parse has read since (#73).
 func (e *Entity) srcBounds(needEnd bool) (*srcBinding, srcSpan, error) {
 	s := e.parse.session
 	if s == nil || s.raw == nil {
@@ -175,36 +191,41 @@ func (e *Entity) srcBounds(needEnd bool) (*srcBinding, srcSpan, error) {
 	}
 
 	sp := srcSpan{header: o.headerOffset, body: o.bodyOffset, end: -1}
-	root := len(o.path) == 0 && e.parse.msgDepth == 0
-	switch {
-	case root:
-		if n, complete := b.src.Size(); complete {
-			sp.end = n
-		}
-	case e.wirePart != nil:
-		if n, ended := e.wirePart.BodyLen(); ended {
-			sp.end = o.bodyOffset + n
+	if needEnd {
+		switch {
+		case len(o.path) == 0 && e.parse.msgDepth == 0:
+			if n, complete := b.src.Size(); complete {
+				sp.end = n
+			}
+		case e.wirePart != nil:
+			if n, ended := e.wirePart.BodyLen(); ended {
+				sp.end = o.bodyOffset + n
+			}
 		}
 	}
 	// What the streaming parse has not framed, the index may have: a part
-	// not read yet, and an embedded message, whose end is its carrier's.
-	if sp.end < 0 && (needEnd || (!root && e.wirePart == nil)) {
-		if found, ok := b.lookup(o); ok {
-			sp = found
-		} else {
+	// not read yet, and an embedded message, whose end is its carrier's. A
+	// header block needs it only when its offsets are not known to be the
+	// input's.
+	if (needEnd && sp.end < 0) || (!needEnd && !e.srcPlaced()) {
+		found, ok := b.lookup(o)
+		if !ok {
 			if b.src.Truncated() {
 				return nil, srcSpan{}, ErrRawNotRecorded
 			}
 			return nil, srcSpan{}, ErrRawSpanUnknown
+		}
+		if needEnd {
+			sp = found
 		}
 	}
 
 	if sp.header < 0 || sp.body < sp.header || (sp.end >= 0 && sp.end < sp.body) {
 		return nil, srcSpan{}, ErrRawSpanUnknown
 	}
-	need := sp.end
-	if need < 0 {
-		need = sp.body
+	need := sp.body
+	if needEnd {
+		need = sp.end
 	}
 	if kept, _ := b.src.Size(); need > kept {
 		if b.src.Truncated() {
@@ -250,7 +271,10 @@ func (e *Entity) RawReader() (*io.SectionReader, error) {
 // RawHeader returns a reader of the entity's header block as the input holds
 // it: every byte from the first of the block to the first of the body, the
 // empty line that ends the block included when the input has one. It is
-// known as soon as the entity exists. See RawReader for the terms.
+// known as soon as the entity exists — for the root, a part of a multipart
+// of the input and a message carried as it is by one of those — and, with a
+// recorded Source, served as long as the block lies within what was kept,
+// before, while and after the body is read. See RawReader for the terms.
 func (e *Entity) RawHeader() (*io.SectionReader, error) {
 	b, sp, err := e.srcBounds(false)
 	if err != nil {

@@ -271,31 +271,29 @@ filename the fallback does not reach, is not exercised here).
 
 ## Open differences
 
-1. **Folding white space is normalized, not unfolded**
-   (`header-whitespace-separator`, `dx-subject-folded`, field `subject`).
-   `textproto` builds a field's value by trimming the white space around each
-   line break, joining the lines with one space and dropping empty
-   continuation lines (`writeContinued`, inherited from go-message). RFC 5322
-   section 3.2.2 unfolds by removing the CRLF only, so `"that is\r\n\tfolded"`
-   is `"that is\tfolded"` and a white-space-only continuation stays part of
-   the value; Python follows the RFC. The raw field is kept, so round-trips
-   are unaffected, but every decoded header value — Subject and the
-   structured fields read from `Header.Get` — differs from the RFC unfolding
-   in white space. For classification this is mostly harmless; it does
-   matter where white space is the signal (tab runs, padding used to push
-   text out of view). Changing it touches `textproto/header.go` and every
-   test that expects the collapsed form, so it is left to a decision.
-2. **UTF-8 under a legacy multi-byte label is decoded as the label**
-   (`ko-utf8-labelled-euc-kr`, path `[]`, field `text_sha256`). The body is
-   valid UTF-8 HTML whose own meta tag says `utf-8`, declared
-   `charset=euc-kr`. The bytes agree; both parsers follow the label, and
-   neither text is right: the plugin decodes CP949 mojibake
-   ("[愿묎퀬] …" for "[광고] …") with no diagnostic, Python's KS X 1001 codec
-   other mojibake with 43 U+FFFD. What is right is the UTF-8 text, or at the
-   least the label reported as suspect (`charset.declaration_suspect`): a
-   body that is valid non-ASCII UTF-8 is almost never meant as EUC-KR. This
-   is finding 6 of corpus.md. Once emlkit decodes it as UTF-8 the difference
-   remains (Python keeps its mojibake) and the rationale becomes a decision.
+1. *Resolved, no longer open (issue #63, 2026-11-13).* **Folding white space
+   was normalized, not unfolded** (`header-whitespace-separator`,
+   `dx-subject-folded`, field `subject`). `textproto` built a field's value by
+   trimming the white space around each line break, joining the lines with
+   one space and dropping empty continuation lines (`writeContinued`,
+   inherited from go-message); RFC 5322 section 3.2.2, and Python, remove the
+   CRLF only. Under `Parse` with every profile but `ProfileStrict` the value
+   is now unfolded as the RFC says (`unfoldValue`; header-recovery.md,
+   Unfolding), so `"that is\r\n\tfolded"` is `"that is\tfolded"` and the
+   white-space-only continuation gives `"s \t"`. The run reported both
+   exceptions stale and they are removed. `Read`, `ReadWithOptions` and
+   `ProfileStrict` keep the collapsed form.
+2. *Decided, no longer open (issue #65, 2026-11-13).* **UTF-8 under a legacy
+   multi-byte label is decoded as the label** (`ko-utf8-labelled-euc-kr`,
+   path `[]`, field `text_sha256`). The body is valid UTF-8 HTML whose own
+   meta tag says `utf-8`, declared `charset=euc-kr`. The bytes read two ways,
+   and by the policy of #62 the declaration is followed by default: the
+   plugin decodes CP949 mojibake ("[愿묎퀬] …" for "[광고] …") and the parse
+   reports `charset.declaration_suspect` at Info, naming UTF-8 as the other
+   reading; Python's KS X 1001 codec gives other mojibake with 43 U+FFFD.
+   `ParseOptions.RecoverCharsetDeclarations` reads the UTF-8 (Recovered);
+   the harness runs without it. The exception stays, with its rationale
+   rewritten as this decision and `open` removed. Finding 6 of corpus.md.
 
 ## Expected differences not yet in the corpus
 

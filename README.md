@@ -126,11 +126,13 @@ returns these values.
 | `MaxDecodedBodyBytes` | 128 MiB | decoded bytes of one leaf body |
 | `MaxTotalDecodedBytes` | 512 MiB | decoded bytes of all leaf bodies |
 | `MaxDiagnosticCount` | 1000 | diagnostics recorded and delivered |
-| `MaxMemorySpoolBytes` | 8 MiB | not read by anything yet |
-| `MaxDiskSpoolBytes` | 1 GiB | not read by anything yet |
+| `MaxMemorySpoolBytes` | 8 MiB | bodies a `mail.Spool` keeps in memory for one `ReadTree` |
+| `MaxDiskSpoolBytes` | 1 GiB | bodies a `mail.Spool` writes to disk or its store for one `ReadTree` |
 
-`mail.Spool` takes its quotas from `mail.SpoolOptions` (8 MiB in memory,
-1 GiB on disk by default), not from the two spool fields. What exceeding each
+`mail.Spool` applies the two spool fields of the parse alongside its own
+`mail.SpoolOptions` quotas (8 MiB in memory, 1 GiB on disk by default),
+using whichever has less room. `LimitDisabled` leaves the `SpoolOptions` quota
+alone. An entity of `Read` or `New` has no parse budget. What exceeding each
 budget ends is in the [contract](docs/spam-adapter-contract.md#limits) and in
 [docs/conformance.md](docs/conformance.md#not-supported--rejected).
 

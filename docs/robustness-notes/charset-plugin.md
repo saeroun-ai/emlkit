@@ -17,7 +17,7 @@ Text that conforms to its charset decodes exactly as before.
 | ROB-080-005 | Implemented | fixtures per family in `registry_test.go`; `iso2022.go` and `iso2022_test.go` |
 | ROB-080-006 | Implemented | `utf7_test.go` (`isNotIMAPModifiedUTF7`), `utf7/separation_test.go` |
 | ROB-080-008 | Implemented, plugin side | `decode_test.go` (replacement, floods, expansion, stall), `utf7_test.go` (long runs) |
-| ROB-080-004 | Implemented | `decode_test.go` (`utf16ByteOrder`); conflicts: `charset_bom.go`, `charset/bom_conflict_test.go`, `charset_bom_test.go`; see "BOM and declaration conflicts" |
+| ROB-080-004 | Implemented; healing made opt-in by #65 (independently reviewed) | `decode_test.go` (`utf16ByteOrder`); conflicts: `charset_bom.go`, `charset/bom_conflict_test.go`, `charset_bom_test.go`, `charset/declaration_optin_test.go`; see "BOM and declaration conflicts" and "Default and opt-in (#65)" |
 | ROB-080-003, -007 | Refined on the root side, after the corpus review | `charset_bom.go`, `charset_monitor.go`; `charset/declared_test.go`, `charset_declared_test.go`; see "Declarations the bytes contradict" |
 | ROB-080-002 | Not touched | |
 
@@ -199,7 +199,42 @@ Where: `charset_bom.go` (`cdRead`, `cdDecideUTF8`), `charset_monitor.go`
 ProfileTolerant and ProfileForensic. ProfileStrict, `Read`,
 `ReadWithOptions` and `New` decode as declared and report what they always
 did. Tests: `charset/declared_test.go`, `charset_declared_test.go`,
-`charset/fallback_test.go`. The plugin is unchanged.
+`charset/fallback_test.go`, `charset/declaration_optin_test.go`. The plugin
+is unchanged.
+
+### Default and opt-in (#65)
+
+Policy #62: bytes that read two ways are read as declared, and the
+contradiction is reported as a fact; the other reading is the caller's
+choice. Since #65 (option (a), 2026-11-13) that applies to both heals of
+this section and of "BOM and declaration conflicts":
+
+| | Default | `ParseOptions.RecoverCharsetDeclarations` | ProfileStrict |
+|---|---|---|---|
+| UTF-8 under a legacy label, by the rule below | as declared; `charset.declaration_suspect` **Info**, Action names UTF-8 and the option | UTF-8, Recovered (as before #65) | as declared, silent (option ignored) |
+| a byte order mark the label does not accept, bytes after it valid in its encoding | as declared, mark included; `charset.bom_mismatch` **Info**, Action names the mark's encoding and the option | as the mark says, Recovered (as before #65) | as declared; Info (option ignored) |
+| the same, bytes after the mark not valid | as declared; Info | as declared; Info | as declared; Info |
+
+Under the healing profiles the look is the same with the option and without:
+the same bounded hold (at most 4096 bytes, 1028 for a mark), read only when
+the declared decoder first reads, chunk-invariant, with the same evidence.
+Default mode only skips the redirect, so a body that the option would have
+read as UTF-8 or as its mark is what the declared decoder makes of it, and
+the UTF-8 monitor of a healed body (`charset.invalid_sequence` for a healed
+body) runs only with the option. The header and the raw bytes (`RawBody`,
+`RawReader` of a parse with a source) are untouched either way; a source
+that fails, and a sink that stops the parse at the diagnostic, end the body
+the same way in both modes (tested). `FallbackCharset` is a separate option
+and unchanged.
+
+Valid Shift_JIS `C2 A1 C2 A1` (`ﾂ｡ﾂ｡`) was the independent reproduction:
+`Parse` now gives `ﾂ｡ﾂ｡` like `Read`, with `charset.declaration_suspect` at
+Info; only the option gives `¡¡`. The known misses below are thus false
+reports at Info by default, and false heals only with the option.
+
+Not part of #65: an entity with no Content-Type field at all is still not
+watched for a missing charset unless a fallback is configured (see "Text
+with no charset and no fallback").
 
 All three rules below read the same evidence, the **sniff window**: the first
 4096 bytes (`charsetSniff`) of a text body after its transfer encoding was
@@ -215,8 +250,9 @@ input was cut into reads (tested whole and a byte at a time).
 A body that declares a charset the `CharsetReader` accepted and that names no
 Unicode encoding (`euc-kr`, `ks_c_5601-1987`, `shift_jis`, `gb2312`, `big5`,
 `iso-2022-jp`/`-kr`, `iso-8859-1`, `windows-1252`, `windows-1251`, ...) and
-begins with no byte order mark is read as UTF-8, and reported as
-`charset.declaration_suspect` (Recovered), when all of these hold:
+begins with no byte order mark is UTF-8 by the evidence — reported as
+`charset.declaration_suspect`, at Info by default and Recovered, read as
+UTF-8, with `RecoverCharsetDeclarations` — when all of these hold:
 
 1. the window holds **no ill-formed byte**;
 2. it holds **at least two** multi-byte sequences (`cdSuspectSequences`);
@@ -249,10 +285,11 @@ Why the rule is this one:
   `windows-1251`, `koi8-r` or `iso-8859-1` be healed — the classic
   `РџСЂРёРІРµС‚` — without also "healing" `화환`.
 
-What is delivered: the ASCII before the first byte above 0x7F as the declared
+What is delivered with the option (by default, the declared decoder's
+text): the ASCII before the first byte above 0x7F as the declared
 decoder read it, and everything from that byte on as it is, watched for bytes
 that turn out not to be UTF-8 after the window (`charset.invalid_sequence`,
-Info). The header is not changed and `WriteTo` copies the original bytes.
+Info). The header is not changed and the raw bytes are the input's.
 
 What it costs: nothing is read ahead while the body is ASCII — the decoder is
 handed what it asks for and the hold keeps a copy of at most 4096 bytes. From
@@ -266,7 +303,8 @@ a UTF-7 decoder keeps UTF-8 anyway); a label the hook refuses
 body whose byte order mark was reported; a `CharsetReader` that read its
 input while it built its decoder.
 
-Known misses, on purpose: a body with a single multi-byte character; UTF-8
+Known misses, on purpose (by default a false positive is an Info report, and
+a false heal needs the option): a body with a single multi-byte character; UTF-8
 made only of two-byte sequences under a double-byte label when the declared
 decoder happens to read every pair (`café déjà` under `euc-kr` decodes to
 valid Hangul and stays that); text beyond the window; Shift_JIS half-width
@@ -380,8 +418,12 @@ and UTF-32 labels (`bomClassLabels`); every other label is a charset without
 a mark of its own. The plugin is unchanged.
 
 What happened before (base `e58d480`, plugin imported, `Parse`, text
-`Hi 안녕` behind each mark) and what happens now under ProfileTolerant and
-ProfileForensic:
+`Hi 안녕` behind each mark) and what ROB-080-004 made of it under
+ProfileTolerant and ProfileForensic. Since #65 the "Now" column holds only
+with `ParseOptions.RecoverCharsetDeclarations`; by default every Recovered
+row below is decoded as declared, mark included, and reported at Info with
+the mark's encoding named in the Action (see "Default and opt-in (#65)").
+The rows that report no conflict, or Info, are the same in both modes.
 
 | Declared | Body begins with | Before | Now | `charset.bom_mismatch` |
 |---|---|---|---|---|
@@ -404,12 +446,16 @@ ProfileForensic:
 Policy:
 
 - **The declaration is never silently replaced.** The header is not changed,
-  `Entity.WriteTo` still copies the original bytes, and every conflict is
+  the raw bytes of a parse with a source (`ParseAt`, `RawBody`, `RawReader`)
+  are the input's, with the option and without, and every conflict is
   reported once, at the body, with `Field: "Content-Type"`, a message naming
   the declared charset (quoted, or "declares no charset, so US-ASCII") and
   the mark (`UTF-8`, `UTF-16LE`, ...), and an Action that says how the body
   was decoded.
-- **Heal only on evidence.** The body is decoded as its mark says — UTF-8 by
+- **Heal only when asked (#65), and only on evidence.** Without
+  `RecoverCharsetDeclarations` nothing is healed: a conflict whose bytes are
+  valid in the mark's encoding is decoded as declared at SeverityInfo, the
+  Action naming that encoding. With it, the body is decoded as its mark says — UTF-8 by
   the parser itself as for a body declared utf-8 (mark kept, watched for
   invalid sequences), UTF-16 and UTF-32 by the `CharsetReader` under the
   labels `utf-16` and `utf-32` (mark decides the order and is consumed) — only
@@ -446,9 +492,10 @@ Limitations:
 - A label the `CharsetReader` refuses (unknown charset) is not examined: the
   body stays raw with `charset.unknown`, whatever its mark says.
 - A single-byte text that really begins with `ÿþ` or `þÿ` (or `ï»¿`) and
-  whose next bytes happen to be valid UTF-16 (UTF-8) would be decoded as the
-  mark says; real text does not begin that way, and the diagnostic says what
-  was done.
+  whose next bytes happen to be valid UTF-16 (UTF-8) is reported at Info by
+  default, and decoded as the mark says only with
+  `RecoverCharsetDeclarations`; real text does not begin that way, and the
+  diagnostic says what was done.
 - A `CharsetReader` that reads its input while it builds its decoder gets the
   input unexamined, and nothing is reported.
 - Under `ReadOptions.SkipTextAttachmentDecoding` a text body without a charset
@@ -458,3 +505,13 @@ Limitations:
   Unicode encodings; a new spelling added to `charset/aliases.go` reads as a
   charset without a mark until it is added there too.
 - The UTF-7 (`+/v8`) and GB18030 (`84 31 95 33`) marks are not recognized.
+
+## 2026-11-13 follow-up review (#65)
+
+Codex reviewed the option plumbing, both decoder decisions and changed
+expectations. The original Shift_JIS reproduction and 60 independent
+profile/chunk/raw-source scenarios pass. Focused root/charset race tests,
+full fresh unit tests, build, formatting and diff checks pass. The Python
+comparison has 74 fixtures, 44 explained differences, two open folding
+differences (#63), and no unexplained or stale exceptions. The default
+change and opt-in API are accepted; real-provider corpus work remains open.

@@ -66,14 +66,6 @@
     },
     {
       "parser": "python-email",
-      "fixture": "header-whitespace-separator",
-      "path": "[]",
-      "field": "subject",
-      "open": true,
-      "rationale": "Both read the white-space-only line as a fold of the Subject. emlkit's header value replaces each fold and the white space around it with one space and drops an empty continuation, giving \"s\"; RFC 5322 section 3.2.2 unfolding removes only the CRLF, which Python follows, giving \"s \\t\". See Open differences in docs/robustness-notes/differential.md."
-    },
-    {
-      "parser": "python-email",
       "fixture": "ko-cp949-under-euc-kr",
       "path": "[]",
       "field": "subject",
@@ -112,8 +104,7 @@
       "fixture": "ko-utf8-labelled-euc-kr",
       "path": "[]",
       "field": "text_sha256",
-      "open": true,
-      "rationale": "The bytes agree: valid UTF-8 HTML, whose own meta tag says utf-8, under charset=euc-kr. Both parsers follow the label and neither text is right: emlkit's plugin decodes it as CP949 into mojibake, with no diagnostic, and Python's KS X 1001 euc_kr into other mojibake with 43 U+FFFD. The right text is the UTF-8, with charset.declaration_suspect (finding 6 of corpus.md). See Open differences in docs/robustness-notes/differential.md."
+      "rationale": "The bytes agree: valid UTF-8 HTML, whose own meta tag says utf-8, under charset=euc-kr. Both parsers follow the label, which by the policy of issues #62 and #65 is emlkit's default: the plugin decodes it as CP949 into mojibake and the parse reports charset.declaration_suspect at Info, naming UTF-8 as the other reading; Python's KS X 1001 euc_kr gives other mojibake with 43 U+FFFD. With ParseOptions.RecoverCharsetDeclarations emlkit reads the UTF-8 (Recovered); the harness runs without it. Finding 6 of corpus.md."
     },
     {
       "parser": "python-email",
@@ -240,14 +231,6 @@
       "path": "[]",
       "field": "from",
       "rationale": "emlkit reads 'Doe, John <john@example.com>' as one address named \"Doe, John\" (address.unquoted_comma, MimeKit's AllowUnquotedCommaInAddresses default); Python splits it at the comma into a local-only address \"Doe\" and \"John <john@example.com>\". AddressOptions.StrictCommas gives Python's reading."
-    },
-    {
-      "parser": "python-email",
-      "fixture": "dx-subject-folded",
-      "path": "[]",
-      "field": "subject",
-      "open": true,
-      "rationale": "emlkit's header value replaces a fold of CRLF and a tab with one space; RFC 5322 section 3.2.2 unfolding removes only the CRLF and keeps the tab, as Python does. See Open differences in docs/robustness-notes/differential.md."
     }
   ]
 }

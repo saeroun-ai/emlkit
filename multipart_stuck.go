@@ -54,24 +54,36 @@ func (r *multipartReader) skEndsForGood(err error) bool {
 // epilogue, recorded in the session and counted by Completion. Drain called
 // again, as it says it may be, did exactly that through Walk. How much
 // epilogue was left depended on how far the first iterator had read ahead, so
-// the verdict also depended on how the input was chunked. Under recovery, an
-// entity whose parts were read to their end is now handed an iterator at its
-// end. ProfileStrict keeps its earlier behavior, and so does a body the
-// caller replaced.
+// the verdict also depended on how the input was chunked. An entity from
+// Parse whose parts were read to their end is now handed an iterator at its
+// end. A body the caller replaced keeps the earlier behavior.
+//
+// ProfileStrict did the same without healing (#70): its new iterator searched
+// the epilogue for the boundary, so a second Drain returned the iterator's
+// "NextPart: EOF" after a first that returned nil, and an epilogue holding a
+// delimiter line made up parts. It reads none of the epilogue now, under every
+// profile. The iterator at the end returns the failure the parts ended with,
+// if they ended with one, so a repeated Walk or Drain reports what the first
+// did rather than nil. Entities from Read, ReadWithOptions and New have no
+// session, never mark their parts ended, and are unchanged.
 
-// skPartsRead reports whether e's parts were read to their end under recovery,
-// from the body the parse gave it.
+// skPartsRead reports whether e's parts were read to their end, from the body
+// the parse gave it.
 func (e *Entity) skPartsRead() bool {
-	return e.partsEnded && sameReader(e.Body, e.decodedBody) && e.parse.headerLimits().Recover
+	return e.partsEnded && sameReader(e.Body, e.decodedBody)
 }
 
 // skEndedParts is an iterator at its end. Like every scope of the parse, it
-// reports the parse's stop, once there is one, rather than its end.
+// reports the parse's stop, once there is one, rather than its end; otherwise
+// the failure the parts ended with, or io.EOF.
 type skEndedParts struct{ e *Entity }
 
 func (r skEndedParts) NextPart() (*Entity, error) {
 	if stop := r.e.parse.fatalErr(); stop != nil {
 		return nil, stop
+	}
+	if err := r.e.partsErr; err != nil {
+		return nil, err
 	}
 	return nil, io.EOF
 }
