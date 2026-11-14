@@ -2,8 +2,9 @@
 
 Code: `smime/` (`classify.go`, `ber.go`, `armor.go`, `cms.go`, `verify.go`,
 `decrypt.go`, `oid.go`, `limits.go`, `issue.go`). Tests: `smime/smime_test.go`,
-`smime/wiring_test.go`. Vectors: `smime/testdata/` (made with OpenSSL; the
-commands are in its README).
+`smime/decrypt_test.go`, `smime/wiring_test.go`. Vectors: `smime/testdata/`
+(made with OpenSSL; the commands are in its README). No private key is stored:
+the decryption tests make theirs at run time (#68).
 
 `smime` is an optional package. Nothing in `message`, `mail` or `textproto`
 imports it, it imports none of them, and it uses the standard library only. It
@@ -159,6 +160,15 @@ each with SHA-1, SHA-256, SHA-384 and SHA-512, and Ed25519. MD5, DSA, GOST and
 anything else are named and reported `NotChecked`. Go refuses RSA keys under
 1024 bits; such a signature is `Failed` with the library's reason.
 
+RSASSA-PSS is held to the salt length its parameters declare (absent: 20).
+A declared length of 0 means an empty salt, but Go's verifier has no option
+for exactly zero — its 0 is "detect the length", which accepts any. So for a
+declared 0, a signature that no salt length verifies is `Failed`, and one
+that some salt length verifies is `NotChecked` ("cannot be checked exactly"),
+never `Passed`: an honest zero-salt signature and one whose real salt is 32
+bytes cannot be told apart through that API (#72). OpenSSL accepts the
+first and refuses the second. `Digest` and `Chain` are not affected.
+
 A signer certificate is found by the signer identifier among the message's
 certificates and `VerifyOptions.Certificates`. Without one, `Signature` is
 `NotChecked`.
@@ -187,6 +197,12 @@ transport (PKCS #1 v1.5 with the session-key form that does not reveal padding
 failures, or OAEP with MGF1) and AES-CBC, or AES-GCM in an AuthEnvelopedData.
 Key agreement (ECDH), KEK and password recipients, 3DES and RC2 are described
 but not decrypted.
+
+Tests decrypt EnvelopedData and AuthEnvelopedData that `decrypt_test.go`
+builds with the standard library for a key it makes at run time (PKCS #1 v1.5
+and OAEP, AES-CBC also as streamed BER, AES-GCM with and without
+authenticated attributes, a second recipient chosen by certificate). OpenSSL's
+enveloped vectors are read for structure only: their key is not kept.
 
 AES-CBC content has no integrity of its own. A service that tells a sender
 whether a ciphertext decrypted cleanly is a padding oracle; a classifier that
@@ -296,8 +312,8 @@ For an opaque part larger than `TreeOptions.MaxBodyBytes`, read the part with
   the input.
 - Signed attributes are verified as transmitted; a signer that sent them in
   non-DER form and signed their DER re-encoding fails `Signature`.
-- An RSASSA-PSS salt length of zero is verified with the salt length detected
-  from the signature.
+- An RSASSA-PSS signature with a declared salt length of zero is at best
+  `NotChecked` (see the trust model).
 - `Sniff` reads the first 8 KiB.
 - No signing, no encryption, no writing of CMS.
 - A blob with more chunks than `MaxElements` allows is refused whole
@@ -308,3 +324,13 @@ For an opaque part larger than `TreeOptions.MaxBodyBytes`, read the part with
   `digestedData`, `encryptedData`, `authenticatedData`, MD5 and DSA
   signatures, ECDH/KEK/password decryption, 3DES/RC2. PGP/MIME is the
   `pgpmime` package's (pgpmime.md, ROB-140-005).
+
+## 2026-11-13 follow-up review (#72, #68)
+
+Codex reviewed the implementation and runtime-generated envelope tests,
+independently reproduced the repaired salt-length result, and compared the
+original, mismatched, genuine-zero and omitted-default signatures with
+OpenSSL. The S/MIME race test, full unit suite, build, formatting and diff
+checks passed on Linux amd64. No PEM private-key block remains; the literal
+PGP private-key armor type names are parser syntax and remain in pgpmime.
+Real-client fixtures (#69) remain unverified; ROB-140-004 stays Review.

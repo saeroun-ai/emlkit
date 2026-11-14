@@ -6,18 +6,26 @@ run OpenSSL.
 
 The keys and certificates are throwaway ones made by the script for this
 purpose only: subject `CN=emlkit test`, addresses under `example.com`, issued
-by a throwaway `CN=emlkit test CA`. The CA's and the signers' private keys
-were discarded. **`recipient-test-key.pem` is a test key**: the private key of
-`recipient-test-cert.pem`, committed so that the decryption test can run. It
-protects nothing; never use it for anything else.
+by a throwaway `CN=emlkit test CA`. No private key is kept here. The CA's and
+the signers' keys were discarded when the vectors were made. The recipient's
+key was committed at first so that the decryption test could run, and was
+removed on 2026-11-13 (#68); it remains in the history before that date. It
+protected nothing and was never used for anything else.
+
+Without it, the enveloped vectors are read for their structure only.
+Decryption is tested by `decrypt_test.go`, which makes an RSA key and a
+certificate when it runs, keeps them in memory, and builds its EnvelopedData
+and AuthEnvelopedData with the standard library: RSA PKCS #1 v1.5 and OAEP
+key transport, AES-CBC (also as streamed BER) and AES-GCM.
 
 | File | What it is |
 | --- | --- |
 | `content.txt`, `content-lf.txt`, `content-big.txt` | the signed, compressed and encrypted content: CRLF, bare LF, and 10 KiB |
 | `ca.pem` | the root the signers' certificates chain to |
 | `rsa.pem` | the RSA signer's certificate, for the vector that omits it |
-| `recipient-test-cert.pem`, `recipient-test-key.pem` | the recipient of the enveloped vectors, and its **test key** |
+| `recipient-test-cert.pem` | the recipient of the enveloped vectors (its key was not kept) |
 | `opaque-*.der` | SignedData with the content inside: RSA PKCS #1 v1.5 (SHA-1/256/384/512), RSASSA-PSS, ECDSA P-256, Ed25519, two signers, by key identifier, without signed attributes, without certificates |
+| `opaque-pss-salt0.der`, `opaque-pss-default.der` | RSASSA-PSS with a zero-length salt, and with every parameter left at its default (SHA-1, MGF1-SHA-1, salt 20; an empty SEQUENCE), by a self-signed signer; made later, see below |
 | `opaque-rsa-stream.der` | the same in BER: indefinite lengths, content in 4096-byte chunks |
 | `opaque-rsa.pem`, `opaque-rsa.eml` | PEM, and a whole `application/pkcs7-mime` message |
 | `detached-*.p7s`, `detached-rsa.eml` | detached signatures, and a whole `multipart/signed` message |
@@ -87,7 +95,7 @@ alg_section = evp_properties
 rh-allow-sha1-signatures = yes
 EOF
 
-# Throwaway keys and certificates. Only recipient-test-key.pem is committed.
+# Throwaway keys and certificates. None of the keys is kept.
 o req -config openssl.cnf -x509 -newkey rsa:2048 -nodes -keyout ca.key \
   -out ca.pem -subj "/CN=emlkit test CA" -days 3650 -extensions ca
 leaf() { # name keyfile extension-section
@@ -98,11 +106,11 @@ leaf() { # name keyfile extension-section
 o genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out rsa.key
 o genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ec.key
 o genpkey -algorithm ED25519 -out ed.key
-o genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out recipient-test-key.pem
+o genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out recipient.key
 leaf rsa rsa.key leaf_rsa
 leaf ec ec.key leaf_ec
 leaf ed ed.key leaf_ed
-leaf recipient recipient-test-key.pem leaf_recipient
+leaf recipient recipient.key leaf_recipient
 cp recipient.pem recipient-test-cert.pem
 
 # The signed content: a small MIME entity with CRLF line endings, the same
@@ -172,12 +180,66 @@ for f in opaque-*.der; do
 done
 ```
 
-Not committed: `ca.key`, `rsa.key`, `ec.key`, `ed.key`, the certificate
-requests, `ec.pem`, `ed.pem` (both are inside the vectors that need them) and
-the two configuration files. They were left in the generating session's
-scratch directory and are not needed again: regenerating makes new keys and
-new vectors. The verification loop at the end was run as a separate step after
-the generation, with exactly that command.
+Not committed: `ca.key`, `rsa.key`, `ec.key`, `ed.key`, `recipient.key`, the
+certificate requests, `ec.pem`, `ed.pem` (both are inside the vectors that
+need them) and the two configuration files. They were left in the generating
+session's scratch directory and are not needed again: regenerating makes new
+keys and new vectors. The verification loop at the end was run as a separate
+step after the generation, with exactly that command. (When it was run the
+recipient's key was written to `recipient-test-key.pem` and committed; the
+script above names it as the file it now is, an uncommitted one.)
+
+### The two PSS salt vectors (2026-11-13, #72)
+
+`opaque-pss-salt0.der` and `opaque-pss-default.der` were made later, with the
+same OpenSSL 3.5.9, by the script below, run in an empty directory with the
+path of `content.txt`. Their signer is a self-signed certificate (subject
+`CN=emlkit test`, `pss@example.com`) that does not chain to `ca.pem`; the key
+is deleted by the script. Both verified ("CMS Verification successful").
+The salt-length test rewrites the saltLength of these and of
+`opaque-pss-sha512.der` in memory; OpenSSL refuses each rewritten length that
+differs from the salt actually used (`salt length check failed: expected: 0
+retrieved: 32`, and so on).
+
+```sh
+#!/bin/bash
+set -eu
+content=$(realpath "$2")
+cd "$1"
+o() { timeout 60 openssl "$@"; }
+cat > openssl.cnf <<'EOF'
+[req]
+distinguished_name = dn
+prompt = no
+[dn]
+CN = emlkit test
+[leaf_pss]
+basicConstraints = CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = emailProtection
+subjectKeyIdentifier = hash
+subjectAltName = email:pss@example.com
+EOF
+cat > sha1.cnf <<'EOF'
+openssl_conf = openssl_init
+[openssl_init]
+alg_section = evp_properties
+[evp_properties]
+rh-allow-sha1-signatures = yes
+EOF
+o genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out pss.key
+o req -config openssl.cnf -x509 -new -key pss.key -out pss.pem -subj "/CN=emlkit test" \
+  -days 3650 -extensions leaf_pss
+S="-sign -signer pss.pem -inkey pss.key"
+o cms $S -in "$content" -nodetach -noindef -keyopt rsa_padding_mode:pss -md sha256 \
+  -keyopt rsa_pss_saltlen:0 -outform DER -out opaque-pss-salt0.der
+OPENSSL_CONF=$PWD/sha1.cnf o cms $S -in "$content" -nodetach -noindef -keyopt rsa_padding_mode:pss \
+  -md sha1 -keyopt rsa_mgf1_md:sha1 -keyopt rsa_pss_saltlen:20 -outform DER -out opaque-pss-default.der
+rm -f pss.key
+for f in opaque-pss-salt0.der opaque-pss-default.der; do
+  OPENSSL_CONF=$PWD/sha1.cnf o cms -verify -in "$f" -inform DER -noverify -binary -out /dev/null
+done
+```
 
 The messages (`*.eml`) are as OpenSSL wrote them: their own header lines end in
 bare LF while the signed part inside keeps its CRLF. That mix is deliberate

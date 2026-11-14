@@ -530,6 +530,109 @@ func TestVerify(t *testing.T) {
 	}
 }
 
+// TestVerifyPSSSaltLength holds RSASSA-PSS to the salt length the parameters
+// declare (#72). CMS's saltLength 0 means an empty salt; Go's 0 is
+// PSSSaltLengthAuto, which accepts any length, and Go has no option for exactly
+// zero. A declared zero is therefore never Passed.
+func TestVerifyPSSSaltLength(t *testing.T) {
+	// withSalt rewrites the one-byte saltLength INTEGER of a vector's
+	// parameters, leaving the signature and content alone.
+	withSalt := func(name string, salt byte) []byte {
+		t.Helper()
+		data := vector(t, name)
+		m, err := Parse(data, nil)
+		if err != nil || m.Signed == nil || len(m.Signed.Signers) != 1 {
+			t.Fatalf("%s: %v", name, err)
+		}
+		params := m.Signed.Signers[0].SignatureAlgorithm.Params
+		at := bytes.Index(data, params)
+		off := bytes.Index(params, []byte{0xa2, 3, 2, 1})
+		if at < 0 || off < 0 {
+			t.Fatalf("%s: no one-byte saltLength", name)
+		}
+		out := bytes.Clone(data)
+		out[at+off+4] = salt
+		return out
+	}
+	// Signed with salts of 32 (SHA-512) and 0 (SHA-256) bytes by OpenSSL, and
+	// with every parameter at its default (SHA-1, MGF1-SHA-1, salt 20).
+	const sha512, zero, defaults = "opaque-pss-sha512.der", "opaque-pss-salt0.der", "opaque-pss-default.der"
+	tests := []struct {
+		name string
+		data []byte
+		sig  Status
+	}{
+		{"declared 32, salt 32", vector(t, sha512), Passed},
+		{"declared 32 rewritten, salt 32", withSalt(sha512, 32), Passed},
+		{"declared 0, salt 32", withSalt(sha512, 0), NotChecked},
+		{"declared 1, salt 32", withSalt(sha512, 1), Failed},
+		{"declared 64, salt 32", withSalt(sha512, 64), Failed},
+		{"declared 0, salt 0", vector(t, zero), NotChecked},
+		{"declared 32, salt 0", withSalt(zero, 32), Failed},
+		{"declared 1, salt 0", withSalt(zero, 1), Failed},
+		{"declared 20 by omission, salt 20", vector(t, defaults), Passed},
+	}
+	for _, tc := range tests {
+		m, err := Parse(tc.data, nil)
+		if err != nil || m.Signed == nil || len(m.Signed.Signers) != 1 {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		r := m.Signed.Verify(nil, nil)[0]
+		// The salt length bears on Signature alone.
+		if r.Digest != Passed || r.Signature != tc.sig || r.Chain != NotChecked || r.Certificate == nil ||
+			r.ContentIntact() != (tc.sig == Passed) || r.Signer.SignatureAlgorithm.Name != "RSASSA-PSS" {
+			t.Errorf("%s: digest %v signature %v (%s) chain %v intact %v", tc.name,
+				r.Digest, r.Signature, r.SignatureNote, r.Chain, r.ContentIntact())
+		}
+		if tc.sig == NotChecked && !strings.Contains(r.SignatureNote, "salt length of 0") {
+			t.Errorf("%s: note %q", tc.name, r.SignatureNote)
+		}
+	}
+
+	// The defaults are omitted, not spelled out: the parameters are an empty
+	// SEQUENCE, read as RFC 4055's SHA-1, MGF1-SHA-1 and salt 20.
+	m, _ := Parse(vector(t, defaults), nil)
+	if p := m.Signed.Signers[0].SignatureAlgorithm.Params; !bytes.Equal(p, []byte{0x30, 0}) {
+		t.Errorf("default parameters encoded as % x", p)
+	}
+	for _, raw := range [][]byte{nil, {0x30, 0}} {
+		if h, mgf, salt, ok := rsaParams(raw); !ok || h != crypto.SHA1 || mgf != crypto.SHA1 || salt != 20 {
+			t.Errorf("rsaParams(% x) = %v %v %d %v", raw, h, mgf, salt, ok)
+		}
+	}
+
+	// With a declared zero the signature is still checked for any valid PSS
+	// encoding, so damage is Failed; content damage stays a Digest fact.
+	flip := func(data, at []byte, off int) []byte {
+		t.Helper()
+		i := bytes.Index(data, at)
+		if i < 0 {
+			t.Fatal("pattern not found")
+		}
+		out := bytes.Clone(data)
+		out[i+off] ^= 0x01
+		return out
+	}
+	one := func(data []byte) SignerResult {
+		t.Helper()
+		m, err := Parse(data, nil)
+		if err != nil || m.Signed == nil || len(m.Signed.Signers) != 1 {
+			t.Fatal(err)
+		}
+		return m.Signed.Verify(nil, nil)[0]
+	}
+	z := vector(t, zero)
+	r := one(flip(z, one(z).Signer.Signature, 9))
+	if r.Digest != Passed || r.Signature != Failed || r.ContentIntact() {
+		t.Errorf("zero salt, tampered signature: digest %v signature %v", r.Digest, r.Signature)
+	}
+	r = one(flip(z, []byte("Second line"), 2))
+	if r.Digest != Failed || r.Signature != NotChecked || r.ContentIntact() {
+		t.Errorf("zero salt, tampered content: digest %v signature %v", r.Digest, r.Signature)
+	}
+}
+
 func TestBEREdgeCases(t *testing.T) {
 	// SignedData in BER throughout: indefinite lengths at every level and a
 	// content chunked two levels deep.
@@ -761,28 +864,27 @@ func TestCompressedData(t *testing.T) {
 	}
 }
 
+// TestEnvelopedData reads OpenSSL's enveloped vectors for their structure. Their
+// recipient's key is not kept (#68), so they are not decrypted here;
+// TestDecryptRuntime decrypts what it builds with a key made at run time.
 func TestEnvelopedData(t *testing.T) {
-	blk, _ := pem.Decode(vector(t, "recipient-test-key.pem"))
-	key, err := x509.ParsePKCS8PrivateKey(blk.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := runtimeRecipient(t)
 	tests := []struct {
 		file    string
 		kind    Kind
 		rkind   RecipientKind
 		keyAlg  string
 		encAlg  string
-		content string // empty: the test key is not a recipient
 		chunked bool
 	}{
-		{"enveloped-aes256cbc.der", KindEnvelopedData, RecipientKeyTransport, "RSA", "AES-256-CBC", "content.txt", false},
-		{"enveloped-aes128cbc-oaep-keyid.der", KindEnvelopedData, RecipientKeyTransport, "RSAES-OAEP", "AES-128-CBC", "content.txt", false},
-		{"enveloped-aes256cbc-stream.der", KindEnvelopedData, RecipientKeyTransport, "RSA", "AES-256-CBC", "content-big.txt", true},
-		{"authenveloped-aes256gcm.der", KindAuthEnvelopedData, RecipientKeyTransport, "RSA", "AES-256-GCM", "content.txt", false},
-		{"enveloped-ecdh.der", KindEnvelopedData, RecipientKeyAgreement, "", "AES-256-CBC", "", false},
-		{"enveloped.eml", KindEnvelopedData, RecipientKeyTransport, "RSA", "AES-256-CBC", "content.txt", false},
+		{"enveloped-aes256cbc.der", KindEnvelopedData, RecipientKeyTransport, "RSA", "AES-256-CBC", false},
+		{"enveloped-aes128cbc-oaep-keyid.der", KindEnvelopedData, RecipientKeyTransport, "RSAES-OAEP", "AES-128-CBC", false},
+		{"enveloped-aes256cbc-stream.der", KindEnvelopedData, RecipientKeyTransport, "RSA", "AES-256-CBC", true},
+		{"authenveloped-aes256gcm.der", KindAuthEnvelopedData, RecipientKeyTransport, "RSA", "AES-256-GCM", false},
+		{"enveloped-ecdh.der", KindEnvelopedData, RecipientKeyAgreement, "", "AES-256-CBC", false},
+		{"enveloped.eml", KindEnvelopedData, RecipientKeyTransport, "RSA", "AES-256-CBC", false},
 	}
+	recipientCert := pemCert(t, "recipient-test-cert.pem")
 	for _, tc := range tests {
 		data := vector(t, tc.file)
 		if strings.HasSuffix(tc.file, ".eml") {
@@ -806,34 +908,14 @@ func TestEnvelopedData(t *testing.T) {
 		if m.Content() != nil {
 			t.Errorf("%s: encrypted content offered as content", tc.file)
 		}
-		rsaDec := &RSADecrypter{Certificate: pemCert(t, "recipient-test-cert.pem"), Key: key.(crypto.Decrypter)}
-		got, err := m.Decrypt(rsaDec)
-		if tc.content == "" {
-			if !errors.Is(err, ErrNoRecipient) {
-				t.Errorf("%s: decrypt: %v", tc.file, err)
-			}
-			continue
+		// The vectors' key-transport recipient is the committed certificate,
+		// and the run-time one is no recipient: nothing is tried with its key.
+		if tc.rkind == RecipientKeyTransport && !ed.Recipients[0].Matches(recipientCert) {
+			t.Errorf("%s: recipient does not name recipient-test-cert.pem", tc.file)
 		}
-		if err != nil || !bytes.Equal(got, vector(t, tc.content)) {
-			t.Errorf("%s: decrypt: %v, %d bytes", tc.file, err, len(got))
+		if _, err := m.Decrypt(&RSADecrypter{Certificate: r.cert, Key: r.key}); !errors.Is(err, ErrNoRecipient) {
+			t.Errorf("%s: decrypt: %v", tc.file, err)
 		}
-		// Without a certificate to choose by, recipients are tried in turn.
-		rsaDec.Certificate = nil
-		if got, err := m.Decrypt(rsaDec); err != nil || !bytes.Equal(got, vector(t, tc.content)) {
-			t.Errorf("%s: blind decrypt: %v", tc.file, err)
-		}
-		// Damaged ciphertext does not decrypt to something else silently.
-		if tc.kind == KindAuthEnvelopedData {
-			ed.EncryptedContent = append([]byte{}, ed.EncryptedContent...)
-			ed.EncryptedContent[0] ^= 1
-			if _, err := m.Decrypt(rsaDec); err == nil {
-				t.Errorf("%s: tampered GCM content decrypted", tc.file)
-			}
-		}
-	}
-	m, _ := Parse(vector(t, "opaque-rsa.der"), nil)
-	if _, err := m.Decrypt(&RSADecrypter{Key: key.(crypto.Decrypter)}); !errors.Is(err, ErrNotEnveloped) {
-		t.Errorf("decrypting a SignedData: %v", err)
 	}
 }
 

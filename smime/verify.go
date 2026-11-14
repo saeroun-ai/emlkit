@@ -341,6 +341,18 @@ func checkSignature(cert *x509.Certificate, si *SignerInfo, signed []byte, h cry
 		if !ok || ph != mgf {
 			return NotChecked, "RSASSA-PSS parameters are not supported"
 		}
+		if salt == 0 {
+			// A declared 0 is an empty salt, but rsa.PSSSaltLengthAuto is
+			// also 0 and accepts a salt of any length; Go has no option for
+			// exactly zero. Detection still rejects what no salt length
+			// verifies, so that is Failed; what it accepts, it accepts for
+			// some salt length that may not be 0, so that is not checked.
+			if err := rsa.VerifyPSS(pub, ph, sum(ph, signed), si.Signature,
+				&rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthAuto, Hash: ph}); err != nil {
+				return Failed, err.Error()
+			}
+			return NotChecked, "RSASSA-PSS with a declared salt length of 0 cannot be checked exactly"
+		}
 		return verdict(true, rsa.VerifyPSS(pub, ph, sum(ph, signed), si.Signature,
 			&rsa.PSSOptions{SaltLength: salt, Hash: ph}))
 	case oidECPublicKey, oidECDSASHA1, oidECDSASHA256, oidECDSASHA384, oidECDSASHA512:
