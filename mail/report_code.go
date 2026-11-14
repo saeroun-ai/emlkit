@@ -11,13 +11,17 @@ const (
 	// report lacks: Reporting-MTA, Final-Recipient, Action or Status of a
 	// delivery status, Final-Recipient or Disposition of a disposition
 	// notification, Feedback-Type, User-Agent or Version of a feedback report,
-	// or a delivery status with no recipient at all. Recovered when a value
-	// could be inferred, invalid_metadata when it stays empty.
+	// or a delivery status with no recipient at all. Always invalid_metadata:
+	// the field stays empty, and a missing Status or Action that can be
+	// guessed is guessed into StatusGuess or ActionGuess, which the Action of
+	// the diagnostic names.
 	CodeReportMissingField message.Code = "report.missing_field"
 
 	// CodeReportInvalidStatus reports a Status that is not a bare RFC 3463
-	// class.subject.detail code: recovered when one was read out of the text
-	// around it or out of an SMTP reply code, invalid_metadata when none was.
+	// class.subject.detail code: recovered when the field holds one code with
+	// other text around it and that code was read, invalid_metadata when the
+	// Status is left not Valid (no code, two different codes, a class not 2,
+	// 4 or 5, or an SMTP reply code, whose class goes to StatusGuess).
 	CodeReportInvalidStatus message.Code = "report.invalid_status"
 
 	// CodeReportInvalidAction reports an Action that is not one of failed,
@@ -26,7 +30,8 @@ const (
 	CodeReportInvalidAction message.Code = "report.invalid_action"
 
 	// CodeReportInvalidField reports any other field whose value does not
-	// read as its RFC writes it: a typed value with no type, angle brackets
+	// read as its RFC writes it: a typed value with no type (invalid_metadata;
+	// the type the value looks like goes to ReportValue.TypeGuess), angle brackets
 	// around an address, a Disposition missing its mode, an unknown feedback
 	// type, an unparseable Source-IP or Incidents.
 	CodeReportInvalidField message.Code = "report.invalid_field"

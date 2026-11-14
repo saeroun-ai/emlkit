@@ -15,8 +15,9 @@ the report says.
   `ReceivedFromMTA`, `ArrivalDate`, then `Recipients` (`RecipientStatus`):
   `OriginalRecipient`, `FinalRecipient`, `Action` (normalised, with
   `ActionRaw`), `Status` (`EnhancedStatus`: class, subject, detail, `Raw`,
-  `Valid`, `Inferred`, `Comment`), `RemoteMTA`, `DiagnosticCode`,
-  `LastAttemptDate`, `WillRetryUntil`, `FinalLogID`. `Address()` gives the
+  `Valid`, `Comment`), `RemoteMTA`, `DiagnosticCode`, `LastAttemptDate`,
+  `WillRetryUntil`, `FinalLogID`, and the guesses `StatusGuess` and
+  `ActionGuess` (see Declared values and guesses). `Address()` gives the
   Final-Recipient, else the Original-Recipient.
 - `ParseDispositionNotification(data)` — RFC 8098 `DispositionNotification`:
   `ReportingUA` (`UAName`, `UAProduct`), `MDNGateway`, `OriginalRecipient`,
@@ -39,8 +40,52 @@ Every model keeps `Fields` (each field as read: name as written, value
 unfolded, bytes untouched), `Unknown` (fields the model does not know, such
 as `X-Postfix-Sender`, `Removal-Recipient`), `Unparsed` (skipped lines) and
 `Diagnostics`. Typed values of the form `type; value` are `ReportValue`:
-`Raw`, lower-cased `Type`, `Value`, `Comment`. Dates are `DateResult` from
-`ParseDateTolerant`.
+`Raw`, lower-cased `Type`, `TypeGuess`, `Value`, `Comment`. Dates are
+`DateResult` from `ParseDateTolerant`.
+
+### Declared values and guesses (#66)
+
+A typed field holds only what the report gives. When the report leaves a
+value out, the field stays empty and a guess, if one can be made, goes to a
+field named `...Guess`. The diagnostic reports the missing or invalid field
+at `invalid_metadata` and names the guess in its Action; it never reports a
+recovery of a value the report does not give.
+
+| Report gives | Declared field | Guess field |
+| --- | --- | --- |
+| no `Status` | `Status` not `Valid`, `Raw` empty | `StatusGuess`: an RFC 3463 code found in `Diagnostic-Code`, else the class of its reply code (`550 ...` gives 5.0.0) |
+| `Status: 550` | `Status` not `Valid`, `Raw` `550` | `StatusGuess` 5.0.0 |
+| `Status: 4.4.1 5.1.1` | `Status` not `Valid`, `Raw` kept | none: two readings |
+| no `Action` | `Action` and `ActionRaw` empty | `ActionGuess` from the class of `Status`, else of `StatusGuess` |
+| `type; value` with no type | `Type` empty | `TypeGuess`: `rfc822` for an address with `@`, `dns` for a host name, `smtp` for text starting with a reply code |
+
+`StatusGuess`, when set, is `Valid` and `Inferred` with an empty `Raw`;
+`Status` is never `Inferred`. A consumer that wants a best effort says so
+(compiled as `ExampleParseDeliveryStatus`, `mail/report_test.go`):
+
+```go
+for _, r := range ds.Recipients {
+	status, guessed := r.Status, false
+	if !status.Valid && r.StatusGuess.Valid {
+		status, guessed = r.StatusGuess, true
+	}
+	action := r.Action
+	if action == "" && r.ActionRaw == "" {
+		action = r.ActionGuess // "" when nothing suggests one
+	}
+	_ = guessed // a guess is not what the report says; weigh it as such
+}
+```
+
+What stays a reading of the declared bytes, not a guess: a code inside a
+`Status` with other text around it (`550 5.1.1 user unknown`, one code),
+an Action variant mapped to its RFC 3464 word (`bounced`), a known type
+before a colon (`rfc822: a@example.com`), brackets removed from an address,
+a Disposition split by what it looks like, and the draft field name
+`Received-Date` read as `Arrival-Date`. `Report.Kind` is what the report part
+was read as, not a declared value; the declared ones are `ReportType` and the
+part's media type, and a kind taken from the fields is reported
+(`report.type_mismatch`).
 
 ## Tolerance
 
@@ -58,15 +103,16 @@ as `X-Postfix-Sender`, `Removal-Recipient`), `Unparsed` (skipped lines) and
 | blank line inside an MDN or ARF | one group | `report.unexpected_blank_line` |
 | field repeated where it may appear once | first used | `report.duplicate_field` |
 | `Status: 5.1.1 (bad mailbox)` | comments allowed | none |
-| `Status: 550 5.1.1 user unknown`, `5.1.1.` | code read out of the text | `report.invalid_status` recovered |
-| `Status: 550` | 5.0.0 | `report.invalid_status` recovered |
+| `Status: 550 5.1.1 user unknown`, `5.1.1.` | the one code read out of the text | `report.invalid_status` recovered |
+| `Status: 4.4.1 5.1.1` (two different codes) | not `Valid`, `Raw` kept, no guess | `report.invalid_status` invalid_metadata |
+| `Status: 550` | not `Valid`, `Raw` kept; `StatusGuess` 5.0.0 | `report.invalid_status` invalid_metadata |
 | `Status: 5.1`, class not 2/4/5 | not `Valid`, `Raw` kept | `report.invalid_status` invalid_metadata |
-| no Status | from an RFC 3463 code in Diagnostic-Code, else its reply code; `Inferred` | `report.missing_field` recovered |
+| no Status | not `Valid`; `StatusGuess` from an RFC 3463 code in Diagnostic-Code, else its reply code | `report.missing_field` invalid_metadata |
 | `Action: FAILED (x)` | case and comments ignored | none |
 | `Action: failure`, `bounced`, `deferred`, `success`... | mapped to the RFC 3464 action | `report.invalid_action` recovered |
 | unknown action | empty, `ActionRaw` kept | `report.invalid_action` |
-| no Action | from the status class, `ActionRaw` empty | `report.missing_field` recovered |
-| `type; value` with no type | `rfc822` for an address with `@`, `dns` for a host name, `smtp` for text starting with a reply code | `report.invalid_field` recovered |
+| no Action | empty, `ActionRaw` empty; `ActionGuess` from the class of `Status`, else `StatusGuess` | `report.missing_field` invalid_metadata |
+| `type; value` with no type | `Type` empty; `TypeGuess` `rfc822` for an address with `@`, `dns` for a host name, `smtp` for text starting with a reply code | `report.invalid_field` invalid_metadata |
 | `rfc822: addr` | colon read as the separator | `report.invalid_field` recovered |
 | `rfc822; <addr>` | brackets removed | `report.invalid_field` info |
 | Disposition without `;`, without a mode, unknown mode or type | split by what it looks like, lower-cased | `report.invalid_field` |
@@ -100,4 +146,12 @@ scan is one pass; comments are counted, not recursed into.
 - Extension fields of RFC 6591 (auth-failure) and others are in `Unknown`,
   not typed.
 - The status triple found inside free text may be a version number that
-  looks like one; such a reading is always reported.
+  looks like one. Found in a `Diagnostic-Code` it is only ever a
+  `StatusGuess`; found in a `Status` field it is read only when it is the one
+  code there, and that reading is always reported.
+- An Action variant such as `sent` is mapped by a fixed table (`delivered`);
+  it is a reading of the declared word, reported, not a guess field.
+
+## Independent #66 review (2026-11-14)
+
+Codex reviewed the DSN/MDN/ARF typed-value paths, status ambiguity handling, raw-value preservation, example and fuzz invariants. Six public-API scenarios and focused report tests under the race detector passed independently. Claude's fresh full unit suite, vet and 30-second report fuzz run (512,544 executions) passed. Missing values and SMTP reply-code guesses now require consumers to read the explicit Guess fields; the documented normalization table remains unchanged.

@@ -16,10 +16,12 @@ import (
 //
 // Bounces are among the most damaged mail there is: written by every MTA in
 // its own way, relayed through gateways, quoted and re-encoded. Each parser
-// here reads what it can and says, in Diagnostics, what it repaired, assumed
-// or could not read; every field stays available as it was read, in Fields,
-// and fields the model does not know are kept in Unknown. See
-// docs/robustness-notes/reports.md.
+// here reads what it can and says, in Diagnostics, what it repaired or could
+// not read; every field stays available as it was read, in Fields, and fields
+// the model does not know are kept in Unknown. A typed field holds only what
+// the report gives: a value it does not give but its other fields suggest is
+// in a field of its own named Guess (RecipientStatus.StatusGuess and
+// ActionGuess, ReportValue.TypeGuess). See docs/robustness-notes/reports.md.
 
 // A ReportField is one field of a report as it was read: the name as
 // written and the value unfolded, the white space around it removed, its
@@ -35,10 +37,17 @@ type ReportField struct {
 type ReportValue struct {
 	// Raw is the field value as read; it is empty when the field is absent.
 	Raw string
-	// Type is the type, lower-cased: "rfc822", "utf-8", "dns", "smtp",
-	// "x-unix"... It is empty when the field gave none and none could be
-	// assumed.
+	// Type is the type the field gives, lower-cased: "rfc822", "utf-8",
+	// "dns", "smtp", "x-unix"... A known type written before a colon instead
+	// of the semicolon is read as the type. Type is empty when the field
+	// gives none.
 	Type string
+	// TypeGuess is set only when Type is empty: the type the value looks
+	// like — "rfc822" for an address with "@", "dns" for an MTA name that is
+	// a host name, "smtp" for a diagnostic that begins with an SMTP reply
+	// code. The report does not give it; the diagnostic that reports the
+	// missing type names it.
+	TypeGuess string
 	// Value is what follows the type. For an address or a name, comments and
 	// angle brackets around it are removed and Comment holds the comments'
 	// text; a diagnostic's text is kept whole.
@@ -61,16 +70,18 @@ const (
 
 // An EnhancedStatus is an RFC 3463 status code, class.subject.detail.
 type EnhancedStatus struct {
-	// Raw is the field value as read, empty when the field is absent or the
-	// code was inferred.
+	// Raw is the Status field as read. It is empty when the field is absent,
+	// and in a RecipientStatus.StatusGuess.
 	Raw string
 	// Class (2 success, 4 persistent transient failure, 5 permanent failure),
 	// Subject and Detail are the three numbers.
 	Class, Subject, Detail int
 	// Valid reports that the numbers were read and the class is 2, 4 or 5.
 	Valid bool
-	// Inferred reports that the report gave no Status and the code was read
-	// out of the recipient's Diagnostic-Code instead.
+	// Inferred is set only in a RecipientStatus.StatusGuess: the code is not
+	// one a Status field gives but a guess, from an SMTP reply code or from
+	// the recipient's Diagnostic-Code. RecipientStatus.Status is never
+	// Inferred.
 	Inferred bool
 	// Comment is the text of the comments around the code.
 	Comment string
@@ -96,14 +107,29 @@ func (s EnhancedStatus) Transient() bool { return s.Valid && s.Class == 4 }
 type RecipientStatus struct {
 	OriginalRecipient ReportValue
 	FinalRecipient    ReportValue
-	// Action is the action normalised to one of the five of RFC 3464, or
-	// empty when the field holds none of them; ActionRaw is the field as
-	// read. An Action with an empty ActionRaw was inferred from the Status
-	// class, which the diagnostics say.
+	// Action is the Action field normalised to one of the five actions of
+	// RFC 3464, or empty when the group has no Action or it holds none of
+	// them; ActionRaw is the field as read.
 	Action    DeliveryAction
 	ActionRaw string
-	Status    EnhancedStatus
-	RemoteMTA ReportValue
+	// ActionGuess is set only when the group has no Action field: the
+	// action the status class suggests (failed for 5, delayed for 4,
+	// delivered for 2), taken from Status, or from StatusGuess when Status is
+	// not Valid. The report does not give it.
+	ActionGuess DeliveryAction
+	// Status is the Status field read as an RFC 3463 code. It is not Valid
+	// when the group has no Status or the field holds no such code: an SMTP
+	// reply code such as "550", two different codes, a class that is not 2,
+	// 4 or 5.
+	Status EnhancedStatus
+	// StatusGuess is set only when Status is not Valid and a code can be
+	// guessed: the class of a Status that is an SMTP reply code ("550" gives
+	// 5.0.0) or, when the group has no Status, an RFC 3463 code found in the
+	// Diagnostic-Code, else the class of its reply code. When set it is Valid
+	// and Inferred, with an empty Raw. The report does not give it, and a
+	// code found in free text may be a version number that looks like one.
+	StatusGuess EnhancedStatus
+	RemoteMTA   ReportValue
 	// DiagnosticCode is the diagnostic type ("smtp", "x-unix"...) and the
 	// text, usually the remote server's reply.
 	DiagnosticCode  ReportValue
@@ -406,7 +432,7 @@ func (p *rptDSN) recipient(i int, key string, f rptField) {
 		r.ActionRaw = v
 		r.Action = rptAction(d, f.name, v)
 	case "status":
-		r.Status = rptStatus(d, f.name, v)
+		r.Status, r.StatusGuess = rptStatus(d, f.name, v)
 	case "remote-mta":
 		r.RemoteMTA = rptTyped(d, f.name, v, rptMTA)
 	case "diagnostic-code":
@@ -420,7 +446,7 @@ func (p *rptDSN) recipient(i int, key string, f rptField) {
 	}
 }
 
-// finish checks the fields RFC 3464 requires and infers what can be.
+// finish checks the fields RFC 3464 requires and guesses, apart, what can be.
 func (p *rptDSN) finish() {
 	ds, d := p.ds, p.d
 	if !p.msgSeen["reporting-mta"] {
@@ -442,38 +468,42 @@ func (p *rptDSN) finish() {
 			d.add(CodeReportMissingField, message.SeverityInvalidMetadata, "Final-Recipient",
 				"mail: report recipient "+n+" has no Final-Recipient", action)
 		}
+		// A missing Status or Action is reported as missing: what can be
+		// guessed goes to StatusGuess and ActionGuess, never to the fields of
+		// the values the report gives (issue #66).
 		if !seen["status"] {
-			if c, s, dt, ok := rptFindStatus(r.DiagnosticCode.Value); ok {
-				r.Status = EnhancedStatus{Class: c, Subject: s, Detail: dt, Valid: true, Inferred: true}
-				d.add(CodeReportMissingField, message.SeverityRecovered, "Status",
-					"mail: report recipient "+n+" has no Status", "read "+r.Status.String()+" out of its Diagnostic-Code")
+			action := "left Status not Valid"
+			if c, s, dt, ok, _ := rptFindStatus(r.DiagnosticCode.Value); ok {
+				r.StatusGuess = EnhancedStatus{Class: c, Subject: s, Detail: dt, Valid: true, Inferred: true}
+				action += "; StatusGuess is " + r.StatusGuess.String() + ", found in its Diagnostic-Code"
 			} else if rptHasReplyCode(r.DiagnosticCode.Value) {
-				r.Status = EnhancedStatus{Class: int(r.DiagnosticCode.Value[0] - '0'), Valid: true, Inferred: true}
-				d.add(CodeReportMissingField, message.SeverityRecovered, "Status",
-					"mail: report recipient "+n+" has no Status", "read "+r.Status.String()+" out of the reply code of its Diagnostic-Code")
-			} else {
-				d.add(CodeReportMissingField, message.SeverityInvalidMetadata, "Status",
-					"mail: report recipient "+n+" has no Status", "left it not Valid")
+				r.StatusGuess = EnhancedStatus{Class: int(r.DiagnosticCode.Value[0] - '0'), Valid: true, Inferred: true}
+				action += "; StatusGuess is " + r.StatusGuess.String() + ", from the class of the reply code of its Diagnostic-Code"
 			}
+			d.add(CodeReportMissingField, message.SeverityInvalidMetadata, "Status",
+				"mail: report recipient "+n+" has no Status", action)
 		}
 		if !seen["action"] {
+			st, from := r.Status, "Status"
+			if !st.Valid {
+				st, from = r.StatusGuess, "StatusGuess"
+			}
 			var a DeliveryAction
 			switch {
-			case r.Status.Permanent():
+			case st.Permanent():
 				a = ActionFailed
-			case r.Status.Transient():
+			case st.Transient():
 				a = ActionDelayed
-			case r.Status.Valid && r.Status.Class == 2:
+			case st.Valid && st.Class == 2:
 				a = ActionDelivered
 			}
+			action := "left Action empty"
 			if a != "" {
-				r.Action = a
-				d.add(CodeReportMissingField, message.SeverityRecovered, "Action",
-					"mail: report recipient "+n+" has no Action", "inferred "+string(a)+" from the status class")
-			} else {
-				d.add(CodeReportMissingField, message.SeverityInvalidMetadata, "Action",
-					"mail: report recipient "+n+" has no Action", "left it empty")
+				r.ActionGuess = a
+				action += "; ActionGuess is " + string(a) + ", from the class of " + from
 			}
+			d.add(CodeReportMissingField, message.SeverityInvalidMetadata, "Action",
+				"mail: report recipient "+n+" has no Action", action)
 		}
 	}
 }

@@ -311,9 +311,10 @@ const (
 )
 
 // rptTyped reads a "type; value" field (RFC 3464 sections 2.2 and 2.3). A
-// field with no semicolon is healed when one reading stands out: a colon in
-// its place, an address with "@" (rfc822), a host name (dns), text that
-// begins with an SMTP reply code (smtp).
+// known type followed by a colon in place of the semicolon is read as the
+// type. A field that gives no type keeps Type empty, and the type its value
+// looks like goes to TypeGuess: an address with "@" (rfc822), a host name
+// (dns), text that begins with an SMTP reply code (smtp).
 func rptTyped(d *rptDiags, field, v string, kind rptValueKind) ReportValue {
 	r := ReportValue{Raw: v}
 	rest := v
@@ -333,21 +334,23 @@ func rptTyped(d *rptDiags, field, v string, kind rptValueKind) ReportValue {
 			r.Type, rest = t, after
 			d.add(CodeReportInvalidField, message.SeverityRecovered, field,
 				"mail: report field separates its type with a colon instead of a semicolon", "read the word before the colon as the type")
+		// The type is missing: that is what is reported. A guess goes to
+		// TypeGuess only (issue #66).
 		case kind == rptAddress && strings.Contains(v, "@"):
-			r.Type = "rfc822"
-			d.add(CodeReportInvalidField, message.SeverityRecovered, field,
-				"mail: report field gives an address with no address type", "read it as an rfc822 address")
+			r.TypeGuess = "rfc822"
+			d.add(CodeReportInvalidField, message.SeverityInvalidMetadata, field,
+				"mail: report field gives an address with no address type", "left Type empty; TypeGuess is rfc822, as the value holds an @")
 		case kind == rptMTA && rptIsHost(v):
-			r.Type = "dns"
-			d.add(CodeReportInvalidField, message.SeverityRecovered, field,
-				"mail: report field gives an MTA name with no name type", "read it as a dns name")
+			r.TypeGuess = "dns"
+			d.add(CodeReportInvalidField, message.SeverityInvalidMetadata, field,
+				"mail: report field gives an MTA name with no name type", "left Type empty; TypeGuess is dns, as the value is a host name")
 		case kind == rptText && rptHasReplyCode(strings.TrimSpace(v)):
-			r.Type = "smtp"
-			d.add(CodeReportInvalidField, message.SeverityRecovered, field,
-				"mail: report field gives a diagnostic with no diagnostic type", "read it as an smtp diagnostic, as it begins with a reply code")
+			r.TypeGuess = "smtp"
+			d.add(CodeReportInvalidField, message.SeverityInvalidMetadata, field,
+				"mail: report field gives a diagnostic with no diagnostic type", "left Type empty; TypeGuess is smtp, as the value begins with a reply code")
 		default:
 			d.add(CodeReportInvalidField, message.SeverityInvalidMetadata, field,
-				"mail: report field gives no type before its value", "kept the value with no type")
+				"mail: report field gives no type before its value", "left Type empty; kept the value with no type")
 		}
 	}
 	if kind == rptText {
@@ -437,8 +440,10 @@ func rptTriple(w string) (class, subject, detail int, ok bool) {
 }
 
 // rptFindStatus looks for an RFC 3463 code of class 2, 4 or 5 among the first
-// words of text, trimmed of the punctuation real bounces put around one.
-func rptFindStatus(text string) (class, subject, detail int, ok bool) {
+// 64 words of text, trimmed of the punctuation real bounces put around one,
+// and returns the first. conflict reports that those words also hold a
+// different such code.
+func rptFindStatus(text string) (class, subject, detail int, ok, conflict bool) {
 	words := 0
 	for w := range strings.FieldsFuncSeq(text, func(r rune) bool {
 		return r == ' ' || r == '\t' || r == ',' || r == ';' || r == '=' || r == '\r' || r == '\n'
@@ -451,17 +456,25 @@ func rptFindStatus(text string) (class, subject, detail int, ok bool) {
 		if len(w) > 4 && rptHasReplyCode(w) && (w[3] == '-' || w[3] == ' ') {
 			w = w[4:]
 		}
-		if c, s, dt, found := rptTriple(w); found && (c == 2 || c == 4 || c == 5) {
-			return c, s, dt, true
+		c, s, dt, found := rptTriple(w)
+		if !found || (c != 2 && c != 4 && c != 5) {
+			continue
+		}
+		if !ok {
+			class, subject, detail, ok = c, s, dt, true
+		} else if c != class || s != subject || dt != detail {
+			return class, subject, detail, true, true
 		}
 	}
-	return 0, 0, 0, false
+	return class, subject, detail, ok, false
 }
 
 // rptStatus reads a Status field (RFC 3464 section 2.3.4). Comments are
-// allowed around the code; other text around it is reported.
-func rptStatus(d *rptDiags, field, v string) EnhancedStatus {
-	s := EnhancedStatus{Raw: v}
+// allowed around the code; other text around one code is reported and the
+// code read. A field that holds no code, or two different ones, is not Valid;
+// when it is an SMTP reply code, its class goes to guess (issue #66).
+func rptStatus(d *rptDiags, field, v string) (s, guess EnhancedStatus) {
+	s = EnhancedStatus{Raw: v}
 	text, comment := rptStripComments(v)
 	s.Comment = comment
 	text = strings.TrimSpace(text)
@@ -472,23 +485,31 @@ func rptStatus(d *rptDiags, field, v string) EnhancedStatus {
 			d.add(CodeReportInvalidStatus, message.SeverityInvalidMetadata, field,
 				fmt.Sprintf("mail: report status %q has the class %d, not 2, 4 or 5", text, c), "kept the numbers; the status is not Valid")
 		}
-		return s
+		return s, guess
 	}
-	if c, sub, det, ok := rptFindStatus(text); ok {
+	if c, sub, det, ok, conflict := rptFindStatus(text); ok {
+		if conflict {
+			first := EnhancedStatus{Class: c, Subject: sub, Detail: det, Valid: true}
+			d.add(CodeReportInvalidStatus, message.SeverityInvalidMetadata, field,
+				"mail: report status holds more than one status code, the first "+first.String()+", and they differ",
+				"left Status not Valid; Raw keeps the field")
+			return s, guess
+		}
 		s.Class, s.Subject, s.Detail, s.Valid = c, sub, det, true
 		d.add(CodeReportInvalidStatus, message.SeverityRecovered, field,
 			"mail: report status holds more than a status code", "read the code "+s.String()+" out of it")
-		return s
+		return s, guess
 	}
 	if rptHasReplyCode(text) {
-		s.Class, s.Valid = int(text[0]-'0'), true
-		d.add(CodeReportInvalidStatus, message.SeverityRecovered, field,
-			"mail: report status is an SMTP reply code", "read it as "+s.String())
-		return s
+		guess = EnhancedStatus{Class: int(text[0] - '0'), Valid: true, Inferred: true}
+		d.add(CodeReportInvalidStatus, message.SeverityInvalidMetadata, field,
+			"mail: report status is an SMTP reply code, not an RFC 3463 code",
+			"left Status not Valid; StatusGuess is "+guess.String()+", from the class of the reply code")
+		return s, guess
 	}
 	d.add(CodeReportInvalidStatus, message.SeverityInvalidMetadata, field,
-		"mail: report status is not a status code", "kept the raw value only")
-	return s
+		"mail: report status is not a status code", "left Status not Valid; Raw keeps the field")
+	return s, guess
 }
 
 // rptAction reads an Action field (RFC 3464 section 2.3.3).

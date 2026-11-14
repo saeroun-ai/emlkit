@@ -1,6 +1,7 @@
 package mail_test
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -321,7 +322,17 @@ func TestParseDeliveryStatus_malformed(t *testing.T) {
 			func(ds *mail.DeliveryStatus) bool { return ds.Recipients[0].Status.String() == "5.1.1" }},
 		{"status as a reply code", "Reporting-MTA: dns; mx.example.com\n\n" + rcpt + "Status: 550\n",
 			[]string{"report.invalid_status"},
-			func(ds *mail.DeliveryStatus) bool { return ds.Recipients[0].Status.String() == "5.0.0" }},
+			func(ds *mail.DeliveryStatus) bool {
+				r := ds.Recipients[0]
+				return !r.Status.Valid && r.Status.Raw == "550" && r.Status.String() == "" &&
+					r.StatusGuess.String() == "5.0.0" && r.StatusGuess.Inferred && r.StatusGuess.Raw == ""
+			}},
+		{"status with two different codes", "Reporting-MTA: dns; mx.example.com\n\n" + rcpt + "Status: 4.4.1 5.1.1\n",
+			[]string{"report.invalid_status"},
+			func(ds *mail.DeliveryStatus) bool {
+				r := ds.Recipients[0]
+				return !r.Status.Valid && r.Status.Raw == "4.4.1 5.1.1" && r.StatusGuess == (mail.EnhancedStatus{})
+			}},
 		{"status unreadable", "Reporting-MTA: dns; mx.example.com\n\n" + rcpt + "Status: 5.1\n",
 			[]string{"report.invalid_status"},
 			func(ds *mail.DeliveryStatus) bool {
@@ -331,25 +342,30 @@ func TestParseDeliveryStatus_malformed(t *testing.T) {
 			[]string{"report.invalid_action"},
 			func(ds *mail.DeliveryStatus) bool {
 				r := ds.Recipients
-				return r[0].Action == mail.ActionFailed && r[1].Action == mail.ActionFailed && r[1].ActionRaw == "Failure" && r[2].Action == ""
+				return r[0].Action == mail.ActionFailed && r[1].Action == mail.ActionFailed && r[1].ActionRaw == "Failure" && r[2].Action == "" &&
+					r[0].ActionGuess == "" && r[1].ActionGuess == "" && r[2].ActionGuess == ""
 			}},
-		{"action and status inferred", "Reporting-MTA: dns; mx.example.com\n\nFinal-Recipient: rfc822; a@example.com\nDiagnostic-Code: smtp; 550 5.1.1 <a@example.com>: Recipient address rejected\n",
+		{"action and status missing", "Reporting-MTA: dns; mx.example.com\n\nFinal-Recipient: rfc822; a@example.com\nDiagnostic-Code: smtp; 550 5.1.1 <a@example.com>: Recipient address rejected\n",
 			[]string{"report.missing_field"},
 			func(ds *mail.DeliveryStatus) bool {
 				r := ds.Recipients[0]
-				return r.Status.String() == "5.1.1" && r.Status.Inferred && r.Action == mail.ActionFailed && r.ActionRaw == ""
+				return !r.Status.Valid && r.Status == (mail.EnhancedStatus{}) && r.Action == "" && r.ActionRaw == "" &&
+					r.StatusGuess.String() == "5.1.1" && r.StatusGuess.Inferred && r.ActionGuess == mail.ActionFailed
 			}},
 		{"untyped and bracketed values", "Reporting-MTA: mx.example.com\n\nFinal-Recipient: <a@example.com>\nOriginal-Recipient: rfc822;<a@example.com>\nAction: failed\nStatus: 5.0.0\nDiagnostic-Code: 550 user unknown\n",
 			[]string{"report.invalid_field"},
 			func(ds *mail.DeliveryStatus) bool {
 				r := ds.Recipients[0]
-				return ds.ReportingMTA.Type == "dns" && r.FinalRecipient == (mail.ReportValue{Raw: "<a@example.com>", Type: "rfc822", Value: "a@example.com"}) &&
-					r.OriginalRecipient.Value == "a@example.com" && r.DiagnosticCode.Type == "smtp"
+				return ds.ReportingMTA.Type == "" && ds.ReportingMTA.TypeGuess == "dns" &&
+					r.FinalRecipient == (mail.ReportValue{Raw: "<a@example.com>", TypeGuess: "rfc822", Value: "a@example.com"}) &&
+					r.OriginalRecipient == (mail.ReportValue{Raw: "rfc822;<a@example.com>", Type: "rfc822", Value: "a@example.com"}) &&
+					r.DiagnosticCode.Type == "" && r.DiagnosticCode.TypeGuess == "smtp" && r.DiagnosticCode.Value == "550 user unknown"
 			}},
 		{"colon for semicolon", "Reporting-MTA: dns; mx.example.com\n\nFinal-Recipient: RFC822: a@example.com\nAction: failed\nStatus: 5.0.0\n",
 			[]string{"report.invalid_field"},
 			func(ds *mail.DeliveryStatus) bool {
-				return ds.Recipients[0].FinalRecipient.Type == "rfc822" && ds.Recipients[0].Address() == "a@example.com"
+				fr := ds.Recipients[0].FinalRecipient
+				return fr.Type == "rfc822" && fr.TypeGuess == "" && ds.Recipients[0].Address() == "a@example.com"
 			}},
 		{"field in the wrong group", rcpt + "Status: 5.1.1\nReporting-MTA: dns; mx.example.com\n",
 			[]string{"report.misplaced_field"},
@@ -395,6 +411,130 @@ func TestParseDeliveryStatus_malformed(t *testing.T) {
 		if !tc.check(ds) {
 			t.Errorf("%s: %+v", tc.name, ds)
 		}
+	}
+}
+
+// rptDiag returns the one diagnostic of list with the code and field, failing
+// when there is not exactly one.
+func rptDiag(t *testing.T, name string, list []message.Diagnostic, code, field string) message.Diagnostic {
+	t.Helper()
+	var found []message.Diagnostic
+	for _, d := range list {
+		if string(d.Code) == code && d.Field == field {
+			found = append(found, d)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("%s: %d diagnostics %s on %q, want 1; diagnostics:\n%v", name, len(found), code, field, list)
+	}
+	return found[0]
+}
+
+// TestReport_guessesApartFromDeclared pins issue #66: a value the report does
+// not give is never put in the field of a declared value. Status stays not
+// Valid, Action and Type stay empty; what can be guessed goes to StatusGuess,
+// ActionGuess and TypeGuess, and the diagnostic reports the missing or invalid
+// fact at invalid_metadata, naming the guess, not a recovery.
+func TestReport_guessesApartFromDeclared(t *testing.T) {
+	const head = "Reporting-MTA: dns; mx.example.com\n\nFinal-Recipient: rfc822; a@example.com\n"
+	tests := []struct {
+		name                  string
+		body                  string
+		status, statusGuess   string
+		action, actionGuess   mail.DeliveryAction
+		code, field, inAction string
+	}{
+		{"no Status, code in the Diagnostic-Code", head + "Action: failed\nDiagnostic-Code: smtp; 550 5.1.1 user unknown\n",
+			"", "5.1.1", mail.ActionFailed, "", "report.missing_field", "Status", "StatusGuess is 5.1.1"},
+		{"no Status, reply code only", head + "Action: delayed\nDiagnostic-Code: smtp; 451 try later\n",
+			"", "4.0.0", mail.ActionDelayed, "", "report.missing_field", "Status", "StatusGuess is 4.0.0"},
+		{"no Status, nothing to guess from", head + "Action: failed\nDiagnostic-Code: x-unix; no such user\n",
+			"", "", mail.ActionFailed, "", "report.missing_field", "Status", "left Status not Valid"},
+		{"Status: 550", head + "Action: failed\nStatus: 550\n",
+			"", "5.0.0", mail.ActionFailed, "", "report.invalid_status", "Status", "StatusGuess is 5.0.0"},
+		{"Status: 550 and no Action", head + "Status: 550\n",
+			"", "5.0.0", "", mail.ActionFailed, "report.missing_field", "Action", "ActionGuess is failed, from the class of StatusGuess"},
+		{"no Action, declared Status", head + "Status: 2.0.0\n",
+			"2.0.0", "", "", mail.ActionDelivered, "report.missing_field", "Action", "ActionGuess is delivered, from the class of Status"},
+		{"no Action, no Status", head + "Diagnostic-Code: x-unix; gone\n",
+			"", "", "", "", "report.missing_field", "Action", "left Action empty"},
+	}
+	for _, tc := range tests {
+		ds := mail.ParseDeliveryStatus([]byte(tc.body))
+		if len(ds.Recipients) != 1 {
+			t.Fatalf("%s: %+v", tc.name, ds)
+		}
+		r := ds.Recipients[0]
+		if r.Status.String() != tc.status || r.Status.Inferred || r.StatusGuess.String() != tc.statusGuess ||
+			r.StatusGuess.Inferred != (tc.statusGuess != "") || r.StatusGuess.Raw != "" ||
+			r.Action != tc.action || r.ActionGuess != tc.actionGuess {
+			t.Errorf("%s: Status %q (inferred %v) guess %+v, Action %q guess %q", tc.name, r.Status, r.Status.Inferred, r.StatusGuess, r.Action, r.ActionGuess)
+		}
+		for _, d := range ds.Diagnostics {
+			if d.Severity == message.SeverityRecovered && (d.Field == "Status" || d.Field == "Action") {
+				t.Errorf("%s: %v claims a recovery of a value the report does not give", tc.name, d)
+			}
+		}
+		d := rptDiag(t, tc.name, ds.Diagnostics, tc.code, tc.field)
+		if d.Severity != message.SeverityInvalidMetadata || !strings.Contains(d.Action, tc.inAction) {
+			t.Errorf("%s: %v %q, want invalid_metadata naming %q", tc.name, d.Severity, d.Action, tc.inAction)
+		}
+	}
+
+	// The type of a "type; value" field is guessed only into TypeGuess, in
+	// every report kind.
+	type typed struct {
+		name    string
+		v       mail.ReportValue
+		guess   string
+		diags   []message.Diagnostic
+		field   string
+		inMatch string
+	}
+	ds := mail.ParseDeliveryStatus([]byte("Reporting-MTA: mx.example.com\n\nFinal-Recipient: a@example.com\nAction: failed\nStatus: 5.0.0\nDiagnostic-Code: 550 user unknown\nRemote-MTA: no type here\n"))
+	mdn := mail.ParseDispositionNotification([]byte("Final-Recipient: a@example.com\nOriginal-Recipient: <b@example.com>\nMDN-Gateway: gw.example.com\nDisposition: manual-action/MDN-sent-manually; displayed\n"))
+	arf := mail.ParseFeedbackReport([]byte("Feedback-Type: abuse\nUser-Agent: X/1\nVersion: 1\nReporting-MTA: mail.example.com\n"))
+	for _, tc := range []typed{
+		{"DSN Reporting-MTA", ds.ReportingMTA, "dns", ds.Diagnostics, "Reporting-MTA", "TypeGuess is dns"},
+		{"DSN Final-Recipient", ds.Recipients[0].FinalRecipient, "rfc822", ds.Diagnostics, "Final-Recipient", "TypeGuess is rfc822"},
+		{"DSN Diagnostic-Code", ds.Recipients[0].DiagnosticCode, "smtp", ds.Diagnostics, "Diagnostic-Code", "TypeGuess is smtp"},
+		{"DSN Remote-MTA", ds.Recipients[0].RemoteMTA, "", ds.Diagnostics, "Remote-MTA", "left Type empty"},
+		{"MDN Final-Recipient", mdn.FinalRecipient, "rfc822", mdn.Diagnostics, "Final-Recipient", "TypeGuess is rfc822"},
+		{"MDN MDN-Gateway", mdn.MDNGateway, "dns", mdn.Diagnostics, "MDN-Gateway", "TypeGuess is dns"},
+		{"ARF Reporting-MTA", arf.ReportingMTA, "dns", arf.Diagnostics, "Reporting-MTA", "TypeGuess is dns"},
+	} {
+		if tc.v.Type != "" || tc.v.TypeGuess != tc.guess || tc.v.Raw == "" || tc.v.Value == "" {
+			t.Errorf("%s: %+v, want no Type and TypeGuess %q", tc.name, tc.v, tc.guess)
+		}
+		d := rptDiag(t, tc.name, tc.diags, "report.invalid_field", tc.field)
+		if d.Severity != message.SeverityInvalidMetadata || !strings.Contains(d.Action, tc.inMatch) {
+			t.Errorf("%s: %v %q, want invalid_metadata naming %q", tc.name, d.Severity, d.Action, tc.inMatch)
+		}
+	}
+	// A bracketed address with no type: the brackets are removed from Value,
+	// the type is still only a guess.
+	if v := mdn.OriginalRecipient; v.Type != "" || v.TypeGuess != "rfc822" || v.Value != "b@example.com" {
+		t.Errorf("MDN Original-Recipient %+v", v)
+	}
+
+	// Well-formed reports have no guesses at all.
+	valid := mail.ParseDeliveryStatus([]byte(rptRFC3464Body))
+	for i, r := range valid.Recipients {
+		if r.StatusGuess != (mail.EnhancedStatus{}) || r.ActionGuess != "" || r.Status.Inferred || !r.Status.Valid || r.Action == "" ||
+			r.FinalRecipient.TypeGuess != "" || r.OriginalRecipient.TypeGuess != "" || r.DiagnosticCode.TypeGuess != "" || r.RemoteMTA.TypeGuess != "" {
+			t.Errorf("RFC 3464 recipient %d has a guess: %+v", i, r)
+		}
+	}
+	for _, v := range []mail.ReportValue{valid.ReportingMTA, valid.DSNGateway, valid.ReceivedFromMTA} {
+		if v.Type != "dns" || v.TypeGuess != "" {
+			t.Errorf("RFC 3464 per-message value %+v", v)
+		}
+	}
+	if r := rptTree(t, rptRFC8098, nil).Root.Report().Disposition; r.FinalRecipient.TypeGuess != "" || r.OriginalRecipient.Type != "rfc822" {
+		t.Errorf("RFC 8098 %+v", r)
+	}
+	if r := rptTree(t, rptRFC5965, nil).Root.Report().Feedback; r.ReportingMTA.TypeGuess != "" || r.ReportingMTA.Type != "dns" {
+		t.Errorf("RFC 5965 %+v", r)
 	}
 }
 
@@ -550,8 +690,59 @@ func TestNode_Report(t *testing.T) {
 	}
 }
 
+// A recipient group without Status or Action: the declared fields stay empty
+// and the guesses are apart, for a caller that chooses to use them.
+func ExampleParseDeliveryStatus() {
+	ds := mail.ParseDeliveryStatus([]byte("Reporting-MTA: dns; mx.example.com\n\n" +
+		"Final-Recipient: rfc822; a@example.com\n" +
+		"Diagnostic-Code: smtp; 550 5.1.1 user unknown\n"))
+	for _, r := range ds.Recipients {
+		status, guessed := r.Status, false
+		if !status.Valid && r.StatusGuess.Valid {
+			status, guessed = r.StatusGuess, true
+		}
+		action := r.Action
+		if action == "" && r.ActionRaw == "" {
+			action = r.ActionGuess
+		}
+		fmt.Printf("declared Status %q Action %q\n", r.Status.String(), r.Action)
+		fmt.Printf("best effort %s %s (guessed %v)\n", status, action, guessed)
+	}
+	for _, d := range ds.Diagnostics {
+		fmt.Println(d.Severity, d.Field, "-", d.Action)
+	}
+	// Output:
+	// declared Status "" Action ""
+	// best effort 5.1.1 failed (guessed true)
+	// invalid_metadata Status - left Status not Valid; StatusGuess is 5.1.1, found in its Diagnostic-Code
+	// invalid_metadata Action - left Action empty; ActionGuess is failed, from the class of StatusGuess
+}
+
+// rptCheckGuesses checks that a guess never stands beside the value it
+// stands in for, nor in a declared field (issue #66).
+func rptCheckGuesses(t *testing.T, ds *mail.DeliveryStatus, mdn *mail.DispositionNotification, arf *mail.FeedbackReport) {
+	t.Helper()
+	values := []mail.ReportValue{ds.ReportingMTA, ds.DSNGateway, ds.ReceivedFromMTA,
+		mdn.MDNGateway, mdn.OriginalRecipient, mdn.FinalRecipient, arf.ReportingMTA}
+	for _, r := range ds.Recipients {
+		values = append(values, r.OriginalRecipient, r.FinalRecipient, r.RemoteMTA, r.DiagnosticCode)
+		if r.Status.Inferred || (r.StatusGuess != (mail.EnhancedStatus{}) && (r.Status.Valid || !r.StatusGuess.Valid || !r.StatusGuess.Inferred || r.StatusGuess.Raw != "")) {
+			t.Fatalf("status %+v beside guess %+v", r.Status, r.StatusGuess)
+		}
+		if r.ActionGuess != "" && (r.Action != "" || r.ActionRaw != "") {
+			t.Fatalf("action %q (%q) beside guess %q", r.Action, r.ActionRaw, r.ActionGuess)
+		}
+	}
+	for _, v := range values {
+		if v.TypeGuess != "" && v.Type != "" {
+			t.Fatalf("type %q beside guess %q", v.Type, v.TypeGuess)
+		}
+	}
+}
+
 // FuzzReportParsers checks that no input makes a report parser panic or
-// return more diagnostics than its bound.
+// return more diagnostics than its bound, and that guesses stay apart from
+// declared values.
 func FuzzReportParsers(f *testing.F) {
 	for _, s := range []string{
 		rptRFC3464Body,
@@ -559,15 +750,14 @@ func FuzzReportParsers(f *testing.F) {
 		"Disposition: ;/,\nReporting-UA: ;\nOriginal-Message-ID: <\n",
 		"Feedback-Type: abuse\n\n\nSource-IP: [::1]\nIncidents: -1\n",
 		"\xef\xbb\xbfReporting-MTA : x400: \xff\r\rFinal-Recipient: rfc822; <>\r\n",
+		"Reporting-MTA: mx.example.com\n\nFinal-Recipient: a@example.com\nStatus: 550\n\nFinal-Recipient: b@example.com\nDiagnostic-Code: 451 4.4.1 5.1.1\n",
 	} {
 		f.Add([]byte(s))
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		lists := [][]message.Diagnostic{
-			mail.ParseDeliveryStatus(data).Diagnostics,
-			mail.ParseDispositionNotification(data).Diagnostics,
-			mail.ParseFeedbackReport(data).Diagnostics,
-		}
+		ds, mdn, arf := mail.ParseDeliveryStatus(data), mail.ParseDispositionNotification(data), mail.ParseFeedbackReport(data)
+		rptCheckGuesses(t, ds, mdn, arf)
+		lists := [][]message.Diagnostic{ds.Diagnostics, mdn.Diagnostics, arf.Diagnostics}
 		for _, list := range lists {
 			if len(list) > 128 {
 				t.Fatalf("%d diagnostics", len(list))
